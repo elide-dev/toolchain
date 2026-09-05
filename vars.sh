@@ -10,7 +10,7 @@ BUILD_SQLITE=no
 BUILD_STAGE2=yes
 BUILD_ZSTD=yes
 BUILD_LZ4=yes
-BUILD_PROPELLER=yes
+BUILD_PROPELLER=no
 
 # Prefer zlib-ng.
 BUILD_ZLIB_NG=yes
@@ -33,7 +33,7 @@ LLVM_RUNTIMES="compiler-rt;libcxx;libcxxabi;libunwind"
 USE_ZLIB=ng
 USE_SQLITE=vanilla
 USE_MUSL_CROSSMAKE=yes
-USE_SCCACHE=yes
+USE_SCCACHE=no
 USE_LTO=yes
 USE_WIDE_VECTORS=no
 CLEAN_BEFORE_BUILD=yes
