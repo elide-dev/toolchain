@@ -1,7 +1,7 @@
 # Universal Native Toolchain — Design
 
 **Date:** 2026-10-04
-**Status:** Draft — awaiting review
+**Status:** Revised after review (Fable, 2026-10-04) — awaiting approval
 **Repo:** `elide-dev/musl-toolchain` → to be renamed `elide-dev/toolchain`
 
 ## 1. Intent
@@ -59,12 +59,15 @@ elide-toolchain/
     <triple>.cfg                            # one clang config per target triple
     <triple>-clang   -> clang
     <triple>-clang++ -> clang++
+    <arch>-linux-musl-gcc, <arch>-linux-musl-g++   # Linux: GCC-named shims, see §2.3
   lib/
     clang/<major>/include/…                 # clang resource dir
-    clang/<major>/lib/<triple>/libclang_rt.*  # builtins, crtbegin/crtend, profile
+    clang/<major>/lib/<triple>/libclang_rt.*  # Linux: builtins, crtbegin/crtend, profile
+    clang/<major>/lib/darwin/libclang_rt.*    # macOS: osx builtins, profile
     <triple>/libc++.a libc++abi.a libunwind.a # per-target runtime dir (Linux)
-    LLVMgold.so                             # Linux, when binutils plugin-api.h is present
-  include/c++/v1/                           # libc++ headers (Linux)
+  include/
+    c++/v1/                                 # libc++ shared headers (Linux)
+    <triple>/c++/v1/__config_site           # per-triple libc++ config (searched first by clang)
   sysroot/
     <arch>-unknown-linux-musl/usr/{include,lib}   # musl+mimalloc, kernel headers, components
     <arch>-unknown-linux-gnu/usr/{include,lib}    # glibc 2.34, kernel headers, components, libmimalloc.a
@@ -72,6 +75,7 @@ elide-toolchain/
   share/elide-toolchain/
     manifest.json                           # see §2.2
     sbom.cdx.json                           # CycloneDX 1.6, generated from versions.env
+    cmake/<triple>.cmake                    # CMake toolchain files (relative to bundle root)
 ```
 
 Triples per bundle:
@@ -101,7 +105,13 @@ Linux (`x86_64-unknown-linux-gnu.cfg`, musl analogous):
 
 The musl config additionally passes `-static` only via the helper's
 `--static` mode, not unconditionally (consumers building `.so` files need
-dynamic-capable defaults).
+dynamic-capable defaults). Static linking of the **gnu** triple is
+unsupported (NSS/`dlopen` semantics); use musl for fully static output.
+
+C++ on gnu targets links libc++ (`-lc++ -lc++abi -lunwind` are implied by
+`-stdlib=libc++`); there is no libstdc++ in the sysroot, so consumer flags
+like `-lstdc++` must be dropped when migrating. Verification (§6) checks that
+cfg-supplied link flags don't trip `-Werror` on compile-only invocations.
 
 macOS (`arm64-apple-darwin.cfg`):
 
@@ -113,7 +123,20 @@ macOS (`arm64-apple-darwin.cfg`):
 ```
 
 The SDK is resolved by clang from `SDKROOT`; the helper CLI sets `SDKROOT`
-from `xcrun --show-sdk-path` when unset. macOS uses the system libc++.
+from `xcrun --show-sdk-path` when unset. macOS uses the system libc++, and
+the bundle's own `libclang_rt.osx.a` (mainline clang always links it from
+its resource dir). The overlay `-isystem` intentionally shadows SDK headers
+for bundled components (e.g. zlib-ng's compat `zlib.h` over the SDK's zlib).
+
+### 2.3 GCC-named musl shims
+
+GraalVM `native-image --libc=musl` and existing Elide/WHIPLASH builds invoke
+`<arch>-linux-musl-gcc` by name. The Linux bundle ships
+`bin/<arch>-linux-musl-gcc` / `-g++` as small POSIX-sh wrappers that `exec`
+`<arch>-unknown-linux-musl-clang{,++}` with the given arguments, dropping
+GCC-only flags clang rejects (list maintained in the wrapper, initially
+empty — populated as migration finds them). These are part of the bundle
+contract, not a consumer migration step.
 
 ### 2.2 manifest.json
 
@@ -125,6 +148,7 @@ from `xcrun --show-sdk-path` when unset. macOS uses the system libc++.
   "host": { "os": "linux", "arch": "amd64", "glibcFloor": "2.34" },
   "targets": [
     { "triple": "x86_64-unknown-linux-musl", "libc": "musl", "libcVersion": "1.2.5",
+      "libcRevision": "<elide-v1.2.5 fork sha>",
       "march": "x86-64-v3", "mtune": "znver3" },
     { "triple": "x86_64-unknown-linux-gnu", "libc": "glibc", "libcVersion": "2.34",
       "march": "x86-64-v3", "mtune": "znver3" }
@@ -157,6 +181,7 @@ scripts/stages/
   21-libc-musl.sh
   30-runtimes.sh
   35-mimalloc.sh
+  36-llvm-deps.sh
   40-llvm-stage2.sh
   50-components.sh
   90-package.sh
@@ -188,14 +213,15 @@ anywhere. `out/` is git-ignored.
 | # | Stage | Linux | macOS |
 |---|---|---|---|
 | 00 | sources | Check submodules initialized; download Linux kernel tarball (`LINUX_HEADERS_VERSION`, sha256 in `versions.env`) into `out/cache/`, `make headers_install ARCH=<karch>` into each Linux sysroot | Check submodules; verify Xcode CLT present |
-| 10 | llvm-stage1 | Host clang (or gcc) builds `clang;lld` + llvm tools into `out/…/stage1` (not shipped). `LLVM_TARGETS_TO_BUILD="X86;AArch64"` | Host Apple clang builds full `LLVM_PROJECTS` with `CMAKE_OSX_DEPLOYMENT_TARGET=12.0`, installs directly into bundle; runtimes: compiler-rt (profile only; builtins and libc++ come from the system) |
-| 20 | libc-gnu | Host GCC builds glibc (`--disable-werror`, `--enable-kernel=4.18`, `--prefix=/usr`, `DESTDIR=sysroot/<gnu triple>`) with `src/patches/glibc/` applied. Strip absolute paths from `libc.so`/`libpthread.so` linker scripts so the sysroot is relocatable | skip |
+| 10 | llvm-stage1 | Host clang (or gcc) builds `clang;lld` + llvm tools into `out/…/stage1` (not shipped). `LLVM_TARGETS_TO_BUILD="X86;AArch64"` | Host Apple clang builds `LLVM_PROJECTS` with `CMAKE_OSX_DEPLOYMENT_TARGET=12.0`, installs directly into bundle; runtimes: compiler-rt **builtins + profile** (`COMPILER_RT_BUILD_BUILTINS=ON`, `COMPILER_RT_ENABLE_IOS=OFF`, watchOS/tvOS off) → `lib/clang/<major>/lib/darwin/` |
+| 20 | libc-gnu | Host GCC builds glibc with `CFLAGS="-O2 -std=gnu11"` (GCC 15 defaults to C23, which glibc < 2.39 cannot build under), `--disable-werror`, `--enable-kernel=4.18`, `--prefix=/usr`, `--libdir=/usr/lib`, `libc_cv_slibdir=/usr/lib` (glibc otherwise uses `lib64`), `--with-headers=<sysroot>/usr/include`, `DESTDIR=sysroot/<gnu triple>`, patches from `src/patches/glibc/`. Host deps: bison, gawk, python3. Relocatability of `libc.so`/`libpthread.so` linker scripts is verified (lld resolves absolute script paths against the sysroot); rewrite to relative paths only if verification fails | skip |
 | 21 | libc-musl | Stage-1 clang builds musl phase 1 (mallocng) into `sysroot/<musl triple>/usr` | skip |
-| 30 | runtimes | For each Linux triple, stage-1 clang runs the LLVM runtimes build: compiler-rt builtins + crt (`COMPILER_RT_BUILD_CRT=ON`), then libunwind, libc++abi, libc++ (static, `LIBCXX_HARDENING_MODE=fast`), compiler-rt profile. musl uses `LIBCXX_HAS_MUSL_LIBC=ON`. Install into bundle `lib/` | skip (done in 10) |
-| 35 | mimalloc | musl: mimalloc object (MI_OVERRIDE=OFF) + glue, then musl phase 2 with `USE_MIMALLOC=yes`, ThinLTO, ldso `-fno-lto` (existing logic, ported). gnu: `libmimalloc.a` standalone (MI_OVERRIDE=ON) | `libmimalloc.a` standalone |
-| 40 | llvm-stage2 | Stage-1 clang with `x86_64-unknown-linux-gnu.cfg` builds the full `LLVM_PROJECTS` (`clang;lld;lldb;bolt;polly`), `LLVM_ENABLE_LIBCXX=ON`, static libc++/libunwind/compiler-rt, `LLVM_DEFAULT_TARGET_TRIPLE=<arch>-unknown-linux-gnu`. Installs into bundle `bin/`, `lib/` | skip |
-| 50 | components | For each triple, each enabled component's `build_<name> <triple> <sysroot>/usr`, compiled with the bundle's own `<triple>-clang` (dogfoods the cfg) plus the cflags profile | Same, single triple, installed into overlay sysroot |
-| 90 | package | Copy helper CLI + cfgs, create triple symlinks, generate `manifest.json` and `sbom.cdx.json` from `versions.env`, strip binaries, `tar -cJf elide-toolchain-<ver>-<os>-<arch>.tar.xz`, write `.sha256` | same |
+| 30 | runtimes | For each Linux triple, stage-1 clang runs the LLVM runtimes build with bare `--target/--sysroot` flags (**not** the cfg, whose `-rtlib=compiler-rt` would fail cmake's link probes before builtins exist). Pass 1: compiler-rt builtins + crt (`COMPILER_RT_BUILD_CRT=ON`, `CMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY`). Pass 2: libunwind, libc++abi, libc++ (static, `LIBCXX_HARDENING_MODE=fast`, `LIBCXX_INSTALL_INCLUDE_TARGET_DIR=include/<triple>/c++/v1`), compiler-rt profile. musl uses `LIBCXX_HAS_MUSL_LIBC=ON`. Installed into **both** the bundle and the stage-1 prefix (so stage-1 clang resolves them from its own resource dir in later stages) | skip (done in 10) |
+| 35 | mimalloc | musl: mimalloc object (MI_OVERRIDE=OFF) + glue, then musl phase 2 with `USE_MIMALLOC=yes`, `-flto=thin -ffat-lto-objects` (archive members carry both bitcode and native code, so lld does cross-language LTO while GNU ld, older rust-lld, and GraalVM's link still work), ldso `-fno-lto` (existing logic, ported). gnu: `libmimalloc.a` standalone (MI_OVERRIDE=ON) | `libmimalloc.a` standalone |
+| 36 | llvm-deps | Static zlib-ng (compat) + zstd for the gnu triple into `out/…/llvm-deps` (not shipped), needed because stage 2 builds under `--sysroot` and lld must support `--compress-debug-sections=zstd` (used by `cflags/linux-bin.txt`) | skip (host SDK zlib; zstd optional) |
+| 40 | llvm-stage2 | Stage-1 clang with the gnu cfg builds `LLVM_PROJECTS=clang;lld;bolt;polly`, `LLVM_ENABLE_LIBCXX=ON`, `LLVM_STATIC_LINK_CXX_STDLIB=ON`, `LLVM_LINK_LLVM_DYLIB=OFF`, `CLANG_LINK_CLANG_DYLIB=OFF` (one static libc++ per executable, no shared libLLVM/libclang), `LLVM_ENABLE_ZLIB=FORCE_ON`, `LLVM_ENABLE_ZSTD=FORCE_ON` against stage 36, `LLVM_DEFAULT_TARGET_TRIPLE=<arch>-unknown-linux-gnu`. Installs into bundle `bin/`, `lib/` | skip |
+| 50 | components | For each triple, each enabled component's `build_<name> <triple> <sysroot>/usr`, compiled with the bundle's own `<triple>-clang` (dogfoods the cfg) plus the cflags profile. Each installs `.pc` files to `<sysroot>/usr/lib/pkgconfig` | Same, single triple, installed into overlay sysroot |
+| 90 | package | Copy helper CLI, cfgs, musl-gcc shims; create triple symlinks; write `share/elide-toolchain/cmake/<triple>.cmake` toolchain files; generate `manifest.json` and `sbom.cdx.json` from `versions.env`; strip binaries; `tar -cJf elide-toolchain-<ver>-<os>-<arch>.tar.xz`; write `.sha256` | same |
 | 95 | verify | See §6 | same |
 
 ### 3.4 Components
@@ -220,6 +246,16 @@ Unchanged model, generalized per target: `cflags/cli/cflags.sh <os> <arch>`
 Both Linux libcs use the `linux-<arch>` profile. The toolchain layer (libc,
 runtimes, LLVM, mimalloc) keeps its own tuned flags, as today.
 
+**glibc-floor filter.** `cflags/linux.txt` carries `-Wl,-z,pack-relative-relocs`,
+which makes lld emit a `GLIBC_ABI_DT_RELR` version need (glibc 2.36+). For gnu
+triples, `flags.sh` removes that flag whenever `GLIBC_FLOOR` < 2.36. The same
+note goes in the README for consumers that apply the cflags profile themselves.
+
+**ISA floor of the tools.** Stage-2 tools are built with the bundle's
+`-march`, so the shipped clang itself requires an x86-64-v3 (AVX2) or
+armv8.2-a host — the same floor as the code it produces. Stated in README and
+`manifest.json` (`host.march`).
+
 ### 3.6 versions.env
 
 Single source of truth, sourced by every stage and by package/SBOM generation:
@@ -228,7 +264,7 @@ Single source of truth, sourced by every stage and by package/SBOM generation:
 TOOLCHAIN_VERSION=2026.10.0
 LLVM_VERSION=23.1.0            # must match llvm submodule tag
 MUSL_VERSION=1.2.5
-GLIBC_VERSION=2.34             # floor; source = glibc submodule @ release/2.34/master
+GLIBC_BRANCH=release/2.34/master  # glibc submodule branch; floor is GLIBC_FLOOR
 LINUX_HEADERS_VERSION=6.x.y
 LINUX_HEADERS_SHA256=…
 MIMALLOC_VERSION=3.3.2
@@ -238,8 +274,11 @@ GLIBC_FLOOR=2.34
 MARCH_AMD64=… MTUNE_AMD64=… MARCH_ARM64=… MTUNE_ARM64=…
 ```
 
-A `scripts/check-versions.sh` asserts each `*_VERSION` matches the
-corresponding submodule's `git describe --tags`; run in CI and stage 00.
+`versions.env` also records each submodule's pinned commit (`*_REV`).
+`scripts/check-versions.sh` compares those against `git submodule status`
+(works on shallow depth-1 clones, unlike `git describe --tags`); run in CI and
+stage 00. Human-readable `*_VERSION` values are verified once when bumping,
+with `git fetch --tags` in the bump helper.
 
 ### 3.7 Repository changes
 
@@ -270,16 +309,21 @@ corresponding submodule's `git describe --tags`; run in CI and stage 00.
 - `on.release.yml` (new): on tag `v*` → `job.build.yml` → create GitHub
   Release, attach all bundles, `.sha256`s, SBOMs; mirror `dist/` to R2
   under `toolchain/<version>/`; attest build provenance.
-- `job.action-e2e.yml` (new): after build, run the action against the just-built
-  artifacts on all four runners and compile a hello-world per triple.
+- `job.action-e2e.yml` (new): after build, run the action (via its `archive`
+  input, §5.1) against the just-built artifacts on all four runners and run
+  `elide-toolchain doctor`.
 
 ### 4.2 Risks
 
 - **Build time.** Linux runs LLVM twice (~2× today). Mitigations: sccache for
   stage 1/2 (re-enabled behind `USE_SCCACHE`), stage stamps for retries.
-  GitHub-hosted macOS has a 6-hour job limit; macOS does a single LLVM build
-  and skips stage 2, which should fit — verify on first run and fall back to
-  a self-hosted macOS runner if not.
+  GitHub-hosted macOS has a 6-hour job limit; macOS does a single LLVM build,
+  skips stage 2, and `lldb` is dropped from `LLVM_PROJECTS` everywhere (no
+  consumer uses it; it pulls in Python/SWIG and `liblldb.so`) — verify on first
+  run and fall back to a self-hosted macOS runner if not.
+- **Intel macOS runners** are being retired by GitHub; `macos-15-intel` is
+  time-limited. When it disappears, darwin-amd64 moves to a self-hosted runner
+  or is built by cross-compiling on arm64 (explicit follow-up, out of scope now).
 - **linux-arm64** was previously disabled (commit `04a6ded`, "doesn't run?").
   Treat it as an explicit first-class verification target; failures there
   block release.
@@ -298,6 +342,9 @@ Rewritten from `install-musl-toolchain`:
     version: latest          # or 2026.10.0 / v2026.10.0
     target: x86_64-unknown-linux-gnu   # optional; configures CC/CXX/… for this triple
     github-token: ${{ github.token }}  # optional; avoids API rate limits
+    # testing / mirrors only:
+    archive: ./dist/elide-toolchain-….tar.xz   # install from a local file (skips resolution/download)
+    base-url: https://…                         # override download host
 ```
 
 Behaviour:
@@ -323,11 +370,13 @@ Built with bun as today; `dist/main.js` committed.
 ```
 
 mise's `github:` backend selects the release asset by os/arch tokens in the
-filename (`linux`/`darwin`, `amd64`/`arm64`) and puts `bin/` on PATH. Asset
-naming is chosen to satisfy its matcher; the plan includes verifying this
-against mise 2026.9+ and, if the matcher cannot resolve `.tar.xz` or the
-naming, adding explicit `asset_pattern`/per-platform config to the README
-snippet.
+filename and puts `bin/` on PATH. Its documented tokens are
+`linux|macos|windows` and `x64|arm64`; whether it also scores
+`darwin`/`amd64` is **unverified**. The first implementation task checks this
+against the locally installed mise 2026.9.12 with a test release; if the
+default matcher fails, the README snippet uses explicit per-platform asset
+patterns (`[tools."github:elide-dev/toolchain".platforms]`) rather than
+renaming assets.
 
 mise only provides `PATH`. Target-specific env comes from the helper, which
 self-locates its bundle root (no `ELIDE_TOOLCHAIN_HOME` needed):
@@ -348,7 +397,14 @@ elide-toolchain version
 `env` with no `--target` exports only `ELIDE_TOOLCHAIN_HOME` and `PATH`;
 with a target it exports `CC=<triple>-clang`, `CXX=<triple>-clang++`,
 `AR/NM/RANLIB=llvm-*`, `PKG_CONFIG_LIBDIR=<sysroot>/usr/lib/pkgconfig`,
-`PKG_CONFIG_SYSROOT_DIR=<sysroot>`, and (macOS) `SDKROOT`. The helper locates
+`PKG_CONFIG_SYSROOT_DIR=<sysroot>`, `CMAKE_TOOLCHAIN_FILE=<root>/share/elide-toolchain/cmake/<triple>.cmake`,
+and (macOS) `SDKROOT`.
+
+**Rust.** Cross-language LTO requires linking through the bundle's clang/lld
+(`-Clinker=<triple>-clang -Clink-arg=-fuse-ld=lld`) and a rustc whose LLVM
+major is ≤ the bundle's. `env --target` additionally prints
+`CARGO_TARGET_<TRIPLE>_LINKER` for convenience. Fat LTO objects in musl
+`libc.a` keep non-LTO Rust links working regardless. The helper locates
 its root from its own path (symlink-safe), so it works from the action, mise,
 or a manual extract. Both the action and downstream build scripts (Bali,
 Elide, Komodo) use it instead of hard-coding layout paths.
@@ -362,10 +418,18 @@ For every triple in the bundle:
    `-static`, assert `file` reports statically linked. gnu: dynamic, runs on host.
 2. **Component link:** link a test program against every enabled component
    (`-lz -lzstd -lbrotlidec -lsnappy -llz4 -lcrypto -lssl -lcrc32c -lmimalloc`).
-3. **glibc floor:** for gnu outputs and for every ELF in `bin/` and `lib/*.so`,
-   `llvm-objdump -T` max `GLIBC_x.y` ≤ `GLIBC_FLOOR`; fail otherwise.
-4. **musl LTO triple:** `llvm-bcanalyzer`/`llvm-dis` on a `libc.a` member
-   reports the musl triple (regression guard for the existing LTO fix).
+3. **glibc floor:** for gnu outputs and every ELF in `bin/` and `lib/**/*.so`,
+   `llvm-readelf -V` version *needs* contain no `GLIBC_x.y` > `GLIBC_FLOOR`
+   and no `GLIBC_ABI_DT_RELR`; `NEEDED` contains no `libstdc++`/`libgcc_s`.
+   Then run the gnu smoke binaries and `clang --version` inside
+   `almalinux:9` and `ubuntu:22.04` containers (Linux CI only).
+4. **musl LTO + fat objects:** a `libc.a` member has a `.llvm.lto` section
+   whose bitcode reports the musl triple (regression guard for the existing
+   LTO fix) **and** native code; a C program links against it with
+   `-fno-lto`.
+4a. **GCC shims:** `<arch>-linux-musl-gcc hello.c -static` links and runs.
+4b. **`-Werror` clean:** `<triple>-clang -Werror -c hello.c` succeeds (cfg
+    link flags don't trigger unused-argument warnings).
 5. **macOS floor:** `vtool -show-build` / `otool -l` `minos` ≤ `MACOS_MIN` for
    bundle binaries and smoke outputs.
 6. **Relocatability:** move the extracted bundle to a different path and
@@ -377,6 +441,10 @@ For every triple in the bundle:
 ## 7. Out of scope
 
 - Cross-arch or cross-OS targeting (amd64↔arm64, Linux→macOS).
+- `LLVMgold.so` / GNU ld LTO (non-reproducible host dependency; lld is the
+  supported linker and fat LTO objects cover non-LTO linkers).
+- `lldb`.
+- Static linking of glibc targets.
 - Windows bundles.
 - Shipping libstdc++ or a GCC compiler.
 - Migrating consumers (Bali, Elide, Komodo, WHIPLASH, HEATWAVE) — follow-up
