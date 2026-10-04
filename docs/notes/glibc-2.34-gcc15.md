@@ -1,7 +1,8 @@
 # glibc 2.34 with host GCC 15 (spike)
 
-Result: glibc `release/2.34/master` builds cleanly with host GCC 15.2 using stock
-flags. **No source patches are needed** (`src/patches/glibc/` is not created).
+Result: glibc `release/2.34/master` builds with host GCC 15.2 with no source
+changes, but needs two configure-level adjustments (see "Deviations").
+**No source patches are needed** (`src/patches/glibc/` is not created).
 Two configure-level adjustments were needed, both caused by the host environment
 rather than glibc source (see below).
 
@@ -10,6 +11,9 @@ rather than glibc source (see below).
 - Build time: `make -j32` about 31-36 s wall (about 310 s user), 32 cores
 
 ## Final configure line (run from an empty build dir; reuse verbatim in stage 20)
+
+Note: `../../../glibc/configure` below is spike-relative; Task 8 should use an
+absolute path to `glibc/configure`.
 
 ```bash
 env -u CFLAGS -u CXXFLAGS -u LDFLAGS ../../../glibc/configure \
@@ -49,6 +53,25 @@ None.
   has interpreter `/lib64/ld-linux-x86-64.so.2`.
 - `gcc --sysroot=... t.c` links; `LINK-OK` (ran via the host loader because the
   sysroot lacks the lib64 link); also ran via the new loader with `--library-path`.
+
+## Floor / RELR verification (all glibc shared objects)
+
+Run in `out/spike/sysroot/usr/lib` over all 23 real (non-symlink) ELF `*.so*`
+files, including `ld-linux-x86-64.so.2` and `libc.so.6`:
+
+```bash
+for f in *.so*; do [ -L "$f" ] && continue; file -b "$f" | grep -q '^ELF' && readelf -V "$f"; done \
+  | grep -oE 'GLIBC_[0-9.]+' | sort -uV | tail -1          # -> GLIBC_2.34
+for f in *.so*; do [ -L "$f" ] && continue; file -b "$f" | grep -q '^ELF' && readelf -d "$f"; done \
+  | grep -E 'RELR|RELRSZ|RELRENT'                          # -> none found
+for f in *.so*; do [ -L "$f" ] && continue; readelf -V "$f" | grep GLIBC_ABI_DT_RELR; done   # -> none found
+```
+
+- Highest numeric version needed/defined anywhere: `GLIBC_2.34` (nothing above).
+- `GLIBC_ABI_DT_RELR`: none found.
+- `RELR` / `RELRSZ` / `RELRENT` dynamic entries: none found.
+- Other non-numeric version tags present (expected): `GLIBC_PRIVATE` and
+  `GLIBC_ABI_DT_X86_64_PLT` (in libc.so.6; an x86_64 PLT ABI tag, unrelated to RELR).
 
 ## Kernel headers (for Task 7)
 
