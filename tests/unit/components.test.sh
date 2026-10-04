@@ -56,6 +56,9 @@ assert_eq "$(cat "$T/src/demo/file.txt")" "v1" "original untouched"
 
 assert_ok declare -F build_zlib_ng
 assert_ok declare -F build_zstd
+for c in "${COMPONENTS[@]}"; do
+  assert_ok declare -F "$(component_fn "$c")"
+done
 
 rm -rf "$T" "$ROOT_DIR/out/test-tmp"
 finish
