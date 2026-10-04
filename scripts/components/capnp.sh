@@ -7,6 +7,9 @@ build_capnp() {
   (
     cd "$src/c++" || exit 1
     target_env "$t" "$prefix"
+    # dynamic.h uses std::nullptr_t without <cstddef>; libc++ does not provide it transitively.
+    CXXFLAGS="$CXXFLAGS -include cstddef"
+    export CXXFLAGS
     autoreconf -i
     ./configure --prefix="$prefix" --disable-shared --with-zlib --with-openssl
     make -j"$JOBS"
