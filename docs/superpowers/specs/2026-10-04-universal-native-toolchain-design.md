@@ -1,7 +1,7 @@
 # Universal Native Toolchain — Design
 
 **Date:** 2026-10-04
-**Status:** Revised after review (Fable, 2026-10-04) — awaiting approval
+**Status:** Revised after review (Fable, 2026-10-04) — approved by Fable (delegated reviewer), 2026-10-04
 **Repo:** `elide-dev/musl-toolchain` → to be renamed `elide-dev/toolchain`
 
 ## 1. Intent
@@ -111,7 +111,9 @@ unsupported (NSS/`dlopen` semantics); use musl for fully static output.
 C++ on gnu targets links libc++ (`-lc++ -lc++abi -lunwind` are implied by
 `-stdlib=libc++`); there is no libstdc++ in the sysroot, so consumer flags
 like `-lstdc++` must be dropped when migrating. Verification (§6) checks that
-cfg-supplied link flags don't trip `-Werror` on compile-only invocations.
+cfg-supplied link flags don't trip `-Werror` on compile-only invocations;
+if they do, the cfgs add `-Qunused-arguments` (already in `cflags/base.txt`,
+so consumers see no behavioural change).
 
 macOS (`arm64-apple-darwin.cfg`):
 
@@ -133,10 +135,13 @@ for bundled components (e.g. zlib-ng's compat `zlib.h` over the SDK's zlib).
 GraalVM `native-image --libc=musl` and existing Elide/WHIPLASH builds invoke
 `<arch>-linux-musl-gcc` by name. The Linux bundle ships
 `bin/<arch>-linux-musl-gcc` / `-g++` as small POSIX-sh wrappers that `exec`
-`<arch>-unknown-linux-musl-clang{,++}` with the given arguments, dropping
-GCC-only flags clang rejects (list maintained in the wrapper, initially
-empty — populated as migration finds them). These are part of the bundle
-contract, not a consumer migration step.
+`<arch>-unknown-linux-musl-clang{,++}` with the given arguments (never
+adding `-static`; native-image passes it itself), dropping GCC-only flags
+clang rejects (list maintained in the wrapper, initially
+empty — populated as migration finds them). The `-g++` shim inherits
+`-stdlib=libc++` from the cfg, so consumer `-lstdc++` must be dropped on the
+musl path too. These are part of the bundle contract, not a consumer
+migration step.
 
 ### 2.2 manifest.json
 
@@ -214,7 +219,12 @@ anywhere. `out/` is git-ignored.
 |---|---|---|---|
 | 00 | sources | Check submodules initialized; download Linux kernel tarball (`LINUX_HEADERS_VERSION`, sha256 in `versions.env`) into `out/cache/`, `make headers_install ARCH=<karch>` into each Linux sysroot | Check submodules; verify Xcode CLT present |
 | 10 | llvm-stage1 | Host clang (or gcc) builds `clang;lld` + llvm tools into `out/…/stage1` (not shipped). `LLVM_TARGETS_TO_BUILD="X86;AArch64"` | Host Apple clang builds `LLVM_PROJECTS` with `CMAKE_OSX_DEPLOYMENT_TARGET=12.0`, installs directly into bundle; runtimes: compiler-rt **builtins + profile** (`COMPILER_RT_BUILD_BUILTINS=ON`, `COMPILER_RT_ENABLE_IOS=OFF`, watchOS/tvOS off) → `lib/clang/<major>/lib/darwin/` |
-| 20 | libc-gnu | Host GCC builds glibc with `CFLAGS="-O2 -std=gnu11"` (GCC 15 defaults to C23, which glibc < 2.39 cannot build under), `--disable-werror`, `--enable-kernel=4.18`, `--prefix=/usr`, `--libdir=/usr/lib`, `libc_cv_slibdir=/usr/lib` (glibc otherwise uses `lib64`), `--with-headers=<sysroot>/usr/include`, `DESTDIR=sysroot/<gnu triple>`, patches from `src/patches/glibc/`. Host deps: bison, gawk, python3. Relocatability of `libc.so`/`libpthread.so` linker scripts is verified (lld resolves absolute script paths against the sysroot); rewrite to relative paths only if verification fails | skip |
+| 20 | libc-gnu | Host GCC builds glibc with `CFLAGS="-O2 -std=gnu11"` (GCC 15 defaults to C23, which glibc < 2.39 cannot build under), `--disable-werror`, `--enable-kernel=4.18`, `--prefix=/usr`, `--libdir=/usr/lib`, `libc_cv_slibdir=/usr/lib` (glibc otherwise uses `lib64`), `--with-headers=<sysroot>/usr/include`, `DESTDIR=sysroot/<gnu triple>`, patches from `src/patches/glibc/`. Host deps: bison, gawk, python3. Because `slibdir` = `/usr/lib`, the stage
+explicitly creates the canonical loader path inside the sysroot
+(`lib64/ld-linux-x86-64.so.2` on x86_64, `lib/ld-linux-aarch64.so.1` on
+aarch64, as relative symlinks to `usr/lib/…`) so `libc.so`'s
+`AS_NEEDED(ld-linux…)` resolves at link time; PT_INTERP stays the host's
+canonical path. Relocatability of `libc.so`/`libpthread.so` linker scripts is verified (lld resolves absolute script paths against the sysroot); rewrite to relative paths only if verification fails | skip |
 | 21 | libc-musl | Stage-1 clang builds musl phase 1 (mallocng) into `sysroot/<musl triple>/usr` | skip |
 | 30 | runtimes | For each Linux triple, stage-1 clang runs the LLVM runtimes build with bare `--target/--sysroot` flags (**not** the cfg, whose `-rtlib=compiler-rt` would fail cmake's link probes before builtins exist). Pass 1: compiler-rt builtins + crt (`COMPILER_RT_BUILD_CRT=ON`, `CMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY`). Pass 2: libunwind, libc++abi, libc++ (static, `LIBCXX_HARDENING_MODE=fast`, `LIBCXX_INSTALL_INCLUDE_TARGET_DIR=include/<triple>/c++/v1`), compiler-rt profile. musl uses `LIBCXX_HAS_MUSL_LIBC=ON`. Installed into **both** the bundle and the stage-1 prefix (so stage-1 clang resolves them from its own resource dir in later stages) | skip (done in 10) |
 | 35 | mimalloc | musl: mimalloc object (MI_OVERRIDE=OFF) + glue, then musl phase 2 with `USE_MIMALLOC=yes`, `-flto=thin -ffat-lto-objects` (archive members carry both bitcode and native code, so lld does cross-language LTO while GNU ld, older rust-lld, and GraalVM's link still work), ldso `-fno-lto` (existing logic, ported). gnu: `libmimalloc.a` standalone (MI_OVERRIDE=ON) | `libmimalloc.a` standalone |
@@ -415,7 +425,9 @@ For every triple in the bundle:
 
 1. **C/C++ smoke:** compile, link and run `hello.c` and `hello.cpp`
    (iostream + exceptions + threads) with `<triple>-clang{,++}`. musl: link
-   `-static`, assert `file` reports statically linked. gnu: dynamic, runs on host.
+   `-static`, assert `file` reports statically linked. gnu: dynamic, runs on host;
+   assert PT_INTERP is the canonical loader path
+   (`/lib64/ld-linux-x86-64.so.2` / `/lib/ld-linux-aarch64.so.1`).
 2. **Component link:** link a test program against every enabled component
    (`-lz -lzstd -lbrotlidec -lsnappy -llz4 -lcrypto -lssl -lcrc32c -lmimalloc`).
 3. **glibc floor:** for gnu outputs and every ELF in `bin/` and `lib/**/*.so`,
