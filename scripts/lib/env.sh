@@ -7,6 +7,10 @@
 source "$ROOT_DIR/scripts/lib/common.sh"
 # shellcheck source=scripts/lib/platform.sh
 source "$ROOT_DIR/scripts/lib/platform.sh"
+# shellcheck source=scripts/lib/flags.sh
+source "$ROOT_DIR/scripts/lib/flags.sh"
+# shellcheck source=scripts/lib/cmake.sh
+source "$ROOT_DIR/scripts/lib/cmake.sh"
 
 _caller_toolchain_version="${TOOLCHAIN_VERSION:-}"
 # shellcheck source=versions.env
