@@ -21,15 +21,20 @@ check_submodules() {
 }
 
 fetch_kernel() {
-  local v="$LINUX_HEADERS_VERSION" tarball
+  local v="$LINUX_HEADERS_VERSION" tarball actual
   tarball="$CACHE_DIR/linux-$v.tar.xz"
   mkdir -p "$CACHE_DIR"
+  if [ -f "$tarball" ] && [ "$(sha256_of "$tarball")" != "$LINUX_HEADERS_SHA256" ]; then
+    warn "cached $tarball has wrong sha256; removing and re-downloading"
+    rm -f "$tarball"
+  fi
   if [ ! -f "$tarball" ]; then
     log "downloading linux-$v"
     curl -fsSL --retry 3 -o "$tarball.part" "https://cdn.kernel.org/pub/linux/kernel/v${v%%.*}.x/linux-$v.tar.xz"
     mv "$tarball.part" "$tarball"
+    actual="$(sha256_of "$tarball")"
+    [ "$actual" = "$LINUX_HEADERS_SHA256" ] || die "sha256 mismatch for $tarball: expected $LINUX_HEADERS_SHA256, got $actual"
   fi
-  [ "$(sha256_of "$tarball")" = "$LINUX_HEADERS_SHA256" ] || die "sha256 mismatch for $tarball"
   printf '%s\n' "$tarball"
 }
 
