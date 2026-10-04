@@ -234,6 +234,22 @@ canonical path. Relocatability of `libc.so`/`libpthread.so` linker scripts is ve
 | 90 | package | Copy helper CLI, cfgs, musl-gcc shims; create triple symlinks; write `share/elide-toolchain/cmake/<triple>.cmake` toolchain files; generate `manifest.json` and `sbom.cdx.json` from `versions.env`; strip binaries; `tar -cJf elide-toolchain-<ver>-<os>-<arch>.tar.xz`; write `.sha256` | same |
 | 95 | verify | See §6 | same |
 
+### 3.3a LLVM bitcode in shipped archives
+
+Downstream projects link with `-flto=thin` end to end, so every static
+archive the bundle ships carries LLVM bitcode produced by the bundle's own
+LLVM major (`LLVM_MAJOR`, currently 23):
+
+| Archive | Form |
+|---|---|
+| Components (stage 50) and standalone `libmimalloc.a` | ThinLTO bitcode (from `-flto=thin` in the cflags profile) |
+| musl `libc.a` | fat ThinLTO objects (bitcode + native) |
+| `libc++.a`, `libc++abi.a`, `libunwind.a` | fat ThinLTO objects (bitcode + native), so non-LTO links such as stage 2 still use the native code |
+| compiler-rt (`libclang_rt.*`, crt objects) | **native only**: LLVM requires builtins to stay native, since LTO code generation can introduce calls into them |
+| glibc's own archives | native only (built by GCC) |
+
+Verification (§6) checks every member of every non-exempt archive.
+
 ### 3.4 Components
 
 Same set as today, each moved into `scripts/components/<name>.sh` with the
@@ -446,6 +462,9 @@ For every triple in the bundle:
    bundle binaries and smoke outputs.
 6. **Relocatability:** move the extracted bundle to a different path and
    rerun (1).
+6a. **Bitcode:** every member of every shipped static archive (except compiler-rt
+   and glibc's own) is LLVM bitcode or an ELF object with a `.llvm.lto` section,
+   and its bitcode producer major equals `LLVM_MAJOR`.
 7. **Manifest:** `manifest.json` parses, versions match `versions.env`.
 
 `elide-toolchain doctor` runs (1) for end users.
