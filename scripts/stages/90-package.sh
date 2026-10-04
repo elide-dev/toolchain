@@ -11,6 +11,7 @@ stage_main() {
   for t in $ALL_TARGETS; do relocate_prefix "$t"; done
   ENABLED_COMPONENTS="$(enabled_components | xargs)" python3 "$ROOT_DIR/scripts/gen-manifest.py" manifest > "$meta/manifest.json"
   ENABLED_COMPONENTS="$(enabled_components | xargs)" python3 "$ROOT_DIR/scripts/gen-manifest.py" sbom > "$meta/sbom.cdx.json"
+  relocate_bundle_cmake
   strip_tools
 
   name="$TOOLCHAIN_NAME-$TOOLCHAIN_VERSION-$HOST_OS-$HOST_ARCH"
@@ -45,6 +46,32 @@ relocate_prefix() {
     sed -i.bak -e "s#$usr#\${CMAKE_CURRENT_LIST_DIR}/$up#g" -e "s#$stage1_usr#\${CMAKE_CURRENT_LIST_DIR}/$up#g" "$f"
     rm -f "$f.bak"
   done < <(grep -rlF -e "$usr" -e "$stage1_usr" --include='*.cmake' "$sysroot" || true)
+  return 0
+}
+
+# relocate_bundle_cmake — LLVM's installed CMake package files embed build-tree paths. Paths under
+# the bundle become ${CMAKE_CURRENT_LIST_DIR}-relative; any other build path is blanked.
+# musl's musl-clang/ld.musl-clang wrapper scripts hard-code the stage1 compiler and are unused: removed.
+relocate_bundle_cmake() {
+  local f up t
+  for t in $ALL_TARGETS; do
+    rm -f "$(sysroot_of "$t")/usr/bin/musl-clang" "$(sysroot_of "$t")/usr/bin/ld.musl-clang"
+  done
+  [ -d "$BUNDLE_DIR/lib/cmake" ] || return 0
+  while IFS= read -r f; do
+    up="$(python3 -c 'import os,sys; print(os.path.relpath(sys.argv[2], os.path.dirname(sys.argv[1])))' "$f" "$BUNDLE_DIR")"
+    python3 - "$f" "$BUNDLE_DIR" "$up" "$OUT_DIR" "$ROOT_DIR" <<'PY'
+import re, sys
+f, bundle, up, out, root = sys.argv[1:]
+s = open(f).read()
+s = s.replace(bundle, "${CMAKE_CURRENT_LIST_DIR}/" + up)
+# remaining build paths: blank quoted values, then unquoted ones
+for base in (out, root):
+    s = re.sub(r'"%s[^"\n]*"' % re.escape(base), '""', s)
+    s = re.sub(r'(?<=[ (])%s[^\s)"]*' % re.escape(base), '""', s)
+open(f, "w").write(s)
+PY
+  done < <(grep -rlF -e "$BUNDLE_DIR" -e "$OUT_DIR" -e "$ROOT_DIR" "$BUNDLE_DIR/lib/cmake" || true)
   return 0
 }
 
