@@ -23,11 +23,6 @@
 	url = https://github.com/elide-tools/sqlite.git
 	ignore = dirty
 	shallow = true
-[submodule "musl-cross-make"]
-	path = musl-cross-make
-	url = https://github.com/elide-tools/musl-cross-make.git
-	shallow = true
-	ignore = dirty
 [submodule "capnp"]
 	path = capnp
 	url = https://github.com/capnproto/capnproto.git
@@ -36,7 +31,6 @@
 [submodule "llvm"]
 	path = llvm
 	url = https://github.com/llvm/llvm-project.git
-	branch = b708aea0bc7127adf4ec643660699c8bcdde1273
 	shallow = true
 	ignore = dirty
 [submodule "zstd"]
