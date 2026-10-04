@@ -70,7 +70,13 @@ stage_source() {
   local name="$1" t="$2" dir
   dir="$BUILD_DIR/components/$t/$name/src"
   fresh_dir "$dir"
-  rsync -a --delete --exclude .git "${COMPONENT_SRC_ROOT:-$ROOT_DIR}/$name/" "$dir/"
+  local src="${COMPONENT_SRC_ROOT:-$ROOT_DIR}/$name"
+  if git -C "$src" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    # Tracked files only: submodules carry ignored build leftovers that contaminate builds.
+    git -C "$src" ls-files -z --recurse-submodules | rsync -a --from0 --files-from=- "$src/" "$dir/"
+  else
+    rsync -a --delete --exclude .git "$src/" "$dir/"
+  fi
   apply_patches "$name" "$dir" >&2
   printf '%s\n' "$dir"
 }

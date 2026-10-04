@@ -23,8 +23,13 @@ assert_eq "$(component_link zstd)" "HAVE_ZSTD|-lzstd"
 assert_eq "$(target_prefix x86_64-unknown-linux-gnu)" "$BUNDLE_DIR/sysroot/x86_64-unknown-linux-gnu/usr"
 
 # stage_source: copy without .git, apply patches, never touch the original
-mkdir -p "$T/src/demo/.git" "$T/patches/demo"
+mkdir -p "$T/src/demo" "$T/patches/demo"
 printf 'v1\n' > "$T/src/demo/file.txt"
+printf 'junk.o\n' > "$T/src/demo/.gitignore"
+printf 'x\n' > "$T/src/demo/junk.o"
+git -C "$T/src/demo" init -q
+git -C "$T/src/demo" add file.txt .gitignore
+git -C "$T/src/demo" -c user.name=t -c user.email=t@t commit -q -m init
 cat > "$T/patches/demo/0001.patch" <<'EOP'
 --- a/file.txt
 +++ b/file.txt
@@ -35,6 +40,7 @@ EOP
 d="$(COMPONENT_SRC_ROOT="$T/src" PATCHES_DIR="$T/patches" stage_source demo x86_64-unknown-linux-gnu)"
 assert_eq "$(cat "$d/file.txt")" "v2"
 assert_fails test -e "$d/.git"
+assert_fails test -e "$d/junk.o"
 assert_eq "$(cat "$T/src/demo/file.txt")" "v1" "original untouched"
 
 # target_env
