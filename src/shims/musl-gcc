@@ -1,0 +1,35 @@
+#!/bin/sh
+# GCC-named front-end for the musl target, for tools that look up
+# <cpu>-linux-musl-{gcc,g++,cc,c++,ar,ranlib,nm,strip} by name (e.g. GraalVM
+# `native-image --libc=musl`). Delegates to the bundle's clang and llvm tools.
+# Never adds -static: callers (native-image included) pass it themselves.
+set -eu
+
+dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)
+name=$(basename -- "$0")
+cpu=${name%%-linux-musl-*}
+tool=${name##*-linux-musl-}
+
+# GCC-only flags clang rejects, space-separated. Extended as consumer migrations find them.
+DROP_FLAGS=""
+
+case $tool in
+  gcc|cc) driver="$dir/$cpu-unknown-linux-musl-clang" ;;
+  g++|c++) driver="$dir/$cpu-unknown-linux-musl-clang++" ;;
+  ar|ranlib|nm|strip) exec "$dir/llvm-$tool" "$@" ;;
+  *) echo "$name: unsupported shim tool '$tool'" >&2; exit 2 ;;
+esac
+
+if [ -n "$DROP_FLAGS" ]; then
+  n=$#
+  while [ "$n" -gt 0 ]; do
+    arg=$1
+    shift
+    n=$((n - 1))
+    case " $DROP_FLAGS " in
+      *" $arg "*) [ -n "$arg" ] && continue ;;
+    esac
+    set -- "$@" "$arg"
+  done
+fi
+exec "$driver" "$@"
