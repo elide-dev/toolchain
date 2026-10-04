@@ -1,0 +1,156 @@
+#!/bin/sh
+# elide-toolchain — locate and configure an Elide toolchain bundle.
+#
+# Usage:
+#   elide-toolchain home
+#   elide-toolchain targets
+#   elide-toolchain version
+#   elide-toolchain env [--target TRIPLE] [--static] [--format sh|github|json]
+#   elide-toolchain doctor
+set -eu
+
+die() { echo "elide-toolchain: $*" >&2; exit 1; }
+
+usage() { sed -n '2,10s/^# \{0,1\}//p' "$0"; }
+
+self=$0
+while [ -L "$self" ]; do
+  link=$(readlink "$self")
+  case $link in
+    /*) self=$link ;;
+    *) self=$(dirname -- "$self")/$link ;;
+  esac
+done
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$self")/.." && pwd -P)
+
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT INT TERM
+ENV_FILE=$WORK/env
+: > "$ENV_FILE"
+TAB=$(printf '\t')
+
+list_targets() {
+  for cfg in "$ROOT"/bin/*.cfg; do
+    [ -e "$cfg" ] || continue
+    name=${cfg##*/}
+    echo "${name%.cfg}"
+  done
+}
+
+has_target() { list_targets | grep -qx -- "$1"; }
+
+rust_triple() {
+  case $1 in
+    arm64-apple-darwin) echo aarch64-apple-darwin ;;
+    *) echo "$1" ;;
+  esac
+}
+
+add() { printf '%s\t%s\n' "$1" "$2" >> "$ENV_FILE"; }
+
+sh_quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+
+json_escape() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+
+emit() {
+  case $1 in
+    sh)
+      while IFS=$TAB read -r k v; do printf 'export %s=%s\n' "$k" "$(sh_quote "$v")"; done < "$ENV_FILE"
+      # shellcheck disable=SC2016
+      printf 'export PATH=%s:"$PATH"\n' "$(sh_quote "$ROOT/bin")"
+      ;;
+    github)
+      while IFS=$TAB read -r k v; do printf '%s=%s\n' "$k" "$v"; done < "$ENV_FILE"
+      ;;
+    json)
+      sep=""
+      printf '{'
+      while IFS=$TAB read -r k v; do
+        printf '%s"%s":"%s"' "$sep" "$k" "$(json_escape "$v")"
+        sep=","
+      done < "$ENV_FILE"
+      printf '}\n'
+      ;;
+    *) die "unknown format: $1 (expected sh, github or json)" ;;
+  esac
+}
+
+cmd_env() {
+  target="" static=no fmt=sh
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --target) [ $# -ge 2 ] || die "--target needs a triple"; target=$2; shift 2 ;;
+      --target=*) target=${1#--target=}; shift ;;
+      --static) static=yes; shift ;;
+      --format) [ $# -ge 2 ] || die "--format needs a value"; fmt=$2; shift 2 ;;
+      --format=*) fmt=${1#--format=}; shift ;;
+      *) die "env: unknown option: $1" ;;
+    esac
+  done
+  case $fmt in sh|github|json) ;; *) die "unknown format: $fmt (expected sh, github or json)" ;; esac
+  add ELIDE_TOOLCHAIN_HOME "$ROOT"
+  if [ -z "$target" ]; then
+    [ "$static" = no ] || die "--static requires --target"
+    emit "$fmt"
+    return
+  fi
+  has_target "$target" || die "target $target is not in this bundle (have: $(list_targets | tr '\n' ' '))"
+  bin=$ROOT/bin
+  add CC "$bin/$target-clang"
+  add CXX "$bin/$target-clang++"
+  add AR "$bin/llvm-ar"
+  add NM "$bin/llvm-nm"
+  add RANLIB "$bin/llvm-ranlib"
+  add STRIP "$bin/llvm-strip"
+  add CMAKE_TOOLCHAIN_FILE "$ROOT/share/elide-toolchain/cmake/$target.cmake"
+  case $target in
+    *-linux-*)
+      add PKG_CONFIG_SYSROOT_DIR "$ROOT/sysroot/$target"
+      add PKG_CONFIG_LIBDIR "$ROOT/sysroot/$target/usr/lib/pkgconfig:$ROOT/sysroot/$target/usr/share/pkgconfig"
+      ;;
+    *-apple-darwin)
+      add PKG_CONFIG_LIBDIR "$ROOT/sysroot/$target/usr/lib/pkgconfig"
+      if [ -z "${SDKROOT:-}" ] && command -v xcrun >/dev/null 2>&1; then add SDKROOT "$(xcrun --show-sdk-path)"; fi
+      ;;
+  esac
+  rt=$(rust_triple "$target" | tr 'abcdefghijklmnopqrstuvwxyz-' 'ABCDEFGHIJKLMNOPQRSTUVWXYZ_')
+  add "CARGO_TARGET_${rt}_LINKER" "$bin/$target-clang"
+  if [ "$static" = yes ]; then
+    case $target in
+      *-linux-musl) add LDFLAGS "-static" ;;
+      *) die "--static is only supported for musl targets (static glibc is unsupported; use the musl target)" ;;
+    esac
+  fi
+  emit "$fmt"
+}
+
+cmd_doctor() {
+  printf '#include <stdio.h>\nint main(void){puts("ok");return 0;}\n' > "$WORK/hello.c"
+  printf '#include <iostream>\nint main(){std::cout<<"ok"<<std::endl;return 0;}\n' > "$WORK/hello.cpp"
+  rc=0
+  for t in $(list_targets); do
+    extra=""
+    case $t in *-linux-musl) extra=-static ;; esac
+    # shellcheck disable=SC2086
+    if "$ROOT/bin/$t-clang" $extra "$WORK/hello.c" -o "$WORK/c-$t" && "$WORK/c-$t" >/dev/null \
+      && "$ROOT/bin/$t-clang++" $extra "$WORK/hello.cpp" -o "$WORK/cxx-$t" && "$WORK/cxx-$t" >/dev/null; then
+      echo "ok    $t"
+    else
+      echo "FAIL  $t"
+      rc=1
+    fi
+  done
+  return "$rc"
+}
+
+cmd=${1:-help}
+[ $# -eq 0 ] || shift
+case $cmd in
+  home) echo "$ROOT" ;;
+  targets) list_targets ;;
+  version) cat "$ROOT/share/elide-toolchain/VERSION" ;;
+  env) cmd_env "$@" ;;
+  doctor) cmd_doctor ;;
+  help|-h|--help) usage ;;
+  *) die "unknown command: $cmd (try --help)" ;;
+esac
