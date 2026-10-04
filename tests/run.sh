@@ -10,7 +10,7 @@ failed=0
 for t in "$ROOT_DIR"/tests/unit/*.test.sh; do
   [ -e "$t" ] || continue
   case "$(basename "$t")" in *"$filter"*) ;; *) continue ;; esac
-  echo "$(basename "$t")"
+  basename "$t"
   bash "$t" || failed=1
 done
 
