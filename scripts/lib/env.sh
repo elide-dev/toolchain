@@ -15,6 +15,8 @@ source "$ROOT_DIR/scripts/lib/cmake.sh"
 source "$ROOT_DIR/scripts/lib/frontends.sh"
 # shellcheck source=scripts/lib/components.sh
 source "$ROOT_DIR/scripts/lib/components.sh"
+# shellcheck source=scripts/verify/elf.sh
+source "$ROOT_DIR/scripts/verify/elf.sh"
 
 _caller_toolchain_version="${TOOLCHAIN_VERSION:-}"
 # shellcheck source=versions.env
