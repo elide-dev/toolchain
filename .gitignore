@@ -2,3 +2,5 @@
 buildlog.txt
 *buildlog.txt
 latest
+out/
+dist/
