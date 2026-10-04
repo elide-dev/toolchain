@@ -4150,6 +4150,112 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
+### Task 19a: LLVM 23 bitcode in every shipped archive
+
+Added mid-execution (user requirement, 2026-10-04): downstream links are `-flto=thin` end to end, so shipped static archives must carry LLVM bitcode from the bundle's LLVM major. Spec §3.3a and §6.6a.
+
+**Files:**
+- Modify: `scripts/stages/30-runtimes.sh` (libc++/libc++abi/libunwind built as fat ThinLTO objects)
+- Modify: `scripts/verify/checks.sh` (new `check_bitcode`, wired into `run_all_checks`)
+
+**Interfaces:**
+- Consumes: `$OUT_DIR/glibc-files.txt` (exempts glibc's own archives), `LLVM_MAJOR`, bundle `bin/llvm-ar`, `bin/llvm-readelf`, `bin/llvm-objcopy`, `bin/llvm-bcanalyzer`.
+- Produces: `check_bitcode ROOT TRIPLE`, which prints `ok    bitcode <T>` or `FAIL  bitcode <T>: <archive(member): reason>…`.
+
+- [ ] **Step 1: Write `check_bitcode` (failing first)**
+
+Add to `scripts/verify/checks.sh`, and call it from `run_all_checks` once per target, right after `check_components`:
+```bash
+# bitcode_producer FILE — producer string of an LLVM bitcode file (e.g. LLVM23.1.2), or empty.
+bitcode_producer() {
+  "$1" --dump "$2" 2>/dev/null | sed -n "s/.*IDENTIFICATION.*//; s/.*STRING.*'\(LLVM[0-9.]*\)'.*/\1/p" | head -n1
+}
+
+# check_bitcode ROOT TRIPLE — every member of every shipped static archive carries LLVM bitcode
+# whose producer major is LLVM_MAJOR (spec §3.3a). Exempt: compiler-rt (lib/clang/**, never
+# scanned) and glibc's own archives (listed in glibc-files.txt).
+check_bitcode() {
+  local root="$1" t="$2" a rel tmp m kind bad="" sample bc producer
+  tmp="$(mktemp -d)"
+  while IFS= read -r a; do
+    rel="${a#"$root/sysroot/$t"/}"
+    if [ "$a" != "$rel" ] && grep -qxF "$rel" "$OUT_DIR/glibc-files.txt"; then continue; fi
+    rm -rf "$tmp/x"; mkdir -p "$tmp/x"
+    if ! (cd "$tmp/x" && "$root/bin/llvm-ar" x "$a"); then bad="$bad$a: cannot extract"$'\n'; continue; fi
+    sample=""
+    for m in "$tmp/x"/*; do
+      [ -f "$m" ] || continue
+      kind="$(head -c 4 "$m" | od -An -tx1 | tr -d ' \n')"
+      case "$kind" in
+        4243c0de) sample="${sample:-$m}" ;;
+        7f454c46)
+          if "$root/bin/llvm-readelf" -S "$m" 2>/dev/null | grep -q '\.llvm\.lto'; then
+            if [ -z "$sample" ]; then
+              "$root/bin/llvm-objcopy" --dump-section ".llvm.lto=$tmp/fat.bc" "$m" "$tmp/discard.o" && sample="$tmp/fat.bc"
+            fi
+          else
+            bad="$bad$a($(basename "$m")): native code only, no bitcode"$'\n'
+          fi ;;
+        *) bad="$bad$a($(basename "$m")): not an object (magic $kind)"$'\n' ;;
+      esac
+    done
+    if [ -n "$sample" ]; then
+      producer="$(bitcode_producer "$root/bin/llvm-bcanalyzer" "$sample")"
+      bc="${producer#LLVM}"
+      if [ "${bc%%.*}" != "$LLVM_MAJOR" ]; then bad="$bad$a: bitcode producer '$producer', want LLVM$LLVM_MAJOR.x"$'\n'; fi
+    fi
+  done < <(find "$root/sysroot/$t/usr/lib" "$root/lib/$t" -name '*.a' -type f 2>/dev/null | sort)
+  rm -rf "$tmp"
+  if [ -z "$bad" ]; then pass "bitcode $t"; else fail "bitcode $t" "$(printf '%s' "$bad" | head -10)"; fi
+}
+```
+Before trusting the `sed` in `bitcode_producer`, run `out/linux-amd64/elide-toolchain/bin/llvm-bcanalyzer --dump <some member .o>` once. Find how LLVM 23 prints the IDENTIFICATION block's producer string, and adjust the `sed` so it yields exactly `LLVM23.1.2`. Record the observed line in the report.
+
+Run it against the current bundle. libc++ is still native there, so the check must fail:
+```bash
+ROOT_DIR=$PWD bash -c 'source scripts/lib/env.sh; source scripts/verify/checks.sh; VERIFY_DIR=$PWD/out/linux-amd64/verify; check_bitcode out/linux-amd64/verify/elide-toolchain x86_64-unknown-linux-gnu'
+```
+Expected: `FAIL  bitcode x86_64-unknown-linux-gnu: …/lib/x86_64-unknown-linux-gnu/libc++.a(…): native code only, no bitcode`.
+
+- [ ] **Step 2: Build the C++ runtimes as fat ThinLTO objects**
+
+In `scripts/stages/30-runtimes.sh` `build_cxx_runtimes`, add these to the cmake invocation. They are per-runtime flags, so compiler-rt (profile) in the same pass stays native:
+```bash
+    -DLIBUNWIND_ADDITIONAL_COMPILE_FLAGS="-flto=thin;-ffat-lto-objects" \
+    -DLIBCXXABI_ADDITIONAL_COMPILE_FLAGS="-flto=thin;-ffat-lto-objects" \
+    -DLIBCXX_ADDITIONAL_COMPILE_FLAGS="-flto=thin;-ffat-lto-objects" \
+```
+Confirm the three option names exist in `llvm/libunwind/CMakeLists.txt`, `llvm/libcxxabi/CMakeLists.txt` and `llvm/libcxx/CMakeLists.txt` (`grep -n ADDITIONAL_COMPILE_FLAGS`). If one is spelled differently in LLVM 23, use the real name and note it.
+
+- [ ] **Step 3: Rebuild and verify**
+
+```bash
+./build.sh --from 30-runtimes
+```
+That covers 30 → 35 → 36 → 40 → 50 → 90 → 95. Expected: every stage succeeds and the verification ends with `verification: 0 failure(s)`, including `ok    bitcode x86_64-unknown-linux-musl` and `ok    bitcode x86_64-unknown-linux-gnu`. Also rerun `bash tests/stages/30-runtimes.check.sh` and `bash tests/stages/40-llvm-stage2.check.sh`: stage 2 links libc++ statically, and fat objects let it keep using the native code.
+
+- [ ] **Step 4: Negative test**
+
+```bash
+V=out/neg; rm -rf $V; mkdir -p $V; tar -C $V -xJf dist/elide-toolchain-*-linux-amd64.tar.xz
+cp $V/elide-toolchain/lib/clang/23/lib/x86_64-unknown-linux-gnu/libclang_rt.builtins.a $V/elide-toolchain/sysroot/x86_64-unknown-linux-gnu/usr/lib/libnative-probe.a
+ROOT_DIR=$PWD bash -c 'source scripts/lib/env.sh; source scripts/verify/checks.sh; VERIFY_DIR=$PWD/out/neg; check_bitcode out/neg/elide-toolchain x86_64-unknown-linux-gnu'
+rm -rf $V
+```
+Expected: `FAIL  bitcode … libnative-probe.a(…): native code only, no bitcode`.
+
+- [ ] **Step 5: Commit**
+
+```bash
+tests/run.sh   # exit 0
+git add scripts/stages/30-runtimes.sh scripts/verify/checks.sh
+git commit -m "feat: ship LLVM ThinLTO bitcode in libc++ runtimes; verify bitcode in all archives
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+---
+
 ## Phase F — Distribution
 
 ### Task 20: GitHub Action rewrite
