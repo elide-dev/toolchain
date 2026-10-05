@@ -2,3 +2,4 @@ self-hosted-runner:
   labels:
     - linux-amd64-cipool
     - linux-arm64-cipool
+    - darwin-arm64-cipool

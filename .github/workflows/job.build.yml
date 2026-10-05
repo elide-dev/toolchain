@@ -28,7 +28,7 @@ jobs:
         include:
           - { os: linux, arch: amd64, runner: linux-amd64-cipool, timeout: 720 }
           - { os: linux, arch: arm64, runner: linux-arm64-cipool, timeout: 720 }
-          - { os: darwin, arch: arm64, runner: macos-15, timeout: 360 }
+          - { os: darwin, arch: arm64, runner: darwin-arm64-cipool, timeout: 720 }
     env:
       REQUIRE_CONTAINER_CHECKS: ${{ matrix.os == 'linux' && 'yes' || 'no' }}
       INPUT_VERSION: ${{ inputs.version }}
@@ -81,11 +81,18 @@ jobs:
             cmake rsync xz-utils curl clang lld llvm
       - name: "Setup: Packages (macOS)"
         if: matrix.os == 'darwin'
-        # GNU rsync: stage_source needs --from0/--files-from, which macOS's openrsync lacks. Homebrew's
-        # bin dir (/opt/homebrew/bin, /usr/local/bin on Intel) precedes /usr/bin on GitHub runners;
-        # the check below fails the job if that ever changes.
+        # GNU rsync: stage_source needs --from0/--files-from, which macOS's openrsync lacks. The
+        # self-hosted runner service may not have Homebrew on PATH, so locate brew explicitly and put
+        # its bin dir first for this and all later steps; the check below fails the job otherwise.
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
         run: |
-          brew install bash ninja cmake rsync xz
+          brew="$(command -v brew || echo /opt/homebrew/bin/brew)"
+          "$brew" install --quiet bash ninja cmake rsync xz
+          hb="$("$brew" --prefix)/bin"
+          export PATH="$hb:$PATH"
+          echo "$hb" >> "$GITHUB_PATH"
           v="$(rsync --version 2>&1 || true)"
           echo "rsync: $(command -v rsync): ${v%%$'\n'*}"
           case "$v" in *"rsync  version"*) ;; *) echo "::error::GNU rsync is not first on PATH"; exit 1 ;; esac

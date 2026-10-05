@@ -18,7 +18,7 @@ jobs:
           - { os: linux, arch: amd64, runner: linux-amd64-cipool, target: x86_64-unknown-linux-musl }
           - { os: linux, arch: arm64, runner: linux-arm64-cipool, target: aarch64-unknown-linux-gnu }
           - { os: linux, arch: arm64, runner: linux-arm64-cipool, target: aarch64-unknown-linux-musl }
-          - { os: darwin, arch: arm64, runner: macos-15, target: arm64-apple-darwin }
+          - { os: darwin, arch: arm64, runner: darwin-arm64-cipool, target: arm64-apple-darwin }
     steps:
       - name: "Setup: Harden Runner"
         uses: step-security/harden-runner@c6295a65d1254861815972266d5933fd6e532bdf # v2.11.1

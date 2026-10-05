@@ -328,7 +328,7 @@ with `git fetch --tags` in the bump helper.
   |---|---|
   | linux-amd64 | `linux-amd64-cipool` |
   | linux-arm64 | `linux-arm64-cipool` |
-  | darwin-arm64 | `macos-15` |
+  | darwin-arm64 | `darwin-arm64-cipool` (self-hosted Apple Silicon) |
 
 - `on.pr.yml` / `on.push.yml`: call `job.build.yml` (artifacts only, no publish).
 - `on.release.yml` (new): on tag `v*` → `job.build.yml` → create GitHub
