@@ -30,6 +30,10 @@ jobs:
   build:
     needs: unit
     uses: ./.github/workflows/job.build.yml
+    with:
+      sanitizer-addons: true
   e2e:
     needs: build
     uses: ./.github/workflows/job.action-e2e.yml
+    with:
+      sanitizer-addons: true

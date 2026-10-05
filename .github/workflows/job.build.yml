@@ -7,12 +7,23 @@ on:
         description: "Toolchain version (YYYY.MM.N or vYYYY.MM.N); empty = dev build"
         required: false
         type: string
+      sanitizer-addons:
+        description: "Also build the per-sanitizer add-on archives (Linux)"
+        required: false
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       version:
         required: false
         type: string
         default: ""
+      sanitizer-addons:
+        # Per-sanitizer add-on archives (asan/tsan/msan, Linux gnu triples). Only push-to-main and
+        # release builds set this (spec 2026-10-05 §9); PR builds stay fast.
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -32,6 +43,7 @@ jobs:
     env:
       REQUIRE_CONTAINER_CHECKS: ${{ matrix.os == 'linux' && 'yes' || 'no' }}
       INPUT_VERSION: ${{ inputs.version }}
+      BUILD_SANITIZER_VARIANTS: ${{ inputs.sanitizer-addons && 'yes' || 'no' }}
     steps:
       - name: "Setup: Harden Runner"
         uses: step-security/harden-runner@c6295a65d1254861815972266d5933fd6e532bdf # v2.11.1

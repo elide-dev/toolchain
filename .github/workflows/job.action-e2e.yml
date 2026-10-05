@@ -1,7 +1,13 @@
 name: "Job - Action E2E"
 
 on:
-  workflow_call: {}
+  workflow_call:
+    inputs:
+      sanitizer-addons:
+        description: "The build produced sanitizer add-on archives: also test the action's sanitizer input"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -33,7 +39,10 @@ jobs:
           path: dist
       - name: "Locate archive"
         id: archive
-        run: echo "path=$(ls "$PWD"/dist/elide-toolchain-*.tar.xz)" >> "$GITHUB_OUTPUT"
+        env:
+          PLATFORM: ${{ matrix.os }}-${{ matrix.arch }}
+        # Exactly the main bundle: sanitizer add-ons (…-<os>-<arch>-sanitizer-<san>.tar.xz) share the prefix.
+        run: echo "path=$(ls "$PWD"/dist/elide-toolchain-*-"$PLATFORM".tar.xz)" >> "$GITHUB_OUTPUT"
       - name: "Install via action"
         id: tc
         uses: ./action
@@ -52,3 +61,56 @@ jobs:
           "$CC" $extra tests/fixtures/hello.c -o hello && ./hello
           "$CXX" $extra tests/fixtures/hello.cpp -o hello-cxx && ./hello-cxx
           test -f "$CMAKE_TOOLCHAIN_FILE"
+
+  sanitizer:
+    name: "Action sanitizer (${{ matrix.arch }} ${{ matrix.sanitizer }})"
+    if: inputs.sanitizer-addons
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: amd64, runner: linux-amd64-cipool, target: x86_64-unknown-linux-gnu, sanitizer: msan }
+          - { arch: arm64, runner: linux-arm64-cipool, target: aarch64-unknown-linux-gnu, sanitizer: msan }
+          - { arch: amd64, runner: linux-amd64-cipool, target: x86_64-unknown-linux-gnu, sanitizer: asan }
+    steps:
+      - name: "Setup: Harden Runner"
+        uses: step-security/harden-runner@c6295a65d1254861815972266d5933fd6e532bdf # v2.11.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: elide-toolchain-linux-${{ matrix.arch }}
+          path: dist
+      - name: "Locate archives"
+        id: archive
+        env:
+          ARCH: ${{ matrix.arch }}
+          SAN: ${{ matrix.sanitizer }}
+        run: |
+          echo "path=$(ls "$PWD"/dist/elide-toolchain-*-linux-"$ARCH".tar.xz)" >> "$GITHUB_OUTPUT"
+          echo "addon=$(ls "$PWD"/dist/elide-toolchain-*-linux-"$ARCH"-sanitizer-"$SAN".tar.xz)" >> "$GITHUB_OUTPUT"
+      - name: "Install via action"
+        id: tc
+        uses: ./action
+        with:
+          archive: ${{ steps.archive.outputs.path }}
+          sanitizer-archive: ${{ steps.archive.outputs.addon }}
+          target: ${{ matrix.target }}
+          sanitizer: ${{ matrix.sanitizer }}
+      - name: "Use it"
+        env:
+          SAN: ${{ matrix.sanitizer }}
+          ADDON: ${{ steps.tc.outputs.sanitizer-addon }}
+        run: |
+          test -n "$ADDON"
+          elide-toolchain sanitizers
+          case "$SAN" in msan) want=use-of-uninitialized-value ;; asan) want=heap-buffer-overflow ;; esac
+          "$CC" -g "tests/fixtures/sanitizers/$SAN.c" -o trip
+          if ./trip > trip.log 2>&1; then echo "::error::$SAN fixture did not trip"; exit 1; fi
+          grep -q "$want" trip.log
+          "$CXX" -g tests/fixtures/sanitizers/clean.cpp -o clean && ./clean
+          "$CXX" -g -DHAVE_ZLIB -DHAVE_ZSTD -x c tests/fixtures/sanitizers/workload.c -x none -lz -lzstd -o workload && ./workload

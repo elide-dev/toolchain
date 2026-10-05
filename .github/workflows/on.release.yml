@@ -12,9 +12,12 @@ jobs:
     uses: ./.github/workflows/job.build.yml
     with:
       version: ${{ github.ref_name }}
+      sanitizer-addons: true
   e2e:
     needs: build
     uses: ./.github/workflows/job.action-e2e.yml
+    with:
+      sanitizer-addons: true
   publish:
     needs: [build, e2e]
     runs-on: ubuntu-24.04
@@ -32,13 +35,35 @@ jobs:
           pattern: elide-toolchain-*
           merge-multiple: true
           path: dist
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+          path: src
+          sparse-checkout: versions.env
+          sparse-checkout-cone-mode: false
       - name: "Verify checksums"
         run: cd dist && for f in *.tar.xz; do sha256sum -c "$f.sha256"; done
+      - name: "Verify sanitizer add-ons"
+        # Every Linux bundle ships one add-on per SANITIZER_VARIANTS entry (spec 2026-10-05 §4.2);
+        # `elide-toolchain addon install` and the action fetch them by exact name from this release
+        # (then R2), so a release must not go out without them.
+        run: |
+          . src/versions.env
+          missing=0
+          for b in dist/elide-toolchain-*-linux-*.tar.xz; do
+            case "$b" in *-sanitizer-*) continue ;; esac
+            for s in $SANITIZER_VARIANTS; do
+              a="${b%.tar.xz}-sanitizer-$s.tar.xz"
+              if [ -f "$a" ] && [ -f "$a.sha256" ]; then echo "ok $a"; else echo "::error::missing $a(.sha256)"; missing=1; fi
+            done
+          done
+          exit "$missing"
       - name: "Provenance"
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
         with:
           subject-path: "dist/*.tar.xz"
       - name: "GitHub Release"
+        # dist/* = per platform: bundle, SBOM, sanitizer add-ons (Linux), each archive's .sha256.
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -65,6 +90,8 @@ jobs:
           echo "v=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
           mkdir -p latest && echo "${GITHUB_REF_NAME#v}" > latest/latest.txt
       - name: "Mirror: bundles"
+        # Bundles and sanitizer add-ons under toolchain/<version>/: the R2 fallback of the action and
+        # of `elide-toolchain addon install` (static.elideusercontent.com/toolchain/<version>/<asset>).
         uses: elide-tools/r2-upload-action@b59314040b32715ae31337cdbb7418582ade7cff # main @ 2025-12-22
         with:
           path: "./dist"
