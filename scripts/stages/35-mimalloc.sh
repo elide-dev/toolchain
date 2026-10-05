@@ -18,14 +18,17 @@ stage_main() {
 # libelidealloc-shim: allocator-agnostic hint partitioning (MemProf hot/cold today, allocation
 # tokens later) over a build-time backend. Fat ThinLTO objects like the other shipped archives.
 build_elidealloc_shim() {
-  local t="$1" prefix b backend f libs src="$ROOT_DIR/src/elidealloc-shim"
+  local t="$1" prefix b backend f libs lto src="$ROOT_DIR/src/elidealloc-shim"
   prefix="$(target_prefix "$t")"
   b="$(component_build_dir elidealloc-shim "$t")"
   backend="$(elidealloc_backend "$t")"
+  # Fat objects are ELF-only; darwin archives are pure ThinLTO bitcode (spec §3.3a).
+  lto="-flto=thin -ffat-lto-objects"
+  if [ "$(triple_os "$t")" = darwin ]; then lto="-flto=thin"; fi
   for f in core hotcold "backend-$backend"; do
-    # shellcheck disable=SC2046
+    # shellcheck disable=SC2046,SC2086
     "$TOOLCHAIN_ROOT/bin/$t-clang++" -c -O2 -fPIC -std=c++17 -fvisibility=hidden \
-      -flto=thin -ffat-lto-objects $(arch_flags "$t") \
+      $lto $(arch_flags "$t") \
       -I"$src" -I"$prefix/include" "$src/$f.cc" -o "$b/$f.o"
   done
   mkdir -p "$prefix/lib/pkgconfig" "$prefix/include"
