@@ -7,7 +7,9 @@ build_zlib_ng() {
     cd "$src" || exit 1
     target_env "$t" "$prefix"
     ./configure --prefix="$prefix" --static --zlib-compat
-    make -j"$JOBS"
-    make install
+    # zlib-ng's configure sets NOLTOFLAG=-fno-lto for the per-ISA SIMD objects; clear it so every
+    # member carries LLVM bitcode (spec §3.3a). Clang keeps the per-function target features in IR.
+    make -j"$JOBS" NOLTOFLAG=
+    make install NOLTOFLAG=
   )
 }

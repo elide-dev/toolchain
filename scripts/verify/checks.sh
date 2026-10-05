@@ -152,12 +152,59 @@ check_containers() {
   done
 }
 
+# bitcode_producer BCANALYZER FILE — producer string of an LLVM bitcode file (e.g. LLVM23.1.2), or empty.
+bitcode_producer() {
+  "$1" --dump "$2" 2>/dev/null | sed -n "s/.*IDENTIFICATION.*//; s/.*STRING.*'\(LLVM[0-9.]*\)'.*/\1/p" | head -n1
+}
+
+# check_bitcode ROOT TRIPLE — every member of every shipped static archive carries LLVM bitcode
+# whose producer major is LLVM_MAJOR (spec §3.3a). Exempt: compiler-rt (lib/clang/**, never
+# scanned), glibc's own archives (listed in glibc-files.txt), and hand-written assembly members
+# (*.S.o, *.s.o, *.asm.o), which have no IR and so cannot carry bitcode.
+check_bitcode() {
+  local root="$1" t="$2" a rel tmp m kind bad="" sample bc producer
+  tmp="$(mktemp -d)"
+  while IFS= read -r a; do
+    rel="${a#"$root/sysroot/$t"/}"
+    if [ "$a" != "$rel" ] && grep -qxF "$rel" "$OUT_DIR/glibc-files.txt"; then continue; fi
+    rm -rf "$tmp/x"; mkdir -p "$tmp/x"
+    if ! (cd "$tmp/x" || exit 1; "$root/bin/llvm-ar" x "$a"); then bad="$bad$a: cannot extract"$'\n'; continue; fi
+    sample=""
+    for m in "$tmp/x"/*; do
+      [ -f "$m" ] || continue
+      case "$m" in *.S.o|*.s.o|*.asm.o) continue ;; esac
+      kind="$(head -c 4 "$m" | od -An -tx1 | tr -d ' \n')"
+      case "$kind" in
+        4243c0de) sample="${sample:-$m}" ;;
+        7f454c46)
+          if "$root/bin/llvm-readelf" -S "$m" 2>/dev/null | grep -q '\.llvm\.lto'; then
+            if [ -z "$sample" ]; then
+              "$root/bin/llvm-objcopy" --dump-section ".llvm.lto=$tmp/fat.bc" "$m" "$tmp/discard.o" && sample="$tmp/fat.bc"
+            fi
+          else
+            bad="$bad$a($(basename "$m")): native code only, no bitcode"$'\n'
+          fi ;;
+        *) bad="$bad$a($(basename "$m")): not an object (magic $kind)"$'\n' ;;
+      esac
+    done
+    if [ -n "$sample" ]; then
+      producer="$(bitcode_producer "$root/bin/llvm-bcanalyzer" "$sample")"
+      bc="${producer#LLVM}"
+      if [ "${bc%%.*}" != "$LLVM_MAJOR" ]; then bad="$bad$a: bitcode producer '$producer', want LLVM$LLVM_MAJOR.x"$'\n'; fi
+    fi
+  done < <(find "$root/sysroot/$t/usr/lib" "$root/lib/$t" -name '*.a' -type f 2>/dev/null | sort)
+  rm -rf "$tmp"
+  if [ -z "$bad" ]; then pass "bitcode $t"; else fail "bitcode $t" "$(printf '%s' "$bad" | head -10)"; fi
+}
+
 check_macos_minos() {
   local root="$1" t="$2" f minos out=""
   while IFS= read -r f; do
     file -b "$f" | grep -q Mach-O || continue
+    if ! command -v vtool >/dev/null 2>&1; then out="${out}vtool not available, cannot read minos of $f"$'\n'; continue; fi
     minos="$(vtool -show-build "$f" 2>/dev/null | awk '/minos/{print $2; exit}')"
-    if [ -n "$minos" ] && version_lt "$MACOS_MIN" "$minos"; then out="$out$f: minos $minos"$'\n'; fi
+    if [ -z "$minos" ]; then out="$out$f: no minos reported by vtool"$'\n'; continue; fi
+    if version_lt "$MACOS_MIN" "$minos"; then out="$out$f: minos $minos"$'\n'; fi
   done < <(find "$root/bin" "$(smoke_dir "$t")" -type f -perm -u+x)
   if [ -z "$out" ]; then pass "macos minos $t"; else fail "macos minos $t" "$(printf '%s' "$out" | head -5)"; fi
 }
@@ -214,6 +261,7 @@ run_all_checks() {
     check_smoke "$root" "$t"
     check_werror "$root" "$t"
     check_components "$root" "$t"
+    check_bitcode "$root" "$t"
     case "$(triple_libc "$t")" in
       gnu) check_glibc_floor "$root" "$t"; check_interp "$root" "$t" ;;
       musl) check_musl_libc "$root" "$t"; check_shims "$root" "$t" ;;

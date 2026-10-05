@@ -245,6 +245,7 @@ LLVM major (`LLVM_MAJOR`, currently 23):
 | Components (stage 50) and standalone `libmimalloc.a` | ThinLTO bitcode (from `-flto=thin` in the cflags profile) |
 | musl `libc.a` | fat ThinLTO objects (bitcode + native) |
 | `libc++.a`, `libc++abi.a`, `libunwind.a` | fat ThinLTO objects (bitcode + native), so non-LTO links such as stage 2 still use the native code |
+| hand-written assembly members (`*.S.o`) | native only: no IR to carry |
 | compiler-rt (`libclang_rt.*`, crt objects) | **native only**: LLVM requires builtins to stay native, since LTO code generation can introduce calls into them |
 | glibc's own archives | native only (built by GCC) |
 
