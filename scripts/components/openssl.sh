@@ -10,12 +10,13 @@ openssl_target() {
 }
 
 build_openssl() {
-  local t="$1" prefix="$2" src
+  local t="$1" prefix="$2" src variant=()
+  read -r -a variant <<< "$(component_variant_args openssl)"   # sanitizer add-ons (stage 60)
   src="$(stage_source openssl "$t")"
   (
     cd "$src" || exit 1
     target_env "$t" "$prefix"
-    ./Configure "$(openssl_target "$t")" \
+    ./Configure "$(openssl_target "$t")" "${variant[@]}" \
       no-shared no-tests no-docs no-comp no-afalgeng enable-ec_nistp_64_gcc_128 enable-tls1_3 threads \
       --prefix="$prefix" --libdir=lib --openssldir=/etc/ssl \
       CC="$CC" AR="$AR" RANLIB="$RANLIB" CFLAGS="$CFLAGS -fPIC" LDFLAGS="$LDFLAGS"

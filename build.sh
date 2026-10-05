@@ -17,11 +17,13 @@ STAGES=(
   20-libc-gnu
   21-libc-musl
   30-runtimes
+  31-sanitizer-runtimes
   35-mimalloc
   36-llvm-deps
   40-llvm-stage2
   45-propeller
   50-components
+  60-sanitizer-addons
   90-package
   95-verify
 )
@@ -38,8 +40,9 @@ Usage: ./build.sh [options]
   --dry-run         print the stages that would run, then exit
   -h, --help        show this help
 
-Stages: 00-sources 10-llvm-stage1 20-libc-gnu 21-libc-musl 30-runtimes 35-mimalloc
-        36-llvm-deps 40-llvm-stage2 45-propeller 50-components 90-package 95-verify
+Stages: 00-sources 10-llvm-stage1 20-libc-gnu 21-libc-musl 30-runtimes 31-sanitizer-runtimes
+        35-mimalloc 36-llvm-deps 40-llvm-stage2 45-propeller 50-components 60-sanitizer-addons
+        90-package 95-verify
 EOF
 }
 

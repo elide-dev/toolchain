@@ -5,7 +5,8 @@ Usage: gen-manifest.py manifest|sbom
 
 Reads versions.env and .gitmodules from $ROOT_DIR, and bundle facts from the environment
 exported by scripts/lib/env.sh (HOST_OS, HOST_ARCH, ALL_TARGETS, TOOLCHAIN_VERSION) plus
-ENABLED_COMPONENTS (space-separated).
+ENABLED_COMPONENTS (space-separated) and SANITIZER_MANIFEST (JSON with "sanitizers" and "addons",
+from sanitizer_manifest_json in scripts/lib/sanitizers.sh; optional).
 """
 import datetime
 import json
@@ -147,7 +148,15 @@ def manifest(env):
         "components": {p: component_info(env, p) for p in sorted(submodules())},
         "cflagsProfile": f"{host_os}-{host_arch}",
         "features": features(env, host_os, triples),
+        **sanitizer_info(),
     }
+
+
+def sanitizer_info():
+    """{"sanitizers": {triple: {"runtimes": [...], "addons": [...]}}, "addons": {san: asset}}."""
+    raw = os.environ.get("SANITIZER_MANIFEST", "")
+    data = json.loads(raw) if raw else {}
+    return {"sanitizers": data.get("sanitizers", {}), "addons": data.get("addons", {})}
 
 
 def purl(url, name, version, rev):
