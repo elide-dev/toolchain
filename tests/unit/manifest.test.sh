@@ -20,6 +20,12 @@ assert_eq "$(q '" ".join(t["triple"] for t in d["targets"])')" "x86_64-unknown-l
 assert_eq "$(q '[t["libcVersion"] for t in d["targets"] if t["libc"]=="glibc"][0]')" "2.34"
 assert_eq "$(q '" ".join(d["enabledComponents"])')" "zlib-ng zstd aws-lc"
 assert_eq "$(q 'd["components"]["llvm"]["version"]')" "$LLVM_VERSION"
+assert_eq "$(q 'd["features"]["memprof"]["runtimeTargets"]')" "['x86_64-unknown-linux-gnu']"
+assert_eq "$(q 'd["features"]["elideallocShim"]["backends"]["x86_64-unknown-linux-gnu"]')" "mimalloc"
+assert_eq "$(q 'd["features"]["elideallocShim"]["abi"]')" "1"
+assert_eq "$(q 'd["features"]["propeller"]["tool"]')" "bin/generate_propeller_profiles"
+assert_eq "$(q 'd["features"]["dedubb"]["codegen"]')" "True"
+assert_eq "$(BUILD_PROPELLER=no LLVM_DEDUBB=no MUSL_USE_MIMALLOC=no python3 "$ROOT_DIR/scripts/gen-manifest.py" manifest | python3 -c 'import json,sys; f=json.load(sys.stdin)["features"]; print("propeller" in f, "dedubb" in f, f["elideallocShim"]["backends"]["x86_64-unknown-linux-musl"])')" "False False forward"
 
 s="$(python3 "$ROOT_DIR/scripts/gen-manifest.py" sbom)"
 names="$(printf '%s' "$s" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["bomFormat"]=="CycloneDX" and d["specVersion"]=="1.6"; print(" ".join(sorted(c["name"] for c in d["components"])))')"

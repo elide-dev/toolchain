@@ -9,7 +9,9 @@ stage_main() {
   mkdir -p "$meta"
   printf '%s\n' "$TOOLCHAIN_VERSION" > "$meta/VERSION"
   for t in $ALL_TARGETS; do relocate_prefix "$t"; done
-  ENABLED_COMPONENTS="$(enabled_components | xargs)" python3 "$ROOT_DIR/scripts/gen-manifest.py" manifest > "$meta/manifest.json"
+  ENABLED_COMPONENTS="$(enabled_components | xargs)" BUILD_PROPELLER="${BUILD_PROPELLER:-yes}" \
+    LLVM_DEDUBB="${LLVM_DEDUBB:-yes}" MUSL_USE_MIMALLOC="${MUSL_USE_MIMALLOC:-yes}" \
+    python3 "$ROOT_DIR/scripts/gen-manifest.py" manifest > "$meta/manifest.json"
   ENABLED_COMPONENTS="$(enabled_components | xargs)" python3 "$ROOT_DIR/scripts/gen-manifest.py" sbom > "$meta/sbom.cdx.json"
   relocate_bundle_cmake
   strip_tools

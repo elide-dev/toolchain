@@ -49,5 +49,39 @@ gh="$("$H" env --target x86_64-unknown-linux-musl --format github)"
 assert_contains "$gh" "CC=$root/bin/x86_64-unknown-linux-musl-clang"
 assert_not_contains "$gh" "export "
 
+# flags: Propeller, DeduBB and MemProf consumer flags.
+touch "$B/bin/arm64-apple-darwin.cfg"
+f="$("$H" flags --target x86_64-unknown-linux-gnu memprof-use=/p/app.memprofdata)"
+assert_contains "$f" "-fmemory-profile-use=/p/app.memprofdata"
+assert_contains "$f" "-Wl,-mllvm,-supports-hot-cold-new"
+assert_contains "$f" "-lelidealloc-shim -lmimalloc"
+assert_contains "$f" "export ELIDE_RUSTFLAGS='-Clinker-plugin-lto"
+assert_contains "$f" "-Clink-arg=-Wl,-mllvm,-supports-hot-cold-new"
+assert_not_contains "$f" "export PATH="
+assert_eq "$(eval "$f"; printf '%s' "$ELIDE_CFLAGS")" "-flto=thin -gmlt -fdebug-info-for-profiling -fmemory-profile-use=/p/app.memprofdata"
+assert_contains "$("$H" flags --target x86_64-unknown-linux-musl memprof-use=/p/a)" "-lelidealloc-shim -static"
+assert_contains "$("$H" flags --target x86_64-unknown-linux-gnu memprof-instrument)" "-fmemory-profile -gmlt"
+assert_fails "$H" flags --target x86_64-unknown-linux-musl memprof-instrument
+assert_contains "$("$H" flags --target x86_64-unknown-linux-musl memprof-instrument 2>&1 || true)" "x86_64-unknown-linux-gnu only"
+b="$("$H" flags --target x86_64-unknown-linux-gnu propeller-baseline)"
+assert_contains "$b" "-fbasic-block-address-map"
+assert_contains "$b" "-Wl,--lto-basic-block-address-map"
+u="$("$H" flags --target x86_64-unknown-linux-gnu propeller-use=/c/cc.txt,/c/ld.txt dedubb-apply=/d/x.txt)"
+assert_contains "$u" "-Wl,--lto-basic-block-sections=/c/cc.txt"
+assert_contains "$u" "-Wl,--symbol-ordering-file=/c/ld.txt"
+assert_contains "$u" "-Wl,-mllvm,-dedubb-directives=/d/x.txt"
+assert_not_contains "$u" "-fbasic-block-address-map"
+d="$("$H" flags --target x86_64-unknown-linux-musl dedubb-apply=/d/x.txt)"
+assert_contains "$d" "-Wl,--lto-basic-block-address-map"
+assert_contains "$d" "-Wl,-mllvm,-dedubb-directives=/d/x.txt"
+assert_fails "$H" flags --target arm64-apple-darwin propeller-baseline
+assert_fails "$H" flags --target arm64-apple-darwin dedubb-apply=/d/x.txt
+assert_contains "$("$H" flags --target arm64-apple-darwin memprof-use=/p/a)" "-lelidealloc-shim"
+assert_fails "$H" flags --target x86_64-unknown-linux-gnu propeller-use=/only-one
+assert_fails "$H" flags --target x86_64-unknown-linux-gnu frobnicate
+assert_fails "$H" flags memprof-use=/p/a
+fj="$("$H" flags --target x86_64-unknown-linux-gnu propeller-baseline --format json)"
+assert_eq "$(printf '%s' "$fj" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(sorted(d))')" "['ELIDE_CFLAGS', 'ELIDE_CXXFLAGS', 'ELIDE_LDFLAGS', 'ELIDE_RUSTFLAGS']"
+
 rm -rf "$T"
 finish

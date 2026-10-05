@@ -82,6 +82,46 @@ def core_components(host_os):
     return ["llvm", "mimalloc"] + (["musl", "glibc"] if host_os == "linux" else [])
 
 
+def yes(name, default="yes"):
+    return os.environ.get(name, default).lower() in ("yes", "on", "true", "1")
+
+
+def shim_backend(triple):
+    if triple.endswith("-linux-gnu"):
+        return "mimalloc"
+    if triple.endswith("-linux-musl"):
+        return "mimalloc" if yes("MUSL_USE_MIMALLOC") else "forward"
+    return "forward"
+
+
+def features(env, host_os, triples):
+    """Propeller, DeduBB, MemProf and libelidealloc-shim (spec 2026-10-05-memprof-dedubb)."""
+    f = {
+        "memprof": {
+            "runtimeTargets": [t for t in triples if t == "x86_64-unknown-linux-gnu"],
+            "backports": ["llvm/llvm-project#222126", "llvm/llvm-project#208911"],
+        },
+        "elideallocShim": {
+            "lib": "libelidealloc-shim.a",
+            "header": "elidealloc-shim.h",
+            "abi": 1,
+            "backends": {t: shim_backend(t) for t in triples},
+            "hotColdNew": True,
+            "allocToken": False,
+        },
+    }
+    if host_os == "linux" and yes("BUILD_PROPELLER"):
+        f["propeller"] = {
+            "tool": "bin/generate_propeller_profiles",
+            "revision": env.get("LLVM_PROPELLER_REV", ""),
+            "profileTypes": ["PERF_LBR", "PERF_SPE"],
+        }
+    if host_os == "linux" and yes("LLVM_DEDUBB"):
+        f["dedubb"] = {"codegen": True, "directives": "generate_propeller_profiles --dedubb_profile",
+                       "source": "chaitanyaupp18/DeduBB@07d730d"}
+    return f
+
+
 def git_revision():
     res = subprocess.run(["git", "-C", ROOT, "rev-parse", "HEAD"], capture_output=True, text=True)
     return res.stdout.strip()
@@ -106,6 +146,7 @@ def manifest(env):
         "enabledComponents": os.environ.get("ENABLED_COMPONENTS", "").split(),
         "components": {p: component_info(env, p) for p in sorted(submodules())},
         "cflagsProfile": f"{host_os}-{host_arch}",
+        "features": features(env, host_os, triples),
     }
 
 

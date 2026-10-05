@@ -6,12 +6,15 @@
 #   elide-toolchain targets
 #   elide-toolchain version
 #   elide-toolchain env [--target TRIPLE] [--static] [--format sh|github|json]
+#   elide-toolchain flags --target TRIPLE MODE... [--format sh|github|json]
+#       MODE: propeller-baseline | propeller-use=CC,LD | dedubb-apply=FILE |
+#             memprof-instrument | memprof-use=FILE   (prints ELIDE_{C,CXX,LD,RUST}FLAGS)
 #   elide-toolchain doctor
 set -eu
 
 die() { echo "elide-toolchain: $*" >&2; exit 1; }
 
-usage() { sed -n '2,10s/^# \{0,1\}//p' "$0"; }
+usage() { sed -n '2,13s/^# \{0,1\}//p' "$0"; }
 
 self=$0
 while [ -L "$self" ]; do
@@ -57,7 +60,7 @@ emit() {
     sh)
       while IFS=$TAB read -r k v; do printf 'export %s=%s\n' "$k" "$(sh_quote "$v")"; done < "$ENV_FILE"
       # shellcheck disable=SC2016
-      printf 'export PATH=%s:"$PATH"\n' "$(sh_quote "$ROOT/bin")"
+      [ -n "${NO_PATH:-}" ] || printf 'export PATH=%s:"$PATH"\n' "$(sh_quote "$ROOT/bin")"
       ;;
     github)
       while IFS=$TAB read -r k v; do printf '%s=%s\n' "$k" "$v"; done < "$ENV_FILE"
@@ -124,6 +127,65 @@ cmd_env() {
   emit "$fmt"
 }
 
+uniq_words() { printf '%s\n' "$1" | tr ' ' '\n' | awk 'NF && !seen[$0]++' | tr '\n' ' ' | sed 's/ $//'; }
+
+# flags --target T MODE... — consumer flags for Propeller, DeduBB and MemProf (spec §3.5, §4.3,
+# §6.2). Modes combine, e.g. `propeller-use=cc.txt,ld.txt dedubb-apply=dedubb.txt`.
+cmd_flags() {
+  target="" fmt=sh modes="" cf="" lf="" rf=""
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --target) [ $# -ge 2 ] || die "--target needs a triple"; target=$2; shift 2 ;;
+      --target=*) target=${1#--target=}; shift ;;
+      --format) [ $# -ge 2 ] || die "--format needs a value"; fmt=$2; shift 2 ;;
+      --format=*) fmt=${1#--format=}; shift ;;
+      -*) die "flags: unknown option: $1" ;;
+      *) modes="$modes $1"; shift ;;
+    esac
+  done
+  [ -n "$target" ] || die "flags: --target is required"
+  has_target "$target" || die "target $target is not in this bundle (have: $(list_targets | tr '\n' ' '))"
+  [ -n "$modes" ] || die "flags: give a mode: propeller-baseline, propeller-use=CC,LD, dedubb-apply=FILE, memprof-instrument, memprof-use=FILE"
+  elf_only() { case $target in *-linux-*) ;; *) die "$1 needs ELF (Linux targets only; not $target)" ;; esac; }
+  base_cf="-flto=thin -funique-internal-linkage-names -fbasic-block-address-map"
+  base_lf="-flto=thin -fuse-ld=lld -Wl,--lto-basic-block-address-map -Wl,-z,keep-text-section-prefix"
+  for m in $modes; do
+    case $m in
+      propeller-baseline)
+        elf_only "$m"; cf="$cf $base_cf"; lf="$lf $base_lf" ;;
+      propeller-use=*)
+        elf_only "propeller-use"; v=${m#propeller-use=}; cc=${v%%,*}; ld=${v#*,}
+        if [ "$cc" = "$v" ] || [ -z "$cc" ] || [ -z "$ld" ]; then die "propeller-use needs CC,LD (cc and ld profile paths)"; fi
+        cf="$cf -flto=thin -funique-internal-linkage-names"
+        lf="$lf -flto=thin -fuse-ld=lld -Wl,--lto-basic-block-sections=$cc -Wl,--symbol-ordering-file=$ld -Wl,--no-warn-symbol-ordering -Wl,-z,keep-text-section-prefix" ;;
+      dedubb-apply=*)
+        elf_only "dedubb-apply"; f=${m#dedubb-apply=}; [ -n "$f" ] || die "dedubb-apply needs a directive file"
+        # with propeller-use the cluster file already assigns BB IDs; otherwise use the labelled build
+        case " $lf " in *"lto-basic-block-sections="*) ;; *) cf="$cf $base_cf"; lf="$lf $base_lf" ;; esac
+        lf="$lf -Wl,-mllvm,-dedubb-directives=$f" ;;
+      memprof-instrument)
+        [ "$target" = x86_64-unknown-linux-gnu ] || die "the MemProf runtime exists for x86_64-unknown-linux-gnu only; collect profiles there and use them on $target"
+        cf="$cf -fmemory-profile -gmlt -fdebug-info-for-profiling -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer -fno-optimize-sibling-calls -fno-pie"
+        lf="$lf -fmemory-profile -no-pie -Wl,-z,noseparate-code -Wl,--build-id"
+        rf="$rf -Cpasses=memprof-module,function(memprof) -Cforce-frame-pointers=yes -Cdebuginfo=line-tables-only -Crelocation-model=static" ;;
+      memprof-use=*)
+        f=${m#memprof-use=}; [ -n "$f" ] || die "memprof-use needs a profile path"
+        cf="$cf -flto=thin -gmlt -fdebug-info-for-profiling -fmemory-profile-use=$f"
+        lf="$lf -flto=thin -fuse-ld=lld -Wl,-mllvm,-enable-memprof-context-disambiguation -Wl,-mllvm,-optimize-hot-cold-new -Wl,-mllvm,-supports-hot-cold-new -lelidealloc-shim"
+        case $target in *-linux-gnu) lf="$lf -lmimalloc" ;; *-linux-musl) lf="$lf -static" ;; esac ;;
+      *) die "flags: unknown mode: $m" ;;
+    esac
+  done
+  cf=$(uniq_words "$cf"); lf=$(uniq_words "$lf")
+  rf="-Clinker-plugin-lto -Clinker=$ROOT/bin/$target-clang $rf"
+  for w in $lf; do case $w in -flto=thin) ;; *) rf="$rf -Clink-arg=$w" ;; esac; done
+  add ELIDE_CFLAGS "$cf"
+  add ELIDE_CXXFLAGS "$cf"
+  add ELIDE_LDFLAGS "$lf"
+  add ELIDE_RUSTFLAGS "$(uniq_words "$rf")"
+  NO_PATH=1 emit "$fmt"
+}
+
 cmd_doctor() {
   printf '#include <stdio.h>\nint main(void){puts("ok");return 0;}\n' > "$WORK/hello.c"
   printf '#include <iostream>\nint main(){std::cout<<"ok"<<std::endl;return 0;}\n' > "$WORK/hello.cpp"
@@ -150,6 +212,7 @@ case $cmd in
   targets) list_targets ;;
   version) cat "$ROOT/share/elide-toolchain/VERSION" ;;
   env) cmd_env "$@" ;;
+  flags) cmd_flags "$@" ;;
   doctor) cmd_doctor ;;
   help|-h|--help) usage ;;
   *) die "unknown command: $cmd (try --help)" ;;
