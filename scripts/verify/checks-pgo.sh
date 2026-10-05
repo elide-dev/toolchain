@@ -285,9 +285,12 @@ check_memprof_use() {
 # check_memprof_strip ROOT TRIPLE — without -supports-hot-cold-new no hint survives the link.
 check_memprof_strip() {
   local root="$1" t="$2" tmp st=() libs
-  tmp="$(mktemp -d)"; libs="$(shim_libs "$root" "$t")"
+  # Without the .pc's -Wl,-u force-load: it keeps the shim's own hot/cold definitions (ld64 does
+  # not drop them), which the symbol check below would mistake for surviving hints.
+  tmp="$(mktemp -d)"; libs="$(shim_libs "$root" "$t" | tr ' ' '\n' | sed '/^-Wl,-u,/d' | xargs)"
   [ "$(triple_libc "$t")" = musl ] && st=(-static)
-  "$root/bin/llvm-profdata" merge "$ROOT_DIR/tests/fixtures/memprof-ctx.yaml" -o "$tmp/p.memprofdata"
+  "$root/bin/llvm-profdata" merge "$ROOT_DIR/tests/fixtures/memprof-ctx.yaml" -o "$tmp/p.memprofdata" \
+    || { fail "memprof strip $t" "yaml merge"; rm -rf "$tmp"; return; }
   # shellcheck disable=SC2086
   if ! "$root/bin/$t-clang++" -O2 "${st[@]}" -gmlt -fdebug-info-for-profiling -flto=thin -fuse-ld=lld \
        -fmemory-profile-use="$tmp/p.memprofdata" "$ROOT_DIR/tests/fixtures/memprof-ctx.cc" -o "$tmp/c" $libs 2>"$tmp/err"; then
