@@ -252,6 +252,42 @@ LLVM major (`LLVM_MAJOR`, currently 23):
 
 Verification (§6) checks every member of every non-exempt archive.
 
+### 3.3b Build speed (2026-10-05)
+
+- **Prebuilt stage 1 (Linux).** Stage 10 extracts the official LLVM
+  `LLVM_VERSION` release (`LLVM_PREBUILT_LINUX_<ARCH>_{URL,SHA256}` in
+  `versions.env`, GitHub's asset digests) instead of building clang/lld
+  (`STAGE1_SOURCE=prebuilt`, the default when a pin exists; `build` keeps
+  the from-source path). It removes the release's own runtimes
+  (`lib/clang/<major>/lib`, `lib/<triple>/`, libc++ headers) so stage 1 has
+  clang and lld only, exactly like a from-source stage 1, then checks the
+  tools later stages run, the version, and that clang's defaults are the
+  upstream libgcc/libstdc++/ld (stage 30 relies on bare clang).
+  This is safe because the bootstrap compiler's only products are code and
+  same-version bitcode. Our LLVM patches are the MemProf ThinLTO tiebreak
+  (applies when an LTO link runs with MemProf profiles), the memprof runtime
+  fix (compiler-rt, which stage 30 builds from the patched tree), and DeduBB
+  codegen (applies only with `-dedubb-directives`). None of them changes IR
+  or the bitcode format. No stage passes MemProf or DeduBB flags to the
+  stage-1 compiler, and stage 40 does not set `CLANG_DEDUBB_DIRECTIVES`.
+  Stages 30/31/36/45 only compile and link with it. Nothing has to force
+  `build`. darwin is unchanged because its stage 10 builds the shipped LLVM.
+- **OOM guard.** `JOBS` defaults to min(CPUs, available GiB / 2) and
+  `LINK_JOBS` to clamp(available GiB / 8, 1, 4). LLVM and runtimes builds
+  get `LLVM_PARALLEL_LINK_JOBS`, and stage 45 gets a Ninja `link` job pool.
+- **ccache** (`USE_CCACHE=auto`): it is the CMake compiler launcher for
+  stages 10, 30, 31, 35/50 (CMake components), 40, 45 and 60. Compilers are
+  hashed by content, so a byte-identical prebuilt stage 1 gives hits across
+  runs. The generators of the auto-loaded clang cfg files are in
+  `CCACHE_EXTRAFILES`, because ccache cannot see those cfg files.
+  Autotools components are not cached.
+- **Compression.** The archive and the add-on archives use `xz -9` only for
+  release versions (no `-dev`/`+` suffix, or `RELEASE_BUILD=yes`) and
+  `xz -6` otherwise. `XZ_LEVEL` overrides both.
+- **CI** keeps downloads and the ccache directory under
+  `$HOME/.cache/elide-toolchain`, outside the workspace that
+  `actions/checkout` cleans.
+
 ### 3.4 Components
 
 Same set as today, each moved into `scripts/components/<name>.sh` with the

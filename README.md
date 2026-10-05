@@ -234,8 +234,8 @@ Other changes to plan for:
 
 Host requirements:
 
-- **Linux:** `build-essential bison gawk python3 ninja-build cmake rsync xz-utils curl clang lld llvm` (apt), bash >= 4, and optionally `docker` for the container checks. No `sudo` is used by the build.
-- **macOS:** Xcode Command Line Tools, then `brew install bash ninja cmake rsync xz`. bash >= 4 is required, so run `build.sh` with Homebrew bash. GNU rsync is required because the build uses `rsync --from0 --files-from`, which macOS's bundled openrsync lacks. Homebrew's bin directory must precede `/usr/bin` on `PATH`. Homebrew's standard shell setup does this, and the CI build job checks that GNU rsync is the one found.
+- **Linux:** `build-essential bison gawk python3 ninja-build cmake rsync xz-utils curl clang lld llvm` (apt), bash >= 4, and optionally `ccache` (see [Build speed](#build-speed)) and `docker` for the container checks. No `sudo` is used by the build.
+- **macOS:** Xcode Command Line Tools, then `brew install bash ninja cmake rsync xz` (optionally `ccache`). bash >= 4 is required, so run `build.sh` with Homebrew bash. GNU rsync is required because the build uses `rsync --from0 --files-from`, which macOS's bundled openrsync lacks. Homebrew's bin directory must precede `/usr/bin` on `PATH`. Homebrew's standard shell setup does this, and the CI build job checks that GNU rsync is the one found.
 
 ```sh
 git submodule update --init --depth=1 --recursive
@@ -265,7 +265,7 @@ Stages:
 | # | Stage | What it does |
 |---|---|---|
 | 00 | `sources` | Check submodule pins; fetch Linux kernel headers (checksummed) into each Linux sysroot (macOS: check Xcode CLT) |
-| 10 | `llvm-stage1` | Linux: host compiler builds clang/lld (not shipped). macOS: builds the full LLVM (floor 12.0) and compiler-rt directly into the bundle |
+| 10 | `llvm-stage1` | Linux: the bootstrap clang/lld (not shipped), by default the pinned official LLVM release (`STAGE1_SOURCE`), else built by the host compiler. macOS: builds the full LLVM (floor 12.0) and compiler-rt directly into the bundle |
 | 20 | `libc-gnu` | Host GCC builds glibc 2.34 into the gnu sysroot (Linux) |
 | 21 | `libc-musl` | Stage-1 clang builds musl phase 1 (Linux) |
 | 30 | `runtimes` | compiler-rt, libunwind, libc++abi, libc++ per Linux triple, as fat ThinLTO archives; the memprof runtime for x86_64 gnu |
@@ -284,12 +284,27 @@ Stages:
 - Components: `BUILD_ZLIB_NG`, `BUILD_ZSTD`, `BUILD_BROTLI`, `BUILD_SNAPPY`, `BUILD_LZ4`, `BUILD_CRC32C`, `BUILD_AWS_LC` (default yes); `BUILD_OPENSSL`, `BUILD_ZLIB`, `BUILD_SQLITE`, `BUILD_SQLCIPHER`, `BUILD_CAPNP`, `BUILD_HIREDIS`, `BUILD_LEVELDB` (default no).
 - musl: `MUSL_USE_MIMALLOC`, `MUSL_USE_LTO`. mimalloc: `MIMALLOC_SECURE`, `MIMALLOC_GUARDED`.
 - LLVM features: `LLVM_DEDUBB` (DeduBB patch, default yes), `BUILD_PROPELLER` (stage 45, default yes).
-- `USE_SCCACHE`, `REQUIRE_CONTAINER_CHECKS` (fail instead of skip when docker is missing), `REQUIRE_LBR` (fail instead of skip when the live Propeller check finds no LBR/SPE).
+- `USE_CCACHE`, `USE_SCCACHE`, `STAGE1_SOURCE` (see Build speed), `REQUIRE_CONTAINER_CHECKS` (fail instead of skip when docker is missing), `REQUIRE_LBR` (fail instead of skip when the live Propeller check finds no LBR/SPE).
 - Local patches live in `src/patches/<component>/`. Stage 00 un-applies them before its clean-submodule check, and the stages that build a component apply them again.
 - Sanitizers: `BUILD_SANITIZERS` (runtimes and libFuzzer in the bundle, default yes), `BUILD_SANITIZER_VARIANTS` (add-on archives, default no; CI sets yes on push to `main` and on release).
 
 > [!IMPORTANT]
 > Switching providers (zlib vs zlib-ng, OpenSSL vs AWS-LC) or disabling components requires `./build.sh --clean`. Otherwise stale archives and shared objects already in the sysroot shadow the new ones.
+
+### Build speed
+
+| Knob | Default | Meaning |
+|---|---|---|
+| `STAGE1_SOURCE` | `prebuilt` on Linux when `versions.env` pins a release for the host arch, else `build` | `prebuilt`: stage 10 downloads the official LLVM `LLVM_VERSION` release (`LLVM_PREBUILT_LINUX_<ARCH>_{URL,SHA256}`, checksummed) and uses it as the bootstrap compiler, with its bundled runtimes removed. `build`: build clang/lld from the patched tree with the host compiler. macOS always builds (its stage 10 is the shipped LLVM). |
+| `USE_CCACHE` | `auto` (on when `ccache` is on `PATH`) | `yes`/`no`/`auto`. When on, CMake builds use `ccache` as the compiler launcher, and it takes precedence over `USE_SCCACHE`. Unset settings default to `CCACHE_BASEDIR=<repo>`, `CCACHE_COMPILERCHECK=content`, `CCACHE_NOHASHDIR=1` and `CCACHE_MAXSIZE=50G`. Autotools components are not cached. |
+| `JOBS` | min(CPUs, available GiB / 2) | Compile parallelism. |
+| `LINK_JOBS` | available GiB / 8, clamped to 1..4 | Concurrent links in LLVM builds (`LLVM_PARALLEL_LINK_JOBS`) and in stage 45 (a Ninja link pool). |
+| `ELIDE_MEM_GB`, `ELIDE_CPU_COUNT` | detected | Override the detected memory (Linux `MemAvailable`, macOS `hw.memsize`) and CPU count. |
+| `XZ_LEVEL` | `9` for releases, `6` otherwise | xz level for the archive and the sanitizer add-ons. A release is a `TOOLCHAIN_VERSION` with no `-dev` or `+` suffix, or `RELEASE_BUILD=yes` (`RELEASE_BUILD=no` forces non-release). |
+
+`build.sh` logs the chosen `JOBS`/`LINK_JOBS`, the compiler launcher and the stage-1 source when it starts.
+
+Persistent caches: downloads (kernel headers, Propeller deps, the prebuilt LLVM tarball) go to `ELIDE_CACHE_DIR` (default `out/cache`), and ccache uses `CCACHE_DIR` (default `~/.cache/ccache`). CI sets both under `$HOME/.cache/elide-toolchain/` because `actions/checkout` cleans ignored files in the workspace, and prints `ccache --show-stats` after every build. The prebuilt stage 1 is safe to use because the version is the same, so stage 1 produces bitcode the shipped LLVM reads. Our LLVM patches only affect the shipped stage 2 and compiler-rt, which stage 30 builds from the patched tree (spec §3.3b). Changing `STAGE1_SOURCE` takes effect on `--from 10-llvm-stage1`.
 
 **Build times.** See [`docs/notes/build-timings.md`](docs/notes/build-timings.md) for per-stage wall times and the host they were measured on.
 
