@@ -5,6 +5,10 @@ VERIFY_FAILURES=0
 pass() { printf 'ok    %s\n' "$1"; }
 fail() { printf 'FAIL  %s: %s\n' "$1" "$2"; VERIFY_FAILURES=$((VERIFY_FAILURES + 1)); }
 
+# Propeller, DeduBB, MemProf and libelidealloc-shim checks (run_feature_checks).
+# shellcheck source=scripts/verify/checks-pgo.sh
+source "$ROOT_DIR/scripts/verify/checks-pgo.sh"
+
 smoke_dir() { printf '%s/smoke/%s\n' "$VERIFY_DIR" "$1"; }
 
 # check_smoke ROOT TRIPLE — C and C++ hello-worlds compile, link and run (musl: fully static).
@@ -432,6 +436,7 @@ run_all_checks() {
     esac
   done
   if [ "$HOST_OS" = linux ]; then check_containers "$root"; else check_darwin_dylibs "$root"; fi
+  run_feature_checks "$root"
   check_relocatable "$root"
   echo "verification: $VERIFY_FAILURES failure(s)"
   [ "$VERIFY_FAILURES" -eq 0 ]

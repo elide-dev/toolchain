@@ -11,6 +11,7 @@ stage_main() {
   check_submodules
   mkdir -p "$BUNDLE_DIR/sysroot"
   if [ "$HOST_OS" = linux ]; then install_kernel_headers; fi
+  if [ "$HOST_OS" = linux ] && is_yes "${BUILD_PROPELLER:-yes}"; then fetch_propeller_deps; fi
 }
 
 check_submodules() {
@@ -33,22 +34,44 @@ check_submodules() {
   "$ROOT_DIR/scripts/check-versions.sh"
 }
 
+# fetch_pinned URL SHA256 DEST — download URL to DEST (once), verifying SHA256; a cached file
+# with the wrong checksum is re-downloaded.
+fetch_pinned() {
+  local url="$1" sha="$2" dest="$3" actual
+  mkdir -p "$(dirname "$dest")"
+  if [ -f "$dest" ] && [ "$(sha256_of "$dest")" != "$sha" ]; then
+    warn "cached $dest has wrong sha256; removing and re-downloading"
+    rm -f "$dest"
+  fi
+  if [ ! -f "$dest" ]; then
+    log "downloading $(basename "$dest")"
+    curl -fsSL --retry 3 -o "$dest.part" "$url"
+    mv "$dest.part" "$dest"
+    actual="$(sha256_of "$dest")"
+    [ "$actual" = "$sha" ] || die "sha256 mismatch for $dest: expected $sha, got $actual"
+  fi
+}
+
 fetch_kernel() {
-  local v="$LINUX_HEADERS_VERSION" tarball actual
+  local v="$LINUX_HEADERS_VERSION" tarball
   tarball="$CACHE_DIR/linux-$v.tar.xz"
-  mkdir -p "$CACHE_DIR"
-  if [ -f "$tarball" ] && [ "$(sha256_of "$tarball")" != "$LINUX_HEADERS_SHA256" ]; then
-    warn "cached $tarball has wrong sha256; removing and re-downloading"
-    rm -f "$tarball"
-  fi
-  if [ ! -f "$tarball" ]; then
-    log "downloading linux-$v"
-    curl -fsSL --retry 3 -o "$tarball.part" "https://cdn.kernel.org/pub/linux/kernel/v${v%%.*}.x/linux-$v.tar.xz"
-    mv "$tarball.part" "$tarball"
-    actual="$(sha256_of "$tarball")"
-    [ "$actual" = "$LINUX_HEADERS_SHA256" ] || die "sha256 mismatch for $tarball: expected $LINUX_HEADERS_SHA256, got $actual"
-  fi
+  fetch_pinned "https://cdn.kernel.org/pub/linux/kernel/v${v%%.*}.x/linux-$v.tar.xz" \
+    "$LINUX_HEADERS_SHA256" "$tarball"
   printf '%s\n' "$tarball"
+}
+
+# Third-party archives llvm-propeller fetches at configure time; stage 45 builds offline from
+# this cache (src/patches/llvm-propeller/0003-offline-deps.patch).
+fetch_propeller_deps() {
+  local d="$CACHE_DIR/propeller-deps"
+  fetch_pinned "https://github.com/abseil/abseil-cpp/archive/refs/tags/$PROPELLER_ABSL_VERSION.zip" \
+    "$PROPELLER_ABSL_SHA256" "$d/abseil-cpp-$PROPELLER_ABSL_VERSION.zip"
+  fetch_pinned "https://github.com/protocolbuffers/protobuf/releases/download/v$PROPELLER_PROTOBUF_VERSION/protobuf-$PROPELLER_PROTOBUF_VERSION.tar.gz" \
+    "$PROPELLER_PROTOBUF_SHA256" "$d/protobuf-$PROPELLER_PROTOBUF_VERSION.tar.gz"
+  fetch_pinned "https://github.com/google/googletest/archive/refs/tags/v$PROPELLER_GTEST_VERSION.zip" \
+    "$PROPELLER_GTEST_SHA256" "$d/googletest-$PROPELLER_GTEST_VERSION.zip"
+  fetch_pinned "https://github.com/google/perf_data_converter/archive/$PROPELLER_QUIPPER_REV.tar.gz" \
+    "$PROPELLER_QUIPPER_SHA256" "$d/perf_data_converter-$PROPELLER_QUIPPER_REV.tar.gz"
 }
 
 install_kernel_headers() {

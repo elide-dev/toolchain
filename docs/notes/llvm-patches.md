@@ -19,7 +19,7 @@ and 45 (llvm-propeller). Stage 00's `unapply_patches` reverses it before the cle
 | Patch | Why |
 |---|---|
 | `0001-find-package-llvm.patch` | Link the stage-2 LLVM via `find_package(LLVM CONFIG)` instead of downloading and building LLVM `db9b595` |
-| `0002-quipper-libelf-to-llvm-object.patch` | Apply `quipper/0001-dso-llvm-object.patch` to the fetched quipper tree (build-id reader on LLVM `Object`) and drop libelf |
+| `0002-quipper-llvm-object-no-libelf-libcrypto.patch` | Apply `quipper/0001-llvm-object-md5.patch` to the fetched quipper tree (build IDs via LLVM `Object`, MD5 via LLVM) and drop libelf, libz and libcrypto |
 | `0003-offline-deps.patch` | abseil/protobuf/googletest/quipper from `PROPELLER_DEPS_DIR` (stage 00 cache, sha256-pinned in `versions.env`) |
 | `0004-dedubb.patch` | DeduBB directive generation, from DeduBB@`07d730d` `patches/llvm-propeller-dedubb.patch` (base `e2c7049`), rebased; `MCContext` uses the LLVM 23 reference API |
 

@@ -1,0 +1,214 @@
+# local: elide-toolchain. Read ELF build IDs with LLVM Object (no libelf) and MD5 with LLVM (no libcrypto).
+# Applied by propeller's CMake (PROPELLER_QUIPPER_PATCHES) to google/perf_data_converter@f9eb05fcce80.
+--- a/src/quipper/dso.cc
++++ b/src/quipper/dso.cc
+@@ -6,101 +6,28 @@
+ 
+ #include <elf.h>
+ #include <fcntl.h>
+-#include <gelf.h>
+-#include <libelf.h>
+ #include <string.h>
+ #include <sys/stat.h>
+ #include <sys/sysmacros.h>
+ #include <unistd.h>
+ 
+ #include <algorithm>
++#include <memory>
+ #include <vector>
+ 
+ #include "base/logging.h"
+ #include "file_reader.h"
++#include "llvm/Object/BuildID.h"
++#include "llvm/Object/ObjectFile.h"
++#include "llvm/Support/Error.h"
++#include "llvm/Support/MemoryBuffer.h"
+ 
+-namespace quipper {
+-
+-namespace {
+-
+-// Find a section with a name matching one in |names|. Prefer sections matching
+-// names earlier in the vector.
+-Elf_Scn *FindElfSection(Elf *elf, const std::vector<std::string> &names) {
+-  size_t shstrndx;  // section index of the section names string table.
+-  if (elf_getshdrstrndx(elf, &shstrndx) != 0) {
+-    LOG(ERROR) << "elf_getshdrstrndx" << elf_errmsg(-1);
+-    return nullptr;
+-  }
+-  // Ensure the section header string table is available
+-  if (!elf_rawdata(elf_getscn(elf, shstrndx), nullptr)) return nullptr;
+-
+-  auto best_match = names.end();
+-  Elf_Scn *best_sec = nullptr;
+-  Elf_Scn *sec = nullptr;
+-  while ((sec = elf_nextscn(elf, sec)) != nullptr) {
+-    GElf_Shdr shdr;
+-    gelf_getshdr(sec, &shdr);
+-    char *n = elf_strptr(elf, shstrndx, shdr.sh_name);
+-    if (!n) {
+-      LOG(ERROR) << "Couldn't get string: " << shdr.sh_name << " " << shstrndx;
+-      return nullptr;
+-    }
+-    const std::string name(n);
+-    auto found = std::find(names.begin(), names.end(), name);
+-    if (found < best_match) {
+-      if (found == names.begin()) return sec;
+-      best_sec = sec;
+-      best_match = found;
+-    }
+-  }
+-
+-  return best_sec;
+-}
+-
+-bool GetBuildID(Elf *elf, std::string *buildid) {
+-  Elf_Kind kind = elf_kind(elf);
+-  if (kind != ELF_K_ELF) {
+-    DLOG(ERROR) << "Not an ELF file: " << elf_errmsg(-1);
+-    return false;
+-  }
+-
+-  static const std::vector<std::string> kNoteSectionNames{".note.gnu.build-id",
+-                                                          ".notes", ".note"};
+-  Elf_Scn *section = FindElfSection(elf, kNoteSectionNames);
+-  if (!section) {
+-    DLOG(ERROR) << "No note section found";
+-    return false;
+-  }
++// elide-toolchain: build IDs are read with LLVM Object instead of libelf, so the tool links
++// only against libraries the toolchain already builds (LLVM, zlib, crypto).
+ 
+-  Elf_Data *data = elf_getdata(section, nullptr);
+-  if (data == nullptr) return false;
+-
+-  char *buf = reinterpret_cast<char *>(data->d_buf);
+-  GElf_Nhdr note_header;
+-  size_t name_off;
+-  size_t desc_off;
+-  for (size_t off = 0, next = 0;
+-       (next = gelf_getnote(data, off, &note_header, &name_off, &desc_off)) > 0;
+-       off = next) {
+-    // name is null-padded to a 4-byte boundary.
+-    std::string name(buf + name_off,
+-                     strnlen(buf + name_off, note_header.n_namesz));
+-    std::string desc(buf + desc_off, note_header.n_descsz);
+-    if (note_header.n_type == NT_GNU_BUILD_ID && name == ELF_NOTE_GNU) {
+-      *buildid = desc;
+-      return true;
+-    }
+-  }
+-
+-  return false;
+-}
+-
+-}  // namespace
++namespace quipper {
+ 
+-void InitializeLibelf() {
+-  const unsigned int kElfVersionNone = EV_NONE;  // correctly typed.
+-  CHECK_NE(kElfVersionNone, elf_version(EV_CURRENT)) << elf_errmsg(-1);
+-}
++void InitializeLibelf() {}
+ 
+ bool ReadElfBuildId(const std::string &filename, std::string *buildid) {
+   int fd = open(filename.c_str(), O_RDONLY);
+@@ -114,20 +41,24 @@
+ }
+ 
+ bool ReadElfBuildId(int fd, std::string *buildid) {
+-  InitializeLibelf();
+-
+-  Elf *elf = elf_begin(fd, ELF_C_READ_MMAP, nullptr);
+-  if (elf == nullptr) {
++  struct stat st;
++  if (fstat(fd, &st) != 0) return false;
++  auto buffer = llvm::MemoryBuffer::getOpenFile(fd, "<elf>", st.st_size,
++                                                /*RequiresNullTerminator=*/false);
++  if (!buffer) {
+     LOG(ERROR) << "Could not read ELF file.";
+-    close(fd);
+     return false;
+   }
+-
+-  bool err = GetBuildID(elf, buildid);
+-
+-  elf_end(elf);
+-
+-  return err;
++  auto object = llvm::object::ObjectFile::createObjectFile((*buffer)->getMemBufferRef());
++  if (!object) {
++    llvm::consumeError(object.takeError());
++    DLOG(ERROR) << "Not an ELF file";
++    return false;
++  }
++  llvm::object::BuildIDRef id = llvm::object::getBuildID(object->get());
++  if (id.empty()) return false;
++  buildid->assign(reinterpret_cast<const char *>(id.data()), id.size());
++  return true;
+ }
+ 
+ // read /sys/module/<module_name>/notes/.note.gnu.build-id
+@@ -142,7 +73,7 @@
+ }
+ 
+ bool ReadBuildIdNote(DataReader *data, std::string *buildid) {
+-  GElf_Nhdr note_header;
++  Elf64_Nhdr note_header;
+ 
+   while (data->ReadData(sizeof(note_header), &note_header)) {
+     size_t name_size = Align<4>(note_header.n_namesz);
+--- a/src/quipper/dso.h
++++ b/src/quipper/dso.h
+@@ -33,9 +33,9 @@
+ // Do the |DSOInfo| and |struct stat| refer to the same inode?
+ bool SameInode(const DSOInfo& dso, const struct stat* s);
+ 
+-// Must be called at least once before using libelf.
++// Must be called at least once before reading ELF build IDs (a no-op with LLVM Object).
+ void InitializeLibelf();
+-// Read buildid from an ELF file using libelf.
++// Read buildid from an ELF file using LLVM Object.
+ bool ReadElfBuildId(const std::string& filename, std::string* buildid);
+ bool ReadElfBuildId(int fd, std::string* buildid);
+ 
+--- a/src/quipper/binary_data_utils.cc
++++ b/src/quipper/binary_data_utils.cc
+@@ -4,8 +4,6 @@
+ 
+ #include "binary_data_utils.h"
+ 
+-#include <openssl/evp.h>
+-#include <openssl/md5.h>
+ #include <sys/stat.h>
+ 
+ #include <cstddef>
+@@ -15,6 +13,8 @@
+ #include <fstream>  
+ 
+ #include "base/logging.h"
++#include "llvm/ADT/ArrayRef.h"
++#include "llvm/Support/MD5.h"
+ 
+ namespace {
+ 
+@@ -27,14 +27,12 @@
+ 
+ static uint64_t Md5Prefix(const unsigned char* data,
+                           unsigned long length) {  
++  // elide-toolchain: LLVM's MD5 instead of OpenSSL EVP (no libcrypto dependency).
+   uint64_t digest_prefix = 0;
+-  unsigned char digest[MD5_DIGEST_LENGTH + 1];
+-
+-  EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+-  EVP_DigestInit_ex(ctx, EVP_md5(), NULL);
+-  EVP_DigestUpdate(ctx, data, length);
+-  EVP_DigestFinal(ctx, digest, NULL);
+-  EVP_MD_CTX_free(ctx);
++  llvm::MD5 md5;
++  md5.update(llvm::ArrayRef<uint8_t>(data, length));
++  llvm::MD5::MD5Result digest;
++  md5.final(digest);
+   // We need 64-bits / # of bits in a byte.
+   for (size_t i = 0; i < sizeof(uint64_t); i++) {
+     digest_prefix = (digest_prefix << 8) | digest[i];

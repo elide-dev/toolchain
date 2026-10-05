@@ -1,0 +1,54 @@
+# local: elide-toolchain. Drop libelf, libz and libcrypto: quipper reads ELF build IDs with LLVM Object
+#   and hashes with LLVM MD5 (quipper/0001-llvm-object-md5.patch, applied to the fetched quipper tree
+#   via PROPELLER_QUIPPER_PATCHES).
+diff --git a/CMake/Quipper/CMakeLists.quipper.txt b/CMake/Quipper/CMakeLists.quipper.txt
+index d967920..4a1c16b 100644
+--- a/CMake/Quipper/CMakeLists.quipper.txt
++++ b/CMake/Quipper/CMakeLists.quipper.txt
+@@ -61,4 +61,4 @@ target_include_directories(quipper_lib
+   ${PROJECT_BINARY_DIR}
+   ${PROJECT_BINARY_DIR}/src/quipper)
+ target_link_libraries(quipper_lib
+-  quipper_protos ${LIBELF_LIBRARIES} ${LIBZ_LIBRARIES} ${LIBCRYPTO_LIBRARIES})
++  quipper_protos LLVMObject LLVMSupport)
+diff --git a/CMake/Quipper/Quipper.cmake b/CMake/Quipper/Quipper.cmake
+index 10a75a1..e453e27 100644
+--- a/CMake/Quipper/Quipper.cmake
++++ b/CMake/Quipper/Quipper.cmake
+@@ -44,6 +44,20 @@ if(result)
+   message(FATAL_ERROR "Build step for quipper failed: ${result}")
+ endif()
+ 
++# elide-toolchain: patch the fetched quipper sources (PROPELLER_QUIPPER_PATCHES/*.patch).
++if (DEFINED PROPELLER_QUIPPER_PATCHES)
++  file(GLOB _quipper_patches "${PROPELLER_QUIPPER_PATCHES}/*.patch")
++  list(SORT _quipper_patches)
++  foreach (_p ${_quipper_patches})
++    execute_process(COMMAND patch -p1 --forward --silent -i ${_p}
++      RESULT_VARIABLE result
++      WORKING_DIRECTORY ${propeller_quipper_src_dir})
++    if(result)
++      message(FATAL_ERROR "Applying ${_p} to quipper failed: ${result}")
++    endif()
++  endforeach()
++endif()
++
+ # Configure the CMake overlay for the external Quipper project.
+ configure_file(
+   ${CMAKE_CURRENT_LIST_DIR}/CMakeLists.quipper.txt
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 07de464..d526036 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -30,9 +30,8 @@ if(NOT CMAKE_BUILD_TYPE)
+ endif()
+ 
+ # Set up system-level dependencies.
+-find_library (LIBELF_LIBRARIES NAMES elf REQUIRED)
+-find_library (LIBZ_LIBRARIES NAMES z REQUIRED)
+-find_library (LIBCRYPTO_LIBRARIES NAMES crypto REQUIRED)
++# elide-toolchain: none. quipper reads build IDs with LLVM Object (no libelf) and hashes
++# with LLVM MD5 (no libcrypto); nothing needs zlib.
+ 
+ # Set up external dependencies.
+ include(CTest)

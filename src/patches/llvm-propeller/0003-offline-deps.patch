@@ -1,0 +1,63 @@
+# local: elide-toolchain. Fetch abseil/protobuf/googletest/quipper from PROPELLER_DEPS_DIR
+#   (stage 00 cache, sha256-pinned in versions.env) so stage 45 builds without network.
+diff --git a/CMake/Absl/Absl.cmake b/CMake/Absl/Absl.cmake
+index 6d45b88..7a0939a 100644
+--- a/CMake/Absl/Absl.cmake
++++ b/CMake/Absl/Absl.cmake
+@@ -20,6 +20,9 @@ set(_ABSL_VERSION 20260107.1)
+ 
+ set(propeller_absl_build_dir ${CMAKE_BINARY_DIR}/absl-build)
+ set(propeller_absl_download_url https://github.com/abseil/abseil-cpp/archive/refs/tags/${_ABSL_VERSION}.zip)
++if (DEFINED PROPELLER_DEPS_DIR)  # elide-toolchain: offline, sha256-pinned cache
++  set(propeller_absl_download_url file://${PROPELLER_DEPS_DIR}/abseil-cpp-${_ABSL_VERSION}.zip)
++endif()
+ set(propeller_absl_src_dir ${CMAKE_BINARY_DIR}/absl-src)
+ 
+ # Configure the external absl project.
+diff --git a/CMake/Googletest/Googletest.cmake b/CMake/Googletest/Googletest.cmake
+index d057508..cf6b989 100644
+--- a/CMake/Googletest/Googletest.cmake
++++ b/CMake/Googletest/Googletest.cmake
+@@ -21,6 +21,9 @@ set(_GTEST_VERSION 1.17.0)
+ 
+ set(propeller_gtest_build_dir ${CMAKE_BINARY_DIR}/googletest-build)
+ set(propeller_gtest_download_url https://github.com/google/googletest/archive/refs/tags/v${_GTEST_VERSION}.zip)
++if (DEFINED PROPELLER_DEPS_DIR)  # elide-toolchain: offline, sha256-pinned cache
++  set(propeller_gtest_download_url file://${PROPELLER_DEPS_DIR}/googletest-${_GTEST_VERSION}.zip)
++endif()
+ set(propeller_gtest_src_dir ${CMAKE_BINARY_DIR}/googletest-src)
+ 
+ # Configure the external googletest project.
+diff --git a/CMake/Protobuf/Protobuf.cmake b/CMake/Protobuf/Protobuf.cmake
+index a475e2c..5eb1887 100644
+--- a/CMake/Protobuf/Protobuf.cmake
++++ b/CMake/Protobuf/Protobuf.cmake
+@@ -24,8 +24,13 @@ set(propeller_protobuf_version 33.4)
+ 
+ # Declare and configure the external protobuf package.
+ include(FetchContent)
++set(propeller_protobuf_url "https://github.com/protocolbuffers/protobuf/releases/download/v${propeller_protobuf_version}/protobuf-${propeller_protobuf_version}.tar.gz")
++if (DEFINED PROPELLER_DEPS_DIR)  # elide-toolchain: offline, sha256-pinned cache
++  set(propeller_protobuf_url "file://${PROPELLER_DEPS_DIR}/protobuf-${propeller_protobuf_version}.tar.gz")
++endif()
+ FetchContent_Declare(protobuf
+-  URL                         "https://github.com/protocolbuffers/protobuf/releases/download/v${propeller_protobuf_version}/protobuf-${propeller_protobuf_version}.tar.gz"
++  URL                         "${propeller_protobuf_url}"
++  DOWNLOAD_EXTRACT_TIMESTAMP  TRUE
+ )
+ 
+ set(protobuf_ABSL_PROVIDER "package" CACHE STRING "" FORCE)
+diff --git a/CMake/Quipper/Quipper.cmake b/CMake/Quipper/Quipper.cmake
+index 10a75a1..d350818 100644
+--- a/CMake/Quipper/Quipper.cmake
++++ b/CMake/Quipper/Quipper.cmake
+@@ -21,6 +21,9 @@ set(_QUIPPER_HASH f9eb05fcce80189c311a01341bb535a382d5d740)
+ 
+ set(propeller_quipper_build_dir ${CMAKE_BINARY_DIR}/quipper-build)
+ set(propeller_quipper_download_url https://github.com/google/perf_data_converter/archive/${_QUIPPER_HASH}.tar.gz)
++if (DEFINED PROPELLER_DEPS_DIR)  # elide-toolchain: offline, sha256-pinned cache
++  set(propeller_quipper_download_url file://${PROPELLER_DEPS_DIR}/perf_data_converter-${_QUIPPER_HASH}.tar.gz)
++endif()
+ set(propeller_quipper_src_dir ${CMAKE_BINARY_DIR}/quipper-src)
+ 
+ # Configure the external Quipper project.
