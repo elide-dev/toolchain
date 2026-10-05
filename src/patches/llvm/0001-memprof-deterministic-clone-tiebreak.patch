@@ -1,0 +1,348 @@
+# upstream: https://github.com/llvm/llvm-project/pull/222126 (8c7d76bfc1b5c75effc7bd8ecc4892be9970ea5d)
+#   [MemProf] Use NodeId to break ties deterministically in identifyClones
+# local: none. Tracked in https://github.com/elide-dev/toolchain/issues/4
+diff --git a/llvm/lib/Transforms/IPO/MemProfContextDisambiguation.cpp b/llvm/lib/Transforms/IPO/MemProfContextDisambiguation.cpp
+index b3846714b088d..421686fc64bac 100644
+--- a/llvm/lib/Transforms/IPO/MemProfContextDisambiguation.cpp
++++ b/llvm/lib/Transforms/IPO/MemProfContextDisambiguation.cpp
+@@ -4062,9 +4062,9 @@ void CallsiteContextGraph<DerivedCCG, FuncTy, CallTy>::identifyClones(
+                         return true;
+ 
+                       if (A->AllocTypes == B->AllocTypes)
+-                        // Use the first context id for each edge as a
++                        // Use the caller node id as a deterministic
+                         // tie-breaker.
+-                        return *A->ContextIds.begin() < *B->ContextIds.begin();
++                        return A->Caller->NodeId < B->Caller->NodeId;
+                       return AllocTypeCloningPriority[A->AllocTypes] <
+                              AllocTypeCloningPriority[B->AllocTypes];
+                     });
+@@ -4577,8 +4577,8 @@ void CallsiteContextGraph<DerivedCCG, FuncTy, CallTy>::mergeNodeCalleeClones(
+   }
+ 
+   // Helper for callee edge sorting below. Return true if A's callee has fewer
+-  // caller edges than B, or if A is a clone and B is not, or if A's first
+-  // context id is smaller than B's.
++  // caller edges than B, or if A is a clone and B is not, or if A's callee
++  // node id is smaller than B's.
+   auto CalleeCallerEdgeLessThan = [](const std::shared_ptr<ContextEdge> &A,
+                                      const std::shared_ptr<ContextEdge> &B) {
+     if (A->Callee->CallerEdges.size() != B->Callee->CallerEdges.size())
+@@ -4587,9 +4587,8 @@ void CallsiteContextGraph<DerivedCCG, FuncTy, CallTy>::mergeNodeCalleeClones(
+       return true;
+     else if (!A->Callee->CloneOf && B->Callee->CloneOf)
+       return false;
+-    // Use the first context id for each edge as a
+-    // tie-breaker.
+-    return *A->ContextIds.begin() < *B->ContextIds.begin();
++    // Use the callee node id as a deterministic tie-breaker.
++    return A->Callee->NodeId < B->Callee->NodeId;
+   };
+ 
+   // Process each set of callee clones called by Node, performing the needed
+diff --git a/llvm/test/ThinLTO/X86/memprof-funcassigncloning.ll b/llvm/test/ThinLTO/X86/memprof-funcassigncloning.ll
+index f1a494d077fef..605f9570b55ff 100644
+--- a/llvm/test/ThinLTO/X86/memprof-funcassigncloning.ll
++++ b/llvm/test/ThinLTO/X86/memprof-funcassigncloning.ll
+@@ -135,7 +135,7 @@ uselistorder ptr @_Znam, { 1, 0 }
+ 
+ attributes #0 = { noinline optnone }
+ 
+-!0 = !{!1, !3, !5}
++!0 = !{!3, !5, !1}
+ !1 = !{!2, !"cold"}
+ !2 = !{i64 -3461278137325233666, i64 -7799663586031895603}
+ !3 = !{!4, !"notcold"}
+@@ -163,50 +163,50 @@ attributes #0 = { noinline optnone }
+ ; DUMP: Callsite Context Graph:
+ ; DUMP: Node [[ENEW1ORIG:0x[a-z0-9]+]]
+ ; DUMP:         Versions: 1 MIB:
+-; DUMP:                 AllocType 2 StackIds: 0
++; DUMP:                 AllocType 1 StackIds: 0
+ ; DUMP:                 AllocType 1 StackIds: 1
+-; DUMP:                 AllocType 1 StackIds: 2
++; DUMP:                 AllocType 2 StackIds: 2
+ ; DUMP:         (clone 0)
+ ; DUMP: 	AllocTypes: NotCold
+-; DUMP: 	ContextIds: 2 3
++; DUMP: 	ContextIds: 1 2
+ ; DUMP: 	CalleeEdges:
+ ; DUMP: 	CallerEdges:
+-; DUMP: 		Edge from Callee [[ENEW1ORIG]] to Caller: [[C:0x[a-z0-9]+]] AllocTypes: NotCold ContextIds: 2
+-; DUMP: 		Edge from Callee [[ENEW1ORIG]] to Caller: [[B:0x[a-z0-9]+]] AllocTypes: NotCold ContextIds: 3
++; DUMP: 		Edge from Callee [[ENEW1ORIG]] to Caller: [[C:0x[a-z0-9]+]] AllocTypes: NotCold ContextIds: 1
++; DUMP: 		Edge from Callee [[ENEW1ORIG]] to Caller: [[B:0x[a-z0-9]+]] AllocTypes: NotCold ContextIds: 2
+ ; DUMP: 	Clones: [[ENEW1CLONE:0x[a-z0-9]+]]
+-
+-; DUMP: Node [[D:0x[a-z0-9]+]]
++;
++; DUMP: Node [[C]]
+ ; DUMP: 	Callee: 16147627620923572899 (_Z1EPPcS0_) Clones: 0 StackIds: 0 (clone 0)
+ ; DUMP: 	AllocTypes: NotColdCold
+-; DUMP: 	ContextIds: 1 6
++; DUMP: 	ContextIds: 1 5
+ ; DUMP: 	CalleeEdges:
+-; DUMP: 		Edge from Callee [[ENEW1CLONE]] to Caller: [[D]] AllocTypes: Cold ContextIds: 1
+-; DUMP: 		Edge from Callee [[ENEW2ORIG:0x[a-z0-9]+]] to Caller: [[D]] AllocTypes: NotCold ContextIds: 6
++; DUMP: 		Edge from Callee [[ENEW1ORIG]] to Caller: [[C]] AllocTypes: NotCold ContextIds: 1
++; DUMP: 		Edge from Callee [[ENEW2CLONE:0x[a-z0-9]+]] to Caller: [[C]] AllocTypes: Cold ContextIds: 5
+ ; DUMP: 	CallerEdges:
+-
+-; DUMP: Node [[C]]
++;
++; DUMP: Node [[B]]
+ ; DUMP: 	Callee: 16147627620923572899 (_Z1EPPcS0_) Clones: 0 StackIds: 1 (clone 0)
+-; DUMP: 	AllocTypes: NotColdCold
+-; DUMP: 	ContextIds: 2 5
++; DUMP: 	AllocTypes: NotCold
++; DUMP: 	ContextIds: 2 4
+ ; DUMP: 	CalleeEdges:
+-; DUMP: 		Edge from Callee [[ENEW1ORIG]] to Caller: [[C]] AllocTypes: NotCold ContextIds: 2
+-; DUMP: 		Edge from Callee [[ENEW2CLONE:0x[a-z0-9]+]] to Caller: [[C]] AllocTypes: Cold ContextIds: 5
++; DUMP: 		Edge from Callee [[ENEW1ORIG]] to Caller: [[B]] AllocTypes: NotCold ContextIds: 2
++; DUMP: 		Edge from Callee [[ENEW2ORIG:0x[a-z0-9]+]] to Caller: [[B]] AllocTypes: NotCold ContextIds: 4
+ ; DUMP: 	CallerEdges:
+-
+-; DUMP: Node [[B]]
++;
++; DUMP: Node [[D:0x[a-z0-9]+]]
+ ; DUMP: 	Callee: 16147627620923572899 (_Z1EPPcS0_) Clones: 0 StackIds: 2 (clone 0)
+-; DUMP: 	AllocTypes: NotCold
+-; DUMP: 	ContextIds: 3 4
++; DUMP: 	AllocTypes: NotColdCold
++; DUMP: 	ContextIds: 3 6
+ ; DUMP: 	CalleeEdges:
+-; DUMP: 		Edge from Callee [[ENEW1ORIG]] to Caller: [[B]] AllocTypes: NotCold ContextIds: 3
+-; DUMP: 		Edge from Callee [[ENEW2ORIG]] to Caller: [[B]] AllocTypes: NotCold ContextIds: 4
++; DUMP: 		Edge from Callee [[ENEW1CLONE]] to Caller: [[D]] AllocTypes: Cold ContextIds: 3
++; DUMP: 		Edge from Callee [[ENEW2ORIG]] to Caller: [[D]] AllocTypes: NotCold ContextIds: 6
+ ; DUMP: 	CallerEdges:
+-
++;
+ ; DUMP: Node [[ENEW2ORIG]]
+ ; DUMP:         Versions: 1 MIB:
++; DUMP:                 AllocType 1 StackIds: 1
++; DUMP:                 AllocType 2 StackIds: 0
+ ; DUMP:                 AllocType 1 StackIds: 2
+-; DUMP:                 AllocType 2 StackIds: 1
+-; DUMP:                 AllocType 1 StackIds: 0
+ ; DUMP:         (clone 0)
+ ; DUMP: 	AllocTypes: NotCold
+ ; DUMP: 	ContextIds: 4 6
+@@ -215,25 +215,25 @@ attributes #0 = { noinline optnone }
+ ; DUMP: 		Edge from Callee [[ENEW2ORIG]] to Caller: [[B]] AllocTypes: NotCold ContextIds: 4
+ ; DUMP: 		Edge from Callee [[ENEW2ORIG]] to Caller: [[D]] AllocTypes: NotCold ContextIds: 6
+ ; DUMP: 	Clones: [[ENEW2CLONE]]
+-
++;
+ ; DUMP: Node [[ENEW1CLONE]]
+ ; DUMP:         Versions: 1 MIB:
+-; DUMP:                 AllocType 2 StackIds: 0
++; DUMP:                 AllocType 1 StackIds: 0
+ ; DUMP:                 AllocType 1 StackIds: 1
+-; DUMP:                 AllocType 1 StackIds: 2
++; DUMP:                 AllocType 2 StackIds: 2
+ ; DUMP:         (clone 0)
+ ; DUMP: 	AllocTypes: Cold
+-; DUMP: 	ContextIds: 1
++; DUMP: 	ContextIds: 3
+ ; DUMP: 	CalleeEdges:
+ ; DUMP: 	CallerEdges:
+-; DUMP: 		Edge from Callee [[ENEW1CLONE]] to Caller: [[D]] AllocTypes: Cold ContextIds: 1
++; DUMP: 		Edge from Callee [[ENEW1CLONE]] to Caller: [[D]] AllocTypes: Cold ContextIds: 3
+ ; DUMP: 	Clone of [[ENEW1ORIG]]
+-
++;
+ ; DUMP: Node [[ENEW2CLONE]]
+ ; DUMP:         Versions: 1 MIB:
++; DUMP:                 AllocType 1 StackIds: 1
++; DUMP:                 AllocType 2 StackIds: 0
+ ; DUMP:                 AllocType 1 StackIds: 2
+-; DUMP:                 AllocType 2 StackIds: 1
+-; DUMP:                 AllocType 1 StackIds: 0
+ ; DUMP:         (clone 0)
+ ; DUMP: 	AllocTypes: Cold
+ ; DUMP: 	ContextIds: 5
+diff --git a/llvm/test/ThinLTO/X86/memprof-funcassigncloning2.ll b/llvm/test/ThinLTO/X86/memprof-funcassigncloning2.ll
+index bcd3cea5b7ff1..00c3461a120c7 100644
+--- a/llvm/test/ThinLTO/X86/memprof-funcassigncloning2.ll
++++ b/llvm/test/ThinLTO/X86/memprof-funcassigncloning2.ll
+@@ -113,7 +113,7 @@ uselistorder ptr @_Znam, { 1, 0, 2 }
+ 
+ attributes #0 = { noinline optnone }
+ 
+-!0 = !{!1, !3, !5}
++!0 = !{!3, !5, !1}
+ !1 = !{!2, !"cold"}
+ !2 = !{i64 -3461278137325233666, i64 -7799663586031895603}
+ !3 = !{!4, !"notcold"}
+diff --git a/llvm/test/Transforms/MemProfContextDisambiguation/duplicate-context-ids.ll b/llvm/test/Transforms/MemProfContextDisambiguation/duplicate-context-ids.ll
+index bc60430338086..29c4b6cfc5d51 100644
+--- a/llvm/test/Transforms/MemProfContextDisambiguation/duplicate-context-ids.ll
++++ b/llvm/test/Transforms/MemProfContextDisambiguation/duplicate-context-ids.ll
+@@ -268,15 +268,15 @@ attributes #6 = { builtin }
+ ; DUMP: 	ContextIds: 1 3 4
+ ; DUMP: 	CalleeEdges:
+ ; DUMP: 	CallerEdges:
+-; DUMP: 		Edge from Callee [[D2]] to Caller: [[E:0x[a-z0-9]+]] AllocTypes: Cold ContextIds: 1
+ ; DUMP: 		Edge from Callee [[D2]] to Caller: [[C2:0x[a-z0-9]+]] AllocTypes: Cold ContextIds: 3
+ ; DUMP: 		Edge from Callee [[D2]] to Caller: [[B:0x[a-z0-9]+]] AllocTypes: Cold ContextIds: 4
++; DUMP: 		Edge from Callee [[D2]] to Caller: [[E:0x[a-z0-9]+]] AllocTypes: Cold ContextIds: 1
+ ; DUMP:         Clone of [[D]]
+ 
+ ; REMARKS: created clone _Z1Dv.memprof.1
+-; REMARKS: call in clone _Z1Ev assigned to call function clone _Z1Dv.memprof.1
+ ; REMARKS: call in clone _Z1Cv assigned to call function clone _Z1Dv.memprof.1
+ ; REMARKS: call in clone _Z1Bv assigned to call function clone _Z1Dv.memprof.1
++; REMARKS: call in clone _Z1Ev assigned to call function clone _Z1Dv.memprof.1
+ ; REMARKS: call in clone _Z1Dv.memprof.1 marked with memprof allocation attribute cold
+ ; REMARKS: call in clone _Z1Fv assigned to call function clone _Z1Dv
+ ; REMARKS: call in clone _Z1Dv marked with memprof allocation attribute notcold
+diff --git a/llvm/test/Transforms/MemProfContextDisambiguation/funcassigncloning.ll b/llvm/test/Transforms/MemProfContextDisambiguation/funcassigncloning.ll
+index ac19eeca3b33f..0b57cdb957c77 100644
+--- a/llvm/test/Transforms/MemProfContextDisambiguation/funcassigncloning.ll
++++ b/llvm/test/Transforms/MemProfContextDisambiguation/funcassigncloning.ll
+@@ -102,7 +102,7 @@ attributes #4 = { nocallback nofree nounwind willreturn memory(argmem: write) }
+ attributes #5 = { "disable-tail-calls"="true" }
+ attributes #6 = { builtin }
+ 
+-!0 = !{!1, !3, !5}
++!0 = !{!3, !5, !1}
+ !1 = !{!2, !"cold"}
+ !2 = !{i64 -3461278137325233666, i64 -7799663586031895603}
+ !3 = !{!4, !"notcold"}
+@@ -131,40 +131,40 @@ attributes #6 = { builtin }
+ ; DUMP: Node [[ENEW1ORIG:0x[a-z0-9]+]]
+ ; DUMP: 	  %call = call noalias noundef nonnull ptr @_Znam(i64 noundef 10) #6	(clone 0)
+ ; DUMP: 	AllocTypes: NotCold
+-; DUMP: 	ContextIds: 2 3
++; DUMP: 	ContextIds: 1 2
+ ; DUMP: 	CalleeEdges:
+ ; DUMP: 	CallerEdges:
+-; DUMP: 		Edge from Callee [[ENEW1ORIG]] to Caller: [[C:0x[a-z0-9]+]] AllocTypes: NotCold ContextIds: 2
+-; DUMP: 		Edge from Callee [[ENEW1ORIG]] to Caller: [[B:0x[a-z0-9]+]] AllocTypes: NotCold ContextIds: 3
++; DUMP: 		Edge from Callee [[ENEW1ORIG]] to Caller: [[C:0x[a-z0-9]+]] AllocTypes: NotCold ContextIds: 1
++; DUMP: 		Edge from Callee [[ENEW1ORIG]] to Caller: [[B:0x[a-z0-9]+]] AllocTypes: NotCold ContextIds: 2
+ ; DUMP: 	Clones: [[ENEW1CLONE:0x[a-z0-9]+]]
+-
+-; DUMP: Node [[D:0x[a-z0-9]+]]
+-; DUMP:           call void @_Z1EPPcS0_(ptr noundef %0, ptr noundef %1) (clone 0)
+-; DUMP:         AllocTypes: NotColdCold
+-; DUMP:         ContextIds: 1 6
+-; DUMP:         CalleeEdges:
+-; DUMP:                 Edge from Callee [[ENEW1CLONE]] to Caller: [[D]] AllocTypes: Cold ContextIds: 1
+-; DUMP:                 Edge from Callee [[ENEW2ORIG:0x[a-z0-9]+]] to Caller: [[D]] AllocTypes: NotCold ContextIds: 6
+-; DUMP:         CallerEdges:
+-
++;
+ ; DUMP: Node [[C]]
+ ; DUMP: 	  call void @_Z1EPPcS0_(ptr noundef %0, ptr noundef %1)	(clone 0)
+ ; DUMP: 	AllocTypes: NotColdCold
+-; DUMP: 	ContextIds: 2 5
++; DUMP: 	ContextIds: 1 5
+ ; DUMP: 	CalleeEdges:
+-; DUMP: 		Edge from Callee [[ENEW1ORIG]] to Caller: [[C]] AllocTypes: NotCold ContextIds: 2
++; DUMP: 		Edge from Callee [[ENEW1ORIG]] to Caller: [[C]] AllocTypes: NotCold ContextIds: 1
+ ; DUMP: 		Edge from Callee [[ENEW2CLONE:0x[a-z0-9]+]] to Caller: [[C]] AllocTypes: Cold ContextIds: 5
+ ; DUMP: 	CallerEdges:
+-
++;
+ ; DUMP: Node [[B]]
+ ; DUMP: 	  call void @_Z1EPPcS0_(ptr noundef %0, ptr noundef %1)	(clone 0)
+ ; DUMP: 	AllocTypes: NotCold
+-; DUMP: 	ContextIds: 3 4
++; DUMP: 	ContextIds: 2 4
+ ; DUMP: 	CalleeEdges:
+-; DUMP: 		Edge from Callee [[ENEW1ORIG]] to Caller: [[B]] AllocTypes: NotCold ContextIds: 3
+-; DUMP: 		Edge from Callee [[ENEW2ORIG]] to Caller: [[B]] AllocTypes: NotCold ContextIds: 4
++; DUMP: 		Edge from Callee [[ENEW1ORIG]] to Caller: [[B]] AllocTypes: NotCold ContextIds: 2
++; DUMP: 		Edge from Callee [[ENEW2ORIG:0x[a-z0-9]+]] to Caller: [[B]] AllocTypes: NotCold ContextIds: 4
+ ; DUMP: 	CallerEdges:
+-
++;
++; DUMP: Node [[D:0x[a-z0-9]+]]
++; DUMP:           call void @_Z1EPPcS0_(ptr noundef %0, ptr noundef %1) (clone 0)
++; DUMP:         AllocTypes: NotColdCold
++; DUMP:         ContextIds: 3 6
++; DUMP:         CalleeEdges:
++; DUMP:                 Edge from Callee [[ENEW1CLONE]] to Caller: [[D]] AllocTypes: Cold ContextIds: 3
++; DUMP:                 Edge from Callee [[ENEW2ORIG]] to Caller: [[D]] AllocTypes: NotCold ContextIds: 6
++; DUMP:         CallerEdges:
++;
+ ; DUMP: Node [[ENEW2ORIG]]
+ ; DUMP: 	  %call1 = call noalias noundef nonnull ptr @_Znam(i64 noundef 10) #6	(clone 0)
+ ; DUMP: 	AllocTypes: NotCold
+@@ -174,16 +174,16 @@ attributes #6 = { builtin }
+ ; DUMP: 		Edge from Callee [[ENEW2ORIG]] to Caller: [[B]] AllocTypes: NotCold ContextIds: 4
+ ; DUMP: 		Edge from Callee [[ENEW2ORIG]] to Caller: [[D]] AllocTypes: NotCold ContextIds: 6
+ ; DUMP: 	Clones: [[ENEW2CLONE]]
+-
++;
+ ; DUMP: Node [[ENEW1CLONE]]
+ ; DUMP: 	  %call = call noalias noundef nonnull ptr @_Znam(i64 noundef 10) #6	(clone 0)
+ ; DUMP: 	AllocTypes: Cold
+-; DUMP: 	ContextIds: 1
++; DUMP: 	ContextIds: 3
+ ; DUMP: 	CalleeEdges:
+ ; DUMP: 	CallerEdges:
+-; DUMP: 		Edge from Callee [[ENEW1CLONE]] to Caller: [[D]] AllocTypes: Cold ContextIds: 1
++; DUMP: 		Edge from Callee [[ENEW1CLONE]] to Caller: [[D]] AllocTypes: Cold ContextIds: 3
+ ; DUMP: 	Clone of [[ENEW1ORIG]]
+-
++;
+ ; DUMP: Node [[ENEW2CLONE]]
+ ; DUMP: 	  %call1 = call noalias noundef nonnull ptr @_Znam(i64 noundef 10) #6	(clone 0)
+ ; DUMP: 	AllocTypes: Cold
+diff --git a/llvm/test/Transforms/MemProfContextDisambiguation/funcassigncloning2.ll b/llvm/test/Transforms/MemProfContextDisambiguation/funcassigncloning2.ll
+index 18def1d41c30c..e2eaef12bfe47 100644
+--- a/llvm/test/Transforms/MemProfContextDisambiguation/funcassigncloning2.ll
++++ b/llvm/test/Transforms/MemProfContextDisambiguation/funcassigncloning2.ll
+@@ -93,7 +93,7 @@ attributes #4 = { nocallback nofree nounwind willreturn memory(argmem: write) }
+ attributes #5 = { "disable-tail-calls"="true" }
+ attributes #6 = { builtin }
+ 
+-!0 = !{!1, !3, !5}
++!0 = !{!3, !5, !1}
+ !1 = !{!2, !"cold"}
+ !2 = !{i64 -3461278137325233666, i64 -7799663586031895603}
+ !3 = !{!4, !"notcold"}
+diff --git a/llvm/test/Transforms/MemProfContextDisambiguation/funcassigncloningrecursion.ll b/llvm/test/Transforms/MemProfContextDisambiguation/funcassigncloningrecursion.ll
+index 275dd7e0a6b7e..f4073d51f1d67 100644
+--- a/llvm/test/Transforms/MemProfContextDisambiguation/funcassigncloningrecursion.ll
++++ b/llvm/test/Transforms/MemProfContextDisambiguation/funcassigncloningrecursion.ll
+@@ -43,7 +43,7 @@ attributes #1 = { "no-trapping-math"="true" }
+ attributes #3 = { "frame-pointer"="all" }
+ attributes #6 = { builtin }
+ 
+-!0 = !{!1, !3, !5}
++!0 = !{!3, !5, !1}
+ !1 = !{!2, !"cold"}
+ !2 = !{i64 -3461278137325233666, i64 -7799663586031895603, i64 -7799663586031895603}
+ !3 = !{!4, !"notcold"}
+diff --git a/llvm/test/Transforms/MemProfContextDisambiguation/inlined3.ll b/llvm/test/Transforms/MemProfContextDisambiguation/inlined3.ll
+index 2e36445f902ab..ccab1e7ab229d 100644
+--- a/llvm/test/Transforms/MemProfContextDisambiguation/inlined3.ll
++++ b/llvm/test/Transforms/MemProfContextDisambiguation/inlined3.ll
+@@ -59,17 +59,17 @@
+ ; REMARKS: created clone _Z1Ab.memprof.1
+ ; REMARKS: created clone _Z2XZv.memprof.1
+ ; REMARKS: created clone _Z1Mv.memprof.1
+-;; Make sure the inlined context in _Z3XZNv, which partially overlaps
+-;; trimmed cold context, and also partially overlaps completely
+-;; unrelated contexts, correctly calls a cloned version of Z1Ab,
+-;; which will call the cold annotated allocation.
+-; REMARKS: call in clone _Z3XZNv assigned to call function clone _Z1Ab.memprof.1
+ ; REMARKS: call in clone main assigned to call function clone _Z1Mv.memprof.1
+ ; REMARKS: call in clone _Z1Mv.memprof.1 assigned to call function clone _Z2XZv.memprof.1
+ ; REMARKS: call in clone _Z2XZv.memprof.1 assigned to call function clone _Z1Ab
+ ; REMARKS: call in clone main assigned to call function clone _Z1Mv
+ ; REMARKS: call in clone _Z1Mv assigned to call function clone _Z2XZv
+ ; REMARKS: call in clone _Z2XZv assigned to call function clone _Z1Ab.memprof.1
++;; Make sure the inlined context in _Z3XZNv, which partially overlaps
++;; trimmed cold context, and also partially overlaps completely
++;; unrelated contexts, correctly calls a cloned version of Z1Ab,
++;; which will call the cold annotated allocation.
++; REMARKS: call in clone _Z3XZNv assigned to call function clone _Z1Ab.memprof.1
+ ; REMARKS: call in clone _Z1Ab.memprof.1 marked with memprof allocation attribute cold
+ ; REMARKS: call in clone _Z1Yv assigned to call function clone _Z1Ab
+ ; REMARKS: call in clone _Z1Ab marked with memprof allocation attribute notcold

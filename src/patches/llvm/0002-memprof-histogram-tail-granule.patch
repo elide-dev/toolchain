@@ -1,0 +1,116 @@
+# upstream: https://github.com/llvm/llvm-project/pull/208911 (c0b8c59b65afd268f286f56ef71f6433ac47dfd1)
+#   [compiler-rt][memprof] clear histogram tail granule on allocation
+# local: none. Tracked in https://github.com/elide-dev/toolchain/issues/4
+diff --git a/compiler-rt/lib/memprof/memprof_allocator.cpp b/compiler-rt/lib/memprof/memprof_allocator.cpp
+index d11a909a02c5e..4ddf8dfcf06ab 100644
+--- a/compiler-rt/lib/memprof/memprof_allocator.cpp
++++ b/compiler-rt/lib/memprof/memprof_allocator.cpp
+@@ -457,10 +457,7 @@ struct Allocator {
+     m->timestamp_ms = GetTimestamp();
+     m->alloc_context_id = StackDepotPut(*stack);
+ 
+-    uptr size_rounded_down_to_granularity =
+-        RoundDownTo(size, SHADOW_GRANULARITY);
+-    if (size_rounded_down_to_granularity)
+-      ClearShadow(user_beg, size_rounded_down_to_granularity);
++    ClearShadow(user_beg, RoundUpTo(size, SHADOW_GRANULARITY));
+ 
+     MemprofStats &thread_stats = GetCurrentThreadStats();
+     thread_stats.mallocs++;
+diff --git a/compiler-rt/test/memprof/TestCases/memprof_histogram_tail_clear.cpp b/compiler-rt/test/memprof/TestCases/memprof_histogram_tail_clear.cpp
+new file mode 100644
+index 0000000000000..9bb7226b39d78
+--- /dev/null
++++ b/compiler-rt/test/memprof/TestCases/memprof_histogram_tail_clear.cpp
+@@ -0,0 +1,46 @@
++// A non-granule-multiple allocation owns a partial tail histogram counter that
++// must be cleared on allocation; otherwise a recycled chunk leaks the previous
++// allocation's count into the last bucket.
++
++// RUN: %clangxx_memprof -O0 -mllvm -memprof-histogram -mllvm -memprof-use-callbacks=true %s -o %t
++// RUN: %env_memprof_opts=print_text=1:histogram=1:log_path=stdout %run %t 2>&1 | FileCheck %s
++
++#include <stdio.h>
++#include <stdlib.h>
++
++// Distinct call sites keep the two allocations as separate (unmerged) MIBs.
++__attribute__((noinline)) static char *alloc_first() {
++  return (char *)malloc(20);
++}
++__attribute__((noinline)) static char *alloc_second() {
++  return (char *)malloc(20);
++}
++
++int main() {
++  // Leave a count of 42 in the tail granule (byte 16), then free.
++  char *a = alloc_first();
++  if (!a)
++    return 1;
++  for (int i = 0; i < 42; ++i)
++    a[16] = 'A';
++  free(a);
++
++  // The stale-tail bug only manifests on a recycled chunk (a fresh chunk's
++  // shadow is already zero). memprof has no quarantine, so with no intervening
++  // same-size-class allocation the allocator returns the just-freed chunk;
++  // require the reuse so the test can't pass vacuously. Its bucket must read 0.
++  char *b = alloc_second();
++  if (b != a)
++    return 1;
++  for (int i = 0; i < 5; ++i)
++    b[0] = 'B';
++  for (int i = 0; i < 7; ++i)
++    b[8] = 'C';
++  free(b);
++
++  printf("Test completed successfully\n");
++  return 0;
++}
++
++// CHECK: AccessCountHistogram[3]: 5 7 0
++// CHECK: Test completed successfully
+diff --git a/compiler-rt/test/memprof/TestCases/memprof_nonhistogram_tail_clear.cpp b/compiler-rt/test/memprof/TestCases/memprof_nonhistogram_tail_clear.cpp
+new file mode 100644
+index 0000000000000..79971e53576a4
+--- /dev/null
++++ b/compiler-rt/test/memprof/TestCases/memprof_nonhistogram_tail_clear.cpp
+@@ -0,0 +1,39 @@
++// The non-histogram shadow keeps one counter per MEM_GRANULARITY block. An
++// allocation smaller than SHADOW_GRANULARITY used to round its size down to 0,
++// which skipped ClearShadow entirely, so a recycled chunk reported the previous
++// allocation's access count.
++
++// RUN: %clangxx_memprof -O0 -mllvm -memprof-use-callbacks=true %s -o %t
++// RUN: %env_memprof_opts=print_text=1:log_path=stdout %run %t 2>&1 | FileCheck %s
++
++#include <stdio.h>
++#include <stdlib.h>
++
++int main() {
++  char *first = nullptr;
++  // A single call site, so both allocations merge into one MIB.
++  for (int i = 0; i < 2; ++i) {
++    char *p = (char *)malloc(4);
++    if (!p)
++      return 1;
++    if (i == 0) {
++      first = p;
++      for (int j = 0; j < 42; ++j)
++        p[0] = 'A';
++    } else if (p != first) {
++      // The stale count only manifests on a recycled chunk. memprof has no
++      // quarantine, so with no intervening allocation the just-freed chunk
++      // comes back; require it so the test cannot pass vacuously.
++      return 1;
++    }
++    free(p);
++  }
++
++  printf("Test completed successfully\n");
++  return 0;
++}
++
++// The second allocation never touches the chunk, so it must contribute 0:
++// 42 accesses over 2 allocations gives an average of 21.
++// CHECK: access_count (ave/min/max): 21.00 / 0 / 42
++// CHECK: Test completed successfully
