@@ -1,4 +1,4 @@
-<!-- Draft GitHub issue for elide-dev/toolchain. Filed manually by the maintainer; do not `gh issue create` from automation. -->
+<!-- Source text of https://github.com/elide-dev/toolchain/issues/4 (filed by the maintainer, 2026-10-05). Keep in sync: edit here, then update or comment on #4. -->
 
 # Title
 

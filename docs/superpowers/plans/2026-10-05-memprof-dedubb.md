@@ -1,14 +1,14 @@
-# Propeller, DeduBB, mimalloc shim and MemProf Implementation Plan
+# Propeller, DeduBB, elidealloc shim and MemProf Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Revive llvm-propeller as a shipped tool, ship DeduBB on top of it (compiler + Propeller path), add `libmimalloc-shim` as a first-class allocator component (MemProf hot/cold now, allocation tokens later), and ship MemProf (runtime + backports) in the elide-toolchain LLVM 23.1.2 bundles, with verification and a documented downstream flag contract.
+**Goal:** Revive llvm-propeller as a shipped tool, ship DeduBB on top of it (compiler + Propeller path), add `libelidealloc-shim` as a first-class, allocator-agnostic allocator component (mimalloc backend #1) (MemProf hot/cold now, allocation tokens later), and ship MemProf (runtime + backports) in the elide-toolchain LLVM 23.1.2 bundles, with verification and a documented downstream flag contract.
 
-**Architecture:** LLVM changes are `src/patches/llvm/NNNN-*.patch`, applied to the `llvm` submodule by `apply_patches` in stages 10/30/40. Stage 00 un-applies them before its clean-tree check. A new Linux-only stage `45-propeller` builds `generate_propeller_profiles` against the stage-2 LLVM build tree, using offline-cached deps and its own patch series (find_package LLVM, libelf→LLVM Object, offline deps, DeduBB). Stage 30 adds the compiler-rt memprof runtime for `x86_64-unknown-linux-gnu`. Stage 35 adds `libmimalloc-shim.a` to every sysroot. The helper gains `flags`. Stage 95 gains Propeller, DeduBB, shim and MemProf checks.
+**Architecture:** LLVM changes are `src/patches/llvm/NNNN-*.patch`, applied to the `llvm` submodule by `apply_patches` in stages 10/30/40. Stage 00 un-applies them before its clean-tree check. A new Linux-only stage `45-propeller` builds `generate_propeller_profiles` against the stage-2 LLVM build tree, using offline-cached deps and its own patch series (find_package LLVM, libelf→LLVM Object, offline deps, DeduBB). Stage 30 adds the compiler-rt memprof runtime for `x86_64-unknown-linux-gnu`. Stage 35 adds `libelidealloc-shim.a` to every sysroot. The helper gains `flags`. Stage 95 gains Propeller, DeduBB, shim and MemProf checks.
 
 **Tech Stack:** bash, POSIX sh (helper), CMake + Ninja, LLVM 23.1.2, llvm-propeller (`ddfb8b7`), abseil/protobuf/googletest/quipper, compiler-rt, mimalloc 3.5.4, C++17/20, Python 3 (manifest).
 
-**Spec:** `docs/superpowers/specs/2026-10-05-memprof-dedubb-design.md` (§N below). Evidence: `docs/notes/memprof-dedubb-research.md` (EN = experiment N). Issue draft for the LLVM patches: `docs/notes/llvm-backports-issue.md`.
+**Spec:** `docs/superpowers/specs/2026-10-05-memprof-dedubb-design.md` (§N below). Evidence: `docs/notes/memprof-dedubb-research.md` (EN = experiment N). LLVM patch tracking: [elide-dev/toolchain#4](https://github.com/elide-dev/toolchain/issues/4) (source text `docs/notes/llvm-backports-issue.md`).
 
 ## Global Constraints
 
@@ -17,7 +17,7 @@
 - No network after stage 00. Propeller's third-party archives are pinned by sha256 in `versions.env` and cached in `out/cache/propeller-deps/`.
 - DeduBB is applied by default and must be inert without `-dedubb-directives` (`check_dedubb_inert`).
 - The bundle never enables `-supports-hot-cold-new` or `-fsanitize=alloc-token` on its own.
-- `libmimalloc-shim` v1 symbols and semantics are frozen once released (spec §5.4).
+- `libelidealloc-shim` v1 symbols and semantics are frozen once released (spec §5.4).
 - Dynamic musl is not supported downstream; musl checks link `-static`.
 - Commit messages: plain, no attribution trailers.
 
@@ -53,15 +53,15 @@ src/patches/llvm-propeller/0002-mccontext-asminfo-pointer.patch    # DELETE (T4)
 src/patches/llvm-propeller/0002-quipper-libelf-to-llvm-object.patch   # NEW (T4)
 src/patches/llvm-propeller/0003-offline-deps.patch                 # NEW (T4)
 src/patches/llvm-propeller/0004-dedubb.patch                       # NEW (T8)
-src/mimalloc-shim/{core.cc,hotcold.cc,mimalloc-shim.h,mimalloc-shim.pc.in,abi-v1.symbols}   # NEW (T12)
+src/elidealloc-shim/{core.cc,hotcold.cc,backend.h,backend-mimalloc.cc,backend-forward.cc,elidealloc-shim.h,elidealloc-shim.pc.in,abi-v1.symbols}   # NEW (T12)
 tests/unit/{common,platform,helper,manifest}.test.sh                # MODIFY
 tests/stages/{30-runtimes,35-mimalloc,40-llvm-stage2}.check.sh      # MODIFY
 tests/stages/45-propeller.check.sh                                  # NEW (T5)
 tests/fixtures/dedubb/{a.c,b.c}                                     # NEW (T6)
-tests/fixtures/mimalloc-shim-test.cc                                # NEW (T13)
+tests/fixtures/elidealloc-shim-test.cc                                # NEW (T13)
 tests/fixtures/{memprof.cc,memprof-ctx.cc,memprof-ctx.yaml}          # NEW (T14)
 docs/notes/llvm-patches.md                                          # NEW (T7) patch ledger + bump procedure
-docs/notes/llvm-backports-issue.md                                  # EXISTS (draft issue; maintainer files it)
+docs/notes/llvm-backports-issue.md                                  # EXISTS (source text of elide-dev/toolchain#4)
 README.md                                                           # MODIFY (T17)
 ```
 
@@ -388,7 +388,7 @@ check_propeller_layout() {
 ```
 - [ ] **Step 5: Validate on a scratch `llc`** (~15 min, 32 cores): scratch copy of `llvm/llvm` + `cmake` + `third-party` + `libc`, apply, build `llc FileCheck not split-file` (X86;AArch64, tests off), run the 6 `dedubb*.ll` RUN lines plus the 40 `blockaddress`/BB-map X86 tests with a minimal RUN-line runner. Expected 6/6 and 40/40 (reproduces E9 with the gate).
 - [ ] **Step 6: Bundle build** (Linux + darwin CI): `clang -mllvm -dedubb-directives=/dev/null -c hello.c` is accepted.
-- [ ] **Step 7: Ledger** `docs/notes/llvm-patches.md`: one row per patch (origin, files, why, default, how to drop), plus the bump procedure from `docs/notes/llvm-backports-issue.md` §"Tracking".
+- [ ] **Step 7: Ledger** `docs/notes/llvm-patches.md`: one row per patch (origin, files, why, default, how to drop), plus the bump procedure from elide-dev/toolchain#4 (§"Tracking"). Each row links #4.
 - [ ] **Step 8: Commit** `git commit -m "llvm: vendor DeduBB CodeGen+lld patch (07d730d), default on, inert without directives"`
 
 ---
@@ -472,7 +472,7 @@ check_dedubb_inert() {
 
 ---
 
-## Phase D — mimalloc shim and MemProf
+## Phase D — elidealloc shim and MemProf
 
 ### Task 10: MemProf backports + issue draft
 
@@ -488,7 +488,7 @@ for pr in 222126:0001-memprof-deterministic-clone-tiebreak 208911:0002-memprof-h
 done
 ```
 - [ ] **Step 2:** Scratch-copy apply / re-apply / unapply (as in Task 1), confirming no hunk overlap with `0100` (`0100` doesn't touch `MemProfContextDisambiguation.cpp` or `memprof_allocator.cpp`).
-- [ ] **Step 3:** Ledger rows. The maintainer files `docs/notes/llvm-backports-issue.md` as a GitHub issue on elide-dev/toolchain (do **not** run `gh issue create`). Link the issue number in the ledger once it exists.
+- [ ] **Step 3:** Ledger rows linking [elide-dev/toolchain#4](https://github.com/elide-dev/toolchain/issues/4). If the patch set changes from what #4 describes, update `docs/notes/llvm-backports-issue.md` and post a comment on #4.
 - [ ] **Step 4: Commit** `git commit -m "llvm: backport MemProf deterministic cloning (#222126) and histogram fix (#208911)"`
 
 ---
@@ -516,35 +516,39 @@ done
 
 ---
 
-### Task 12: `libmimalloc-shim` component
+### Task 12: `libelidealloc-shim` component (allocator-agnostic frontend + mimalloc backend #1)
 
-**Files:** Create `src/mimalloc-shim/core.cc`, `hotcold.cc`, `mimalloc-shim.h`, `mimalloc-shim.pc.in`, `abi-v1.symbols`; modify `scripts/stages/35-mimalloc.sh`, `tests/stages/35-mimalloc.check.sh`
+**Files:** Create `src/elidealloc-shim/elidealloc-shim.h`, `core.cc`, `hotcold.cc`, `backend.h`, `backend-mimalloc.cc`, `backend-forward.cc`, `elidealloc-shim.pc.in`, `abi-v1.symbols`; modify `scripts/stages/35-mimalloc.sh`, `tests/stages/35-mimalloc.check.sh`
 
-**Interfaces (spec §5.3, frozen as v1):** `mimalloc-shim.h`:
+**Interfaces (spec §5.2a, §5.3; the public part is frozen as v1):**
+
+`elidealloc-shim.h` (installed, public, no backend types):
 ```c
-#ifndef MIMALLOC_SHIM_H
-#define MIMALLOC_SHIM_H
+#ifndef ELIDEALLOC_SHIM_H
+#define ELIDEALLOC_SHIM_H
 #include <stddef.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
-#define MISHIM_ABI_VERSION 1
-typedef enum { MISHIM_DEFAULT = 0, MISHIM_HOT = 1, MISHIM_COLD = 2 } mishim_temp;
-typedef struct { size_t cold_arena_mb, hot_arena_mb; int hot_large_pages;
-                 unsigned cold_max, hot_min; int disable; } mishim_config;
-typedef struct { size_t allocs[3], bytes[3], fallbacks; } mishim_stats;
-int         mishim_abi_version(void);
-int         mishim_configure(const mishim_config *c);   /* 0 ok, -1 if partitions already exist */
-void       *mishim_malloc(size_t size, mishim_temp t, size_t token_class);
-void       *mishim_aligned_alloc(size_t align, size_t size, mishim_temp t, size_t token_class);
-mishim_temp mishim_partition_of(const void *p, size_t *token_class_out);
-void        mishim_get_stats(mishim_stats *out);
+#define ELIDEALLOC_ABI_VERSION 1
+typedef enum { ELIDEALLOC_DEFAULT = 0, ELIDEALLOC_HOT = 1, ELIDEALLOC_COLD = 2 } elidealloc_temp;
+typedef struct { size_t cold_reserve_mb, hot_reserve_mb; int hot_large_pages;
+                 unsigned cold_max, hot_min; int disable; } elidealloc_config;
+typedef struct { size_t allocs[3], bytes[3], fallbacks; } elidealloc_stats;
+int             elidealloc_abi_version(void);
+const char     *elidealloc_backend_name(void);
+int             elidealloc_configure(const elidealloc_config *c);  /* 0 ok, -1 if partitions exist */
+void           *elidealloc_malloc(size_t size, elidealloc_temp t, size_t token_class);
+void           *elidealloc_aligned_alloc(size_t align, size_t size, elidealloc_temp t, size_t token_class);
+elidealloc_temp elidealloc_partition_of(const void *p, size_t *token_class_out);
+void            elidealloc_get_stats(elidealloc_stats *out);
 #ifdef __cplusplus
 }
 #endif
 #endif
 ```
-`abi-v1.symbols` (sorted, checked by the stage test against `llvm-nm --defined-only -g`):
+
+`abi-v1.symbols` (exact global defined symbols; the stage check diffs `llvm-nm --defined-only -g --format=just-symbols | LC_ALL=C sort` against it):
 ```
 _ZnamRKSt9nothrow_t12__hot_cold_t
 _ZnamSt11align_val_t12__hot_cold_t
@@ -554,173 +558,120 @@ _ZnwmRKSt9nothrow_t12__hot_cold_t
 _ZnwmSt11align_val_t12__hot_cold_t
 _ZnwmSt11align_val_tRKSt9nothrow_t12__hot_cold_t
 _Znwm12__hot_cold_t
-mishim_abi_version
-mishim_aligned_alloc
-mishim_configure
-mishim_get_stats
-mishim_malloc
-mishim_partition_of
+elidealloc_abi_version
+elidealloc_aligned_alloc
+elidealloc_backend_name
+elidealloc_configure
+elidealloc_get_stats
+elidealloc_malloc
+elidealloc_partition_of
 ```
-(Sort with `LC_ALL=C sort` when generating; the list above is illustrative.)
+(Regenerate in `LC_ALL=C sort` order when creating the file. Backend symbols live in `namespace elidealloc::backend` with hidden visibility and must not appear.)
 
-- [ ] **Step 1: `core.cc`**. Partition table and policy (build modes: default = real; `-DMISHIM_FORWARD` = everything to the default allocator):
-
+`backend.h` (internal, not installed; exactly spec §5.2a):
 ```cpp
-// libmimalloc-shim core: partitions (token_class x temperature) on mimalloc first-class heaps.
-#include <atomic>
-#include <cerrno>
-#include <cstdlib>
-#include "mimalloc-shim.h"
-#if !defined(MISHIM_FORWARD)
+#pragma once
+#include <cstddef>
+#include "elidealloc-shim.h"
+namespace elidealloc::backend {
+struct heap;
+heap*  heap_create(elidealloc_temp t, size_t token_class, size_t reserve_mb, bool large_pages);
+void   heap_destroy(heap* h);
+void*  alloc(heap* h, size_t size, size_t align);     // h == nullptr -> default heap
+void*  realloc(heap* h, void* p, size_t size);
+void   free(void* p);
+size_t usable_size(const void* p);
+bool   owns(const heap* h, const void* p);
+void   heap_stats(const heap* h, size_t* committed, size_t* reserved);
+extern const char* const name;
+}
+```
+
+- [ ] **Step 1: `backend-mimalloc.cc`** (compiled with `-DELIDEALLOC_BACKEND_MIMALLOC`):
+```cpp
 #include <mimalloc.h>
-#endif
-
-namespace mishim {
-constexpr size_t kMaxClasses = 16;
-struct Partition { std::atomic<mi_heap_t*> heap{nullptr}; std::atomic<mi_arena_id_t> arena{nullptr}; };
-#if !defined(MISHIM_FORWARD)
-static Partition g_part[kMaxClasses][3];
-#endif
-static std::atomic<int> g_frozen{0};      // set once any partition exists
-static mishim_config g_cfg = {256, 256, 0, 63, 240, 0};
-static std::atomic<size_t> g_allocs[3], g_bytes[3], g_fallbacks;
-static std::atomic<int> g_env_read{0};
-
-static void read_env_once() {
-  if (g_env_read.exchange(1)) return;
-  auto num = [](const char* n, size_t d) { const char* e = getenv(n); return e ? (size_t)strtoul(e, nullptr, 10) : d; };
-  g_cfg.cold_arena_mb   = num("MISHIM_COLD_ARENA_MB", g_cfg.cold_arena_mb);
-  g_cfg.hot_arena_mb    = num("MISHIM_HOT_ARENA_MB", g_cfg.hot_arena_mb);
-  g_cfg.hot_large_pages = (int)num("MISHIM_HOT_LARGE_PAGES", g_cfg.hot_large_pages);
-  g_cfg.cold_max        = (unsigned)num("MISHIM_COLD_MAX", g_cfg.cold_max);
-  g_cfg.hot_min         = (unsigned)num("MISHIM_HOT_MIN", g_cfg.hot_min);
-  g_cfg.disable         = (int)num("MISHIM_DISABLE", g_cfg.disable);
-  if (num("MISHIM_STATS", 0)) atexit([] { /* print g_allocs/g_bytes/g_fallbacks to stderr */ });
-}
-
-mishim_temp temp_of_hint(unsigned hint) {
-  read_env_once();
-  if (g_cfg.disable) return MISHIM_DEFAULT;
-  if (hint <= g_cfg.cold_max) return MISHIM_COLD;
-  if (hint >= g_cfg.hot_min) return MISHIM_HOT;
-  return MISHIM_DEFAULT;
-}
-
-#if !defined(MISHIM_FORWARD)
-static mi_heap_t* heap_for(mishim_temp t, size_t cls) {
-  if (t == MISHIM_DEFAULT && cls == 0) return nullptr;           // main heap: plain mi_malloc path
-  Partition& p = g_part[cls % kMaxClasses][t];
-  if (mi_heap_t* h = p.heap.load(std::memory_order_acquire)) return h;
-  size_t mb = t == MISHIM_HOT ? g_cfg.hot_arena_mb : g_cfg.cold_arena_mb;
+#include "backend.h"
+namespace elidealloc::backend {
+struct heap { mi_heap_t* h; mi_arena_id_t arena; };
+const char* const name = "mimalloc";
+heap* heap_create(elidealloc_temp, size_t, size_t reserve_mb, bool large) {
   mi_arena_id_t id = nullptr; mi_heap_t* h = nullptr;
-  if (mb && mi_reserve_os_memory_ex(mb << 20, false, t == MISHIM_HOT && g_cfg.hot_large_pages, true, &id) == 0)
+  if (reserve_mb && mi_reserve_os_memory_ex(reserve_mb << 20, false, large, true, &id) == 0)
     h = mi_heap_new_in_arena(id);
   if (!h) { id = nullptr; h = mi_heap_new(); }
-  mi_heap_t* expected = nullptr;
-  if (!p.heap.compare_exchange_strong(expected, h, std::memory_order_acq_rel)) { mi_heap_delete(h); return expected; }
-  p.arena.store(id, std::memory_order_release);
-  g_frozen.store(1, std::memory_order_release);
-  return h;
+  if (!h) return nullptr;
+  heap* r = static_cast<heap*>(mi_malloc(sizeof(heap)));   // tiny, lives for the process
+  if (!r) { mi_heap_delete(h); return nullptr; }
+  *r = {h, id}; return r;
 }
-#endif
-
-// Returns nullptr on failure; callers apply C or C++ OOM semantics.
-void* alloc(size_t n, size_t align, mishim_temp t, size_t cls) {
-#if !defined(MISHIM_FORWARD)
-  if (mi_heap_t* h = heap_for(t, cls)) {
-    void* q = align ? mi_heap_malloc_aligned(h, n, align) : mi_heap_malloc(h, n);
-    if (q) { g_allocs[t].fetch_add(1, std::memory_order_relaxed); g_bytes[t].fetch_add(n, std::memory_order_relaxed); return q; }
-    g_fallbacks.fetch_add(1, std::memory_order_relaxed);         // arena full: fall back to default
-  }
-  return align ? mi_malloc_aligned(n, align) : mi_malloc(n);
-#else
-  (void)t; (void)cls;
-  return align ? aligned_alloc(align, (n + align - 1) / align * align) : malloc(n);
-#endif
+void heap_destroy(heap* r) { mi_heap_delete(r->h); mi_free(r); }
+void* alloc(heap* r, size_t n, size_t a) {
+  if (!r) return a ? mi_malloc_aligned(n, a) : mi_malloc(n);
+  return a ? mi_heap_malloc_aligned(r->h, n, a) : mi_heap_malloc(r->h, n);
 }
-}  // namespace mishim
-
-extern "C" {
-int mishim_abi_version(void) { return MISHIM_ABI_VERSION; }
-int mishim_configure(const mishim_config* c) {
-  if (mishim::g_frozen.load(std::memory_order_acquire)) return -1;
-  mishim::g_env_read.store(1); mishim::g_cfg = *c; return 0;
-}
-void* mishim_malloc(size_t n, mishim_temp t, size_t cls) {
-  void* p = mishim::alloc(n, 0, t, cls); if (!p) errno = ENOMEM; return p;
-}
-void* mishim_aligned_alloc(size_t a, size_t n, mishim_temp t, size_t cls) {
-  void* p = mishim::alloc(n, a, t, cls); if (!p) errno = ENOMEM; return p;
-}
-mishim_temp mishim_partition_of(const void* p, size_t* cls_out) {
-#if !defined(MISHIM_FORWARD)
-  for (size_t c = 0; c < mishim::kMaxClasses; c++)
-    for (int t = 1; t < 3; t++) {
-      mi_arena_id_t id = mishim::g_part[c][t].arena.load(std::memory_order_acquire);
-      if (id && mi_arena_contains(id, p)) { if (cls_out) *cls_out = c; return (mishim_temp)t; }
-    }
-#endif
-  if (cls_out) *cls_out = 0;
-  (void)p; return MISHIM_DEFAULT;
-}
-void mishim_get_stats(mishim_stats* o) {
-  for (int i = 0; i < 3; i++) { o->allocs[i] = mishim::g_allocs[i]; o->bytes[i] = mishim::g_bytes[i]; }
-  o->fallbacks = mishim::g_fallbacks;
-}
+void* realloc(heap* r, void* p, size_t n) { return r ? mi_heap_realloc(r->h, p, n) : mi_realloc(p, n); }
+void free(void* p) { mi_free(p); }
+size_t usable_size(const void* p) { return mi_usable_size(p); }
+bool owns(const heap* r, const void* p) { return r->arena ? mi_arena_contains(r->arena, p) : mi_heap_contains(r->h, p); }
+void heap_stats(const heap*, size_t* c, size_t* rs) { *c = 0; *rs = 0; }   // v1: frontend counters only
 }
 ```
-(`mi_malloc` is mimalloc's normal allocation. On gnu with `MI_OVERRIDE=ON` and on musl-with-mimalloc it is the same allocator as `malloc`. The `(c, DEFAULT)` main-heap case returns `nullptr` from `heap_for` on purpose.)
+`backend-forward.cc` (`-DELIDEALLOC_BACKEND_FORWARD`): `name = "forward"`; `heap_create` returns `nullptr`; `alloc` → `malloc` / `aligned_alloc(a, round_up(n, a))`; `realloc` → `::realloc`; `free` → `::free`; `usable_size` → `malloc_usable_size` (Linux) / `malloc_size` (darwin); `owns` → `false`.
 
-- [ ] **Step 2: `hotcold.cc`**. The 8 overloads, each: `t = temp_of_hint((uint8_t)h)`; `p = alloc(n, align, t, 0)`. On `nullptr`: nothrow variants return `nullptr`; throwing variants loop on `std::get_new_handler()` and then `throw std::bad_alloc()`. Declare `enum class __hot_cold_t : uint8_t {};` at global scope. Export only through these definitions: hide `mishim::*` internals with `-fvisibility=hidden` and `__attribute__((visibility("default")))` on the public symbols.
+- [ ] **Step 2: `core.cc`** (frontend; backend-independent). Partition table `std::atomic<backend::heap*> g_part[16][3]`. Lazy CAS creation (`heap_create`; loser `heap_destroy`). Env read once (`ELIDEALLOC_COLD_RESERVE_MB`=256, `ELIDEALLOC_HOT_RESERVE_MB`=256, `ELIDEALLOC_HOT_LARGE_PAGES`=0, `ELIDEALLOC_COLD_MAX`=63, `ELIDEALLOC_HOT_MIN`=240, `ELIDEALLOC_DISABLE`=0, `ELIDEALLOC_STATS`=0 → `atexit` dump). `temp_of_hint(h)`: disabled → DEFAULT; `h ≤ cold_max` → COLD; `h ≥ hot_min` → HOT; else DEFAULT. **222 (ambiguous) and 128 (notcold) → DEFAULT by these defaults (spec D10); do not special-case them.** `alloc(n, align, t, cls)`: `(t==DEFAULT && cls==0)` → `backend::alloc(nullptr, …)`; else partition heap, `nullptr` from it → count a fallback and use the default heap. `elidealloc_partition_of` walks created partitions with `backend::owns`. Relaxed atomic counters for `elidealloc_get_stats`. `elidealloc_configure` fails once any partition exists. Public functions `extern "C"` with `__attribute__((visibility("default")))`; build with `-fvisibility=hidden`.
 
-- [ ] **Step 3: Stage 35**: add `build_mimalloc_shim "$t"` at the end of each triple's iteration:
+- [ ] **Step 3: `hotcold.cc`**: `enum class __hot_cold_t : uint8_t {};` at global scope, plus the 8 overloads. Each calls `core::alloc(n, align, temp_of_hint((uint8_t)h), 0)`. On `nullptr`, nothrow variants return `nullptr`; throwing variants loop on `std::get_new_handler()`, then `throw std::bad_alloc()`.
 
+- [ ] **Step 4: Stage 35**: add `build_elidealloc_shim "$t"` at the end of each triple's iteration:
 ```bash
-build_mimalloc_shim() {
-  local t="$1" prefix b mode=() f
-  prefix="$(target_prefix "$t")"; b="$(component_build_dir mimalloc-shim "$t")"; fresh_dir "$b"
+build_elidealloc_shim() {
+  local t="$1" prefix b backend=mimalloc f libs
+  prefix="$(target_prefix "$t")"; b="$(component_build_dir elidealloc-shim "$t")"; fresh_dir "$b"
   case "$(triple_libc "$t")" in
-    musl) is_yes "$MUSL_USE_MIMALLOC" || mode=(-DMISHIM_FORWARD) ;;
-    darwin) mode=(-DMISHIM_FORWARD) ;;
+    musl) is_yes "$MUSL_USE_MIMALLOC" || backend=forward ;;
+    darwin) backend=forward ;;
   esac
-  for f in core hotcold; do
+  for f in core hotcold "backend-$backend"; do
     # shellcheck disable=SC2046
     "$TOOLCHAIN_ROOT/bin/$t-clang++" -c -O2 -fPIC -std=c++17 -fvisibility=hidden \
-      -flto=thin -ffat-lto-objects $(arch_flags "$t") "${mode[@]}" \
-      -I"$prefix/include" -I"$ROOT_DIR/src/mimalloc-shim" \
-      "$ROOT_DIR/src/mimalloc-shim/$f.cc" -o "$b/$f.o"
+      -flto=thin -ffat-lto-objects $(arch_flags "$t") "-DELIDEALLOC_BACKEND_${backend^^}" \
+      -I"$prefix/include" -I"$ROOT_DIR/src/elidealloc-shim" \
+      "$ROOT_DIR/src/elidealloc-shim/$f.cc" -o "$b/$f.o"
   done
-  rm -f "$prefix/lib/libmimalloc-shim.a"
-  "$TOOLCHAIN_ROOT/bin/llvm-ar" rcs "$prefix/lib/libmimalloc-shim.a" "$b/core.o" "$b/hotcold.o"
-  cp "$ROOT_DIR/src/mimalloc-shim/mimalloc-shim.h" "$prefix/include/"
+  rm -f "$prefix/lib/libelidealloc-shim.a"
+  "$TOOLCHAIN_ROOT/bin/llvm-ar" rcs "$prefix/lib/libelidealloc-shim.a" "$b"/*.o
+  cp "$ROOT_DIR/src/elidealloc-shim/elidealloc-shim.h" "$prefix/include/"
+  libs="-lelidealloc-shim"; [ "$(triple_libc "$t")" = gnu ] && libs="$libs -lmimalloc"
   mkdir -p "$prefix/lib/pkgconfig"
-  sed "s|@LIBS@|-lmimalloc-shim$( [ "$(triple_libc "$t")" = gnu ] && echo ' -lmimalloc')|" \
-    "$ROOT_DIR/src/mimalloc-shim/mimalloc-shim.pc.in" > "$prefix/lib/pkgconfig/mimalloc-shim.pc"
+  sed "s|@LIBS@|$libs|; s|@BACKEND@|$backend|" "$ROOT_DIR/src/elidealloc-shim/elidealloc-shim.pc.in" \
+    > "$prefix/lib/pkgconfig/elidealloc-shim.pc"
 }
 ```
-`mimalloc-shim.pc.in`: `prefix=/usr`, `Name: mimalloc-shim`, `Libs: -L${prefix}/lib @LIBS@`, `Cflags: -I${prefix}/include` (relocated by `relocate_prefix` like other `.pc` files).
+`elidealloc-shim.pc.in`: `prefix=/usr`, `backend=@BACKEND@`, `Name: elidealloc-shim`, `Libs: -L${prefix}/lib @LIBS@`, `Cflags: -I${prefix}/include` (relocated by `relocate_prefix` like other `.pc` files). Adding a backend later: new `backend-<x>.cc`, one `case` line here, and a `vars.sh` knob `ELIDEALLOC_BACKEND` to override the per-libc default.
 
-- [ ] **Step 4: Stage check** (`35-mimalloc.check.sh`, per triple): archive and header exist; `llvm-nm --defined-only -g` symbol set equals `abi-v1.symbols` (Review Focus 5); musl sysroot has **no** `libmimalloc.a` (single-instance rule, spec §5.5).
-- [ ] **Step 5: Commit** `git commit -m "feat: libmimalloc-shim, hot/cold/default heap partitions on mimalloc (v1 ABI)"`
+- [ ] **Step 5: Stage check** (`35-mimalloc.check.sh`, per triple): archive, header and `.pc` exist; the exported symbol set equals `abi-v1.symbols` (Review Focus 5); `pkg-config --variable=backend` is `mimalloc` for gnu and musl-with-mimalloc and `forward` otherwise; the musl sysroot has **no** `libmimalloc.a` (single-instance rule, spec §5.5).
+- [ ] **Step 6: Commit** `git commit -m "feat: libelidealloc-shim, allocator-agnostic hot/cold/default partitions, mimalloc backend (v1 ABI)"`
 
 ---
 
 ### Task 13: Shim tests and verification
 
-**Files:** Create `tests/fixtures/mimalloc-shim-test.cc`; modify `tests/stages/35-mimalloc.check.sh`, `scripts/verify/checks.sh`
+**Files:** Create `tests/fixtures/elidealloc-shim-test.cc`; modify `tests/stages/35-mimalloc.check.sh`, `scripts/verify/checks.sh`
 
-- [ ] **Step 1: Test program** (exit 0 = pass; prints the failing assertion). Build with `-DEXPECT_FORWARD` for forward mode:
-  - `operator new(64, (__hot_cold_t)1)` → `MISHIM_COLD`; `(…)254` → `MISHIM_HOT`; `(…)128` and `(…)222` → `MISHIM_DEFAULT` (forward mode: all `DEFAULT`)
+- [ ] **Step 1: Test program** (exit 0 = pass; prints the failing assertion). Build with `-DEXPECT_FORWARD` when the bundle's `.pc` reports `backend=forward`:
+  - `operator new(64, (__hot_cold_t)1)` → `ELIDEALLOC_COLD`; `(…)254` → `ELIDEALLOC_HOT`; `(…)128` and `(…)222` → `ELIDEALLOC_DEFAULT` (forward mode: all `DEFAULT`)
   - all 8 overloads callable; aligned variants return `align`-aligned pointers (`align_val_t{256}`)
   - nothrow with `SIZE_MAX/2` returns `nullptr`; the throwing variant throws `std::bad_alloc`
   - `std::thread`: allocate cold in thread A, `delete` in thread B, then allocate cold in B
-  - `mishim_get_stats` counts the hot and cold allocations made
-  - `mishim_configure` returns -1 after the first partition exists
-  - `mishim_malloc(32, MISHIM_COLD, 0)` → `COLD`; `free()` works on it
-  - (separate process) `MISHIM_DISABLE=1` → everything `DEFAULT`
-- [ ] **Step 2: Stage-35 check**: compile with stage-1 `<t>-clang++` (`-static` musl; `-lmimalloc-shim -lmimalloc` gnu) and run on the host (darwin: in its CI job).
-- [ ] **Step 3: `check_mimalloc_shim ROOT TRIPLE`** in `checks.sh`: same against the packaged bundle, run from `pkg-config --libs mimalloc-shim` with `PKG_CONFIG_SYSROOT_DIR`/`LIBDIR` from `elide-toolchain env` (proves the `.pc` file).
-- [ ] **Step 4: Commit** `git commit -m "verify: libmimalloc-shim partitions, OOM, threads, config, forward mode"`
+  - `elidealloc_get_stats` counts the hot and cold allocations made
+  - `elidealloc_configure` returns -1 after the first partition exists
+  - `elidealloc_malloc(32, ELIDEALLOC_COLD, 0)` → `COLD`; `free()` works on it
+  - `operator new(64, (__hot_cold_t)222)` → `ELIDEALLOC_DEFAULT` (ambiguous stays default, spec D10); with `ELIDEALLOC_HOT_MIN=200` in a child process → `HOT` (thresholds tunable)
+  - `elidealloc_backend_name()` matches the `.pc` `backend` variable
+  - (separate process) `ELIDEALLOC_DISABLE=1` → everything `DEFAULT`
+- [ ] **Step 2: Stage-35 check**: compile with stage-1 `<t>-clang++` (`-static` musl; `-lelidealloc-shim -lmimalloc` gnu) and run on the host (darwin: in its CI job).
+- [ ] **Step 3: `check_elidealloc_shim ROOT TRIPLE`** in `checks.sh`: same against the packaged bundle, run from `pkg-config --libs elidealloc-shim` with `PKG_CONFIG_SYSROOT_DIR`/`LIBDIR` from `elide-toolchain env` (proves the `.pc` file).
+- [ ] **Step 4: Commit** `git commit -m "verify: libelidealloc-shim partitions, OOM, threads, config, forward mode"`
 
 ---
 
@@ -740,22 +691,22 @@ __attribute__((noinline)) char *viaHot(size_t n) {
 __attribute__((noinline)) char *viaCold(size_t n) {
   return alloc(n);
 }
-#include "mimalloc-shim.h"
+#include "elidealloc-shim.h"
 int main() {
   char *a = viaHot(10);
   char *b = viaCold(10);
-  int rc = mishim_partition_of(a, nullptr) == MISHIM_DEFAULT ? 0 : 2;
+  int rc = elidealloc_partition_of(a, nullptr) == ELIDEALLOC_DEFAULT ? 0 : 2;
 #ifndef EXPECT_FORWARD
-  rc |= mishim_partition_of(b, nullptr) == MISHIM_COLD ? 0 : 4;
+  rc |= elidealloc_partition_of(b, nullptr) == ELIDEALLOC_COLD ? 0 : 4;
 #endif
   delete[] a; delete[] b;
   return rc;
 }
 ```
 `memprof-ctx.yaml`: E3's profile. Two `AllocSites` under `_Z5allocm` at `LineOffset: 1, Column: 10`. Cold: through `_Z7viaColdm` (`1,10`) and `main` (`LineOffset: 2, Column: 13`), `TotalSize 400, AllocCount 1, TotalLifetimeAccessDensity 1, TotalLifetime 1000000`. Notcold: through `_Z6viaHotm` and `main` (`1,13`), `TotalLifetimeAccessDensity 100000, TotalLifetime 1`. Plus `CallSites` for `_Z6viaHotm`, `_Z7viaColdm`, `main`. (`main` is on line 12, so its offsets stay 1 and 2; the notcold hint 128 maps to `DEFAULT` under spec D10.) `memprof.cc`: E10's loop program.
-- [ ] **Step 2: Checks** `check_memprof_runtime` (x86_64 gnu: instrument → run → `merge --profiled-binary` → ≥ 2 contexts), `check_memprof_use` (all triples: YAML → match remark → link with `-Wl,-mllvm,-enable-memprof-context-disambiguation -Wl,-mllvm,-optimize-hot-cold-new -Wl,-mllvm,-supports-hot-cold-new $(pkg-config --libs mimalloc-shim)` (+ `-static` musl) → `_Z5allocm.memprof.1` and `_Znam12__hot_cold_t` present → run, exit 0; darwin link + nm only, `-DEXPECT_FORWARD`), `check_memprof_strip` (without `-supports-hot-cold-new`: no `hot_cold` symbol), `check_memprof_absent`. Function bodies follow the previous revision of this plan (git history of this file) with `-lmimalloc-hotcold` replaced by the `.pc` libs.
+- [ ] **Step 2: Checks** `check_memprof_runtime` (x86_64 gnu: instrument → run → `merge --profiled-binary` → ≥ 2 contexts), `check_memprof_use` (all triples: YAML → match remark → link with `-Wl,-mllvm,-enable-memprof-context-disambiguation -Wl,-mllvm,-optimize-hot-cold-new -Wl,-mllvm,-supports-hot-cold-new $(pkg-config --libs elidealloc-shim)` (+ `-static` musl) → `_Z5allocm.memprof.1` and `_Znam12__hot_cold_t` present → run, exit 0; darwin link + nm only, `-DEXPECT_FORWARD`), `check_memprof_strip` (without `-supports-hot-cold-new`: no `hot_cold` symbol), `check_memprof_absent`. Function bodies follow the previous revision of this plan (git history of this file) with `-lmimalloc-hotcold` replaced by the `.pc` libs.
 - [ ] **Step 3:** Stage 95 on all hosts → all `ok`.
-- [ ] **Step 4: Commit** `git commit -m "verify: MemProf runtime, profile use through libmimalloc-shim, hint stripping"`
+- [ ] **Step 4: Commit** `git commit -m "verify: MemProf runtime, profile use through libelidealloc-shim, hint stripping"`
 
 ---
 
@@ -773,7 +724,7 @@ int main() {
 | `propeller-use=CC,LD` | `-flto=thin -funique-internal-linkage-names` | `-flto=thin -fuse-ld=lld -Wl,--lto-basic-block-sections=CC -Wl,--symbol-ordering-file=LD -Wl,--no-warn-symbol-ordering -Wl,-z,keep-text-section-prefix` |
 | `dedubb-apply=F` (combinable: `propeller-use=…+dedubb-apply=…`) | baseline CFLAGS | baseline LDFLAGS + `-Wl,-mllvm,-dedubb-directives=F` |
 | `memprof-instrument` | `-fmemory-profile -gmlt -fdebug-info-for-profiling -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer -fno-optimize-sibling-calls -fno-pie` | `-fmemory-profile -no-pie -Wl,-z,noseparate-code -Wl,--build-id` (Rust: `-Cpasses=memprof-module,function(memprof)`, experimental) |
-| `memprof-use=F` | `-flto=thin -gmlt -fdebug-info-for-profiling -fmemory-profile-use=F` | `-flto=thin -fuse-ld=lld -Wl,-mllvm,-enable-memprof-context-disambiguation -Wl,-mllvm,-optimize-hot-cold-new -Wl,-mllvm,-supports-hot-cold-new -lmimalloc-shim` (+ `-lmimalloc` on gnu) |
+| `memprof-use=F` | `-flto=thin -gmlt -fdebug-info-for-profiling -fmemory-profile-use=F` | `-flto=thin -fuse-ld=lld -Wl,-mllvm,-enable-memprof-context-disambiguation -Wl,-mllvm,-optimize-hot-cold-new -Wl,-mllvm,-supports-hot-cold-new -lelidealloc-shim` (+ `-lmimalloc` on gnu) |
 
 Errors: `memprof-instrument` off `x86_64-unknown-linux-gnu` (message tells the user to collect there and use anywhere); `propeller-*`/`dedubb-*` on darwin.
 
@@ -791,25 +742,25 @@ Errors: `memprof-instrument` off `x86_64-unknown-linux-gnu` (message tells the u
   "dedubb":    { "codegen": true, "source": "chaitanyaupp18/DeduBB@07d730d" },
   "memprof":   { "runtimeTargets": ["x86_64-unknown-linux-gnu"],
                  "backports": ["llvm/llvm-project#222126", "llvm/llvm-project#208911"] },
-  "mimallocShim": { "lib": "libmimalloc-shim.a", "abi": 1, "hotColdNew": true, "allocToken": false }
+  "elideallocShim": { "lib": "libelidealloc-shim.a", "abi": 1, "backend": "mimalloc", "hotColdNew": true, "allocToken": false }
 }
 ```
-darwin: `propeller`/`dedubb` absent, `runtimeTargets: []`, shim present (forward mode, `"mode": "forward"`). Steps: test, implement, run, commit `feat(manifest): advertise Propeller, DeduBB, MemProf and shim features`.
+darwin: `propeller`/`dedubb` absent, `runtimeTargets: []`, shim present with `"backend": "forward"`. Steps: test, implement, run, commit `feat(manifest): advertise Propeller, DeduBB, MemProf and shim features`.
 
 ---
 
 ### Task 17: README, full build, consumer trial
 
-- [ ] **Step 1: README** sections: "Propeller", "DeduBB", "mimalloc shim", "MemProf". Cover the support matrix (spec §1.2), `elide-toolchain flags` modes, the workflows (spec §3.5, §4.3, §6.2), pipeline ordering (spec §7), and the caveats (LBR/SPE requirement; content-hash profile and directive names because of caches; never profile DeduBB/relinked binaries; hints need ThinLTO + the shim; gnu needs `-lmimalloc`; musl static only; GraalVM limits). Update the base spec's bundle layout (§2) with `bin/generate_propeller_profiles`, `libmimalloc-shim.a`, `mimalloc-shim.h`, and stage 45 in the stage table.
+- [ ] **Step 1: README** sections: "Propeller", "DeduBB", "elidealloc shim", "MemProf". Cover the support matrix (spec §1.2), `elide-toolchain flags` modes, the workflows (spec §3.5, §4.3, §6.2), pipeline ordering (spec §7), and the caveats (LBR/SPE requirement; content-hash profile and directive names because of caches; never profile DeduBB/relinked binaries; hints need ThinLTO + the shim; gnu needs `-lmimalloc`; musl static only; GraalVM limits). Update the base spec's bundle layout (§2) with `bin/generate_propeller_profiles`, `libelidealloc-shim.a`, `elidealloc-shim.h`, and stage 45 in the stage table.
 - [ ] **Step 2: Full CI build** (three hosts) green with all new checks.
-- [ ] **Step 3: Consumer trial** (gate before release): one real consumer (WHIPLASH C++ or Komodo) through Propeller+DeduBB and MemProf+shim. Record `.text` delta, a benchmark A/B (`MISHIM_DISABLE=1`), and an exception/unwind smoke test through folded code in `docs/notes/propeller-dedubb-memprof-trial.md`.
-- [ ] **Step 4: Commit** `git commit -m "docs: Propeller, DeduBB, mimalloc shim and MemProf usage"`
+- [ ] **Step 3: Consumer trial** (gate before release): one real consumer (WHIPLASH C++ or Komodo) through Propeller+DeduBB and MemProf+shim. Record `.text` delta, a benchmark A/B (`ELIDEALLOC_DISABLE=1`), and an exception/unwind smoke test through folded code in `docs/notes/propeller-dedubb-memprof-trial.md`.
+- [ ] **Step 4: Commit** `git commit -m "docs: Propeller, DeduBB, elidealloc shim and MemProf usage"`
 
 ---
 
 ## Follow-ups (not in this plan)
 
-- `libmimalloc-shim` v2: `token.o`/`token_fast.o` members implementing `__alloc_token_*` (spec §5.4), with an alloc-token verification check.
+- `libelidealloc-shim` v2: `token.o`/`token_fast.o` members implementing `__alloc_token_*` (spec §5.4), with an alloc-token verification check.
 - aarch64 Propeller profiling via ARM SPE (`--profile_type=PERF_SPE`) on a host that has it.
 - Optional experimental `bolt-dedubb` patch (spec §4.5).
 - aarch64/darwin MemProf runtime (upstream work).
