@@ -11,6 +11,9 @@ source "$ROOT_DIR/scripts/verify/checks-pgo.sh"
 
 smoke_dir() { printf '%s/smoke/%s\n' "$VERIFY_DIR" "$1"; }
 
+# shellcheck source=scripts/verify/sanitizers.sh
+source "$ROOT_DIR/scripts/verify/sanitizers.sh"
+
 # check_smoke ROOT TRIPLE — C and C++ hello-worlds compile, link and run (musl: fully static).
 check_smoke() {
   local root="$1" t="$2" d static=() name="smoke $2${3:+ ($3)}"
@@ -412,6 +415,7 @@ check_relocatable() {
   cp -a "$root" "$moved"
   for t in $ALL_TARGETS; do check_smoke "$moved" "$t" relocated; done
   if "$moved/bin/elide-toolchain" doctor >/dev/null; then pass "doctor (relocated)"; else fail "doctor (relocated)" "see elide-toolchain doctor"; fi
+  run_sanitizer_relocated_checks "$moved"
   rm -rf "$VERIFY_DIR/reloc test"
 }
 
@@ -429,6 +433,7 @@ run_all_checks() {
     check_components "$root" "$t"
     check_bitcode "$root" "$t"
     check_rust "$root" "$t"
+    run_sanitizer_checks "$root" "$t"
     case "$(triple_libc "$t")" in
       gnu) check_glibc_floor "$root" "$t"; check_interp "$root" "$t" ;;
       musl) check_musl_libc "$root" "$t"; check_shims "$root" "$t" ;;
@@ -438,6 +443,7 @@ run_all_checks() {
   if [ "$HOST_OS" = linux ]; then check_containers "$root"; else check_darwin_dylibs "$root"; fi
   run_feature_checks "$root"
   check_relocatable "$root"
+  run_sanitizer_addon_checks "$root"
   echo "verification: $VERIFY_FAILURES failure(s)"
   [ "$VERIFY_FAILURES" -eq 0 ]
 }
