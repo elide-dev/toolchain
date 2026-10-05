@@ -58,4 +58,29 @@ assert_eq "$(MUSL_USE_MIMALLOC=yes elidealloc_backend x86_64-unknown-linux-musl)
 assert_eq "$(MUSL_USE_MIMALLOC=no elidealloc_backend x86_64-unknown-linux-musl)" forward
 assert_eq "$(elidealloc_backend arm64-apple-darwin)" forward
 
+# Prebuilt stage 1: pinned release per arch, default knob
+for a in amd64 arm64; do
+  u="$(llvm_prebuilt_pin linux "$a" url)"
+  assert_contains "$u" "/llvmorg-$LLVM_VERSION/LLVM-$LLVM_VERSION-Linux-" "linux-$a pin is the LLVM_VERSION release"
+  assert_eq "${#u}" "${#u}"
+  case "$(llvm_prebuilt_pin linux "$a" sha256)" in
+    [0-9a-f]*) assert_eq "${#LLVM_PREBUILT_LINUX_AMD64_SHA256}" 64 ;;
+    *) _fail "no sha256 pin for linux-$a" ;;
+  esac
+done
+assert_contains "$(llvm_prebuilt_pin linux amd64 url)" "Linux-X64.tar.xz"
+assert_contains "$(llvm_prebuilt_pin linux arm64 url)" "Linux-ARM64.tar.xz"
+assert_eq "$(llvm_prebuilt_pin linux arm64 sha256)" "$LLVM_PREBUILT_LINUX_ARM64_SHA256"
+assert_eq "$(llvm_prebuilt_pin darwin arm64 url)" "" "no prebuilt on darwin"
+assert_eq "$(default_stage1_source linux amd64)" prebuilt
+assert_eq "$(default_stage1_source linux arm64)" prebuilt
+assert_eq "$(default_stage1_source darwin arm64)" build "darwin builds its LLVM"
+assert_eq "$(LLVM_PREBUILT_LINUX_ARM64_URL='' default_stage1_source linux arm64)" build "no pin -> build"
+assert_ok check_stage1_source linux amd64 prebuilt
+assert_ok check_stage1_source linux amd64 build
+assert_ok check_stage1_source darwin arm64 build
+assert_fails check_stage1_source darwin arm64 prebuilt
+assert_fails check_stage1_source linux amd64 source
+assert_fails env LLVM_PREBUILT_LINUX_AMD64_SHA256= bash -c "source '$ROOT_DIR/scripts/lib/common.sh'; source '$ROOT_DIR/scripts/lib/platform.sh'; check_stage1_source linux amd64 prebuilt"
+
 finish

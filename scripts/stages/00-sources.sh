@@ -34,24 +34,6 @@ check_submodules() {
   "$ROOT_DIR/scripts/check-versions.sh"
 }
 
-# fetch_pinned URL SHA256 DEST — download URL to DEST (once), verifying SHA256; a cached file
-# with the wrong checksum is re-downloaded.
-fetch_pinned() {
-  local url="$1" sha="$2" dest="$3" actual
-  mkdir -p "$(dirname "$dest")"
-  if [ -f "$dest" ] && [ "$(sha256_of "$dest")" != "$sha" ]; then
-    warn "cached $dest has wrong sha256; removing and re-downloading"
-    rm -f "$dest"
-  fi
-  if [ ! -f "$dest" ]; then
-    log "downloading $(basename "$dest")"
-    curl -fsSL --retry 3 -o "$dest.part" "$url"
-    mv "$dest.part" "$dest"
-    actual="$(sha256_of "$dest")"
-    [ "$actual" = "$sha" ] || die "sha256 mismatch for $dest: expected $sha, got $actual"
-  fi
-}
-
 fetch_kernel() {
   local v="$LINUX_HEADERS_VERSION" tarball
   tarball="$CACHE_DIR/linux-$v.tar.xz"

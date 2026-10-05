@@ -49,8 +49,10 @@ LINK_JOBS="${LINK_JOBS:-$(default_link_jobs "$_mem_gb")}"
 MEM_GB="$_mem_gb"
 unset _mem_gb
 LLVM_MAJOR="${LLVM_VERSION%%.*}"
+STAGE1_SOURCE="${STAGE1_SOURCE:-$(default_stage1_source "$HOST_OS" "$HOST_ARCH")}"
 export ROOT_DIR HOST_OS HOST_ARCH OUT_DIR BUNDLE_DIR STAGE1_DIR BUILD_DIR STAMPS_DIR CACHE_DIR \
-  DIST_DIR TOOLCHAIN_ROOT ALL_TARGETS TARGETS JOBS LINK_JOBS MEM_GB LLVM_MAJOR TOOLCHAIN_VERSION
+  DIST_DIR TOOLCHAIN_ROOT ALL_TARGETS TARGETS JOBS LINK_JOBS MEM_GB LLVM_MAJOR TOOLCHAIN_VERSION \
+  STAGE1_SOURCE
 if ccache_enabled; then ccache_defaults; fi
 
 if [ "$HOST_OS" = darwin ] && [ -z "${SDKROOT:-}" ] && command -v xcrun >/dev/null 2>&1; then

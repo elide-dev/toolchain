@@ -63,6 +63,29 @@ sha256_of() {
   fi
 }
 
+# fetch_pinned URL SHA256 DEST — download URL to DEST (once), verifying SHA256; a cached file
+# with the wrong checksum is re-downloaded. The download is verified before it lands at DEST, and
+# its temporary name is unique, so concurrent jobs sharing a cache directory cannot collide.
+fetch_pinned() {
+  local url="$1" sha="$2" dest="$3" actual part
+  mkdir -p "$(dirname "$dest")"
+  if [ -f "$dest" ] && [ "$(sha256_of "$dest")" != "$sha" ]; then
+    warn "cached $dest has wrong sha256; removing and re-downloading"
+    rm -f "$dest"
+  fi
+  if [ ! -f "$dest" ]; then
+    log "downloading $(basename "$dest")"
+    part="$dest.part.$$"
+    curl -fsSL --retry 3 -o "$part" "$url" || { rm -f "$part"; die "download failed: $url"; }
+    actual="$(sha256_of "$part")"
+    if [ "$actual" != "$sha" ]; then
+      rm -f "$part"
+      die "sha256 mismatch for $url: expected $sha, got $actual"
+    fi
+    mv -f "$part" "$dest"
+  fi
+}
+
 is_elf() {
   [ -f "$1" ] && [ "$(head -c 4 "$1" 2>/dev/null | od -An -c | tr -d ' \n')" = '177ELF' ]
 }

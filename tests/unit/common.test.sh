@@ -123,5 +123,28 @@ assert_eq "$(default_link_jobs 31)" 3
 assert_eq "$(default_link_jobs 256)" 4 "capped at 4"
 assert_eq "$(default_link_jobs '')" 2 "unknown memory"
 
+# fetch_pinned: verified download via a fake curl; bad checksums never land in the cache
+fp="$(mktemp -d)"
+mkdir -p "$fp/bin"
+# shellcheck disable=SC2016 # literal script text
+printf '#!/usr/bin/env bash\nwhile [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift 2 ;; *) shift ;; esac; done\necho payload > "$out"\n' > "$fp/bin/curl"
+chmod +x "$fp/bin/curl"
+good="$(printf 'payload\n' | sha256sum | awk '{print $1}')"
+PATH="$fp/bin:$PATH" fetch_pinned https://example.invalid/x "$good" "$fp/cache/x" 2>/dev/null
+assert_eq "$(cat "$fp/cache/x")" payload "fetched"
+assert_fails env PATH="$fp/bin:$PATH" bash -c "source '$ROOT_DIR/scripts/lib/common.sh'; fetch_pinned https://example.invalid/y 0000 '$fp/cache/y'"
+assert_eq "$(ls "$fp/cache")" x "mismatched download removed, no .part left"
+rm -rf "$fp"
+
+# env.sh wiring: JOBS/LINK_JOBS from memory and cpus unless set; STAGE1_SOURCE default per host
+envq() {
+  # shellcheck disable=SC2016 # expanded by the inner bash
+  env -u JOBS -u LINK_JOBS -u STAGE1_SOURCE ROOT_DIR="$ROOT_DIR" ELIDE_OUT_DIR=/nonexistent "$@" \
+    bash -c 'source "$ROOT_DIR/scripts/lib/env.sh"; echo "$JOBS $LINK_JOBS $STAGE1_SOURCE"'
+}
+assert_eq "$(envq ELIDE_HOST_OS=linux ELIDE_HOST_ARCH=amd64 ELIDE_CPU_COUNT=64 ELIDE_MEM_GB=32)" "16 4 prebuilt"
+assert_eq "$(envq ELIDE_HOST_OS=linux ELIDE_HOST_ARCH=arm64 ELIDE_CPU_COUNT=4 ELIDE_MEM_GB=12)" "4 1 prebuilt"
+assert_eq "$(envq ELIDE_HOST_OS=linux ELIDE_HOST_ARCH=amd64 ELIDE_CPU_COUNT=64 ELIDE_MEM_GB=32 JOBS=3 LINK_JOBS=2 STAGE1_SOURCE=build)" "3 2 build" "explicit values win"
+assert_eq "$(envq ELIDE_HOST_OS=darwin ELIDE_HOST_ARCH=arm64 ELIDE_CPU_COUNT=12 ELIDE_MEM_GB=36 SDKROOT=/sdk)" "12 4 build"
 
 finish

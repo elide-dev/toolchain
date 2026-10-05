@@ -130,3 +130,32 @@ arch_flags() {
   m="$(march_for "$1")"
   if [ -n "$m" ]; then printf -- '-march=%s -mtune=%s\n' "$m" "$(mtune_for "$1")"; else echo ""; fi
 }
+
+# llvm_prebuilt_pin OS ARCH url|sha256 — the pinned official LLVM release tarball (versions.env
+# LLVM_PREBUILT_LINUX_<ARCH>_{URL,SHA256}) usable as the Linux stage-1 compiler; empty if none.
+llvm_prebuilt_pin() {
+  [ "$1" = linux ] || return 0
+  local v
+  v="LLVM_PREBUILT_LINUX_${2^^}_${3^^}"
+  printf '%s\n' "${!v:-}"
+}
+
+# default_stage1_source OS ARCH — prebuilt on Linux when a pin exists for ARCH, else build (darwin's
+# stage 10 builds the shipped LLVM itself, so there is nothing to download there).
+default_stage1_source() {
+  if [ "$1" = linux ] && [ -n "$(llvm_prebuilt_pin "$1" "$2" url)" ]; then echo prebuilt; else echo build; fi
+}
+
+# check_stage1_source OS ARCH SOURCE — fail on an unknown STAGE1_SOURCE, or prebuilt without a pin.
+check_stage1_source() {
+  case "$3" in
+    build) return 0 ;;
+    prebuilt)
+      [ "$1" = linux ] || die "STAGE1_SOURCE=prebuilt applies to Linux only (darwin's stage 10 builds the shipped LLVM)"
+      if [ -z "$(llvm_prebuilt_pin "$1" "$2" url)" ] || [ -z "$(llvm_prebuilt_pin "$1" "$2" sha256)" ]; then
+        die "STAGE1_SOURCE=prebuilt: no LLVM_PREBUILT_LINUX_${2^^}_{URL,SHA256} in versions.env"
+      fi
+      ;;
+    *) die "STAGE1_SOURCE must be prebuilt or build (got $3)" ;;
+  esac
+}

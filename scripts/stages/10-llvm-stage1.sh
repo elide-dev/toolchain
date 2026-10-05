@@ -1,5 +1,7 @@
 # shellcheck shell=bash
-# Stage 10. Linux: stage-1 clang/lld built with the host compiler (not shipped).
+# Stage 10. Linux: the stage-1 (bootstrap) clang/lld, not shipped: by default the pinned official
+# LLVM $LLVM_VERSION release (STAGE1_SOURCE=prebuilt), else built with the host compiler
+# (STAGE1_SOURCE=build). Either way it has no runtimes; stage 30 builds those from our patched tree.
 # macOS: the shipped LLVM (single stage), deployment target MACOS_MIN, with compiler-rt
 # builtins + profile (mainline clang always links its own libclang_rt.osx.a).
 
@@ -23,7 +25,80 @@ llvm_common_args() {
 
 stage_main() {
   apply_patches llvm "$ROOT_DIR/llvm"
-  if [ "$HOST_OS" = linux ]; then llvm_stage1_linux; else llvm_darwin; fi
+  if [ "$HOST_OS" = darwin ]; then llvm_darwin
+  elif [ "$STAGE1_SOURCE" = prebuilt ]; then llvm_stage1_prebuilt
+  else llvm_stage1_linux
+  fi
+}
+
+# Tools later stages run from $STAGE1_DIR/bin (directly, via toolchain files, or via -fuse-ld=lld).
+STAGE1_TOOLS="clang clang++ lld ld.lld llvm-ar llvm-ranlib llvm-nm llvm-objcopy llvm-readelf llvm-strip"
+
+# llvm_stage1_prebuilt — the pinned official release as stage 1. Safe because the version is the
+# same (compatible bitcode for the fat-LTO archives stages 30-60 produce) and nothing later relies
+# on our LLVM patches being in the bootstrap compiler: they matter for the shipped stage 2 (stage
+# 40) and for compiler-rt, which stage 30 builds from the patched tree (spec §3.3b).
+llvm_stage1_prebuilt() {
+  local url sha tarball t
+  url="$(llvm_prebuilt_pin linux "$HOST_ARCH" url)"
+  sha="$(llvm_prebuilt_pin linux "$HOST_ARCH" sha256)"
+  if [ -z "$url" ] || [ -z "$sha" ]; then die "no prebuilt LLVM pinned for linux-$HOST_ARCH; use STAGE1_SOURCE=build"; fi
+  tarball="$CACHE_DIR/llvm-prebuilt/${url##*/}"
+  fetch_pinned "$url" "$sha" "$tarball"
+  rm -rf "$STAGE1_DIR"
+  mkdir -p "$STAGE1_DIR"
+  log "extracting $(basename "$tarball") into $STAGE1_DIR"
+  xz -T0 -dc "$tarball" | tar -C "$STAGE1_DIR" --strip-components=1 -xf -
+  check_stage1_tools
+  prune_prebuilt_runtimes
+  "$STAGE1_DIR/bin/clang" --version >/dev/null 2>&1 \
+    || die "prebuilt clang stops running once its bundled runtimes are pruned; use STAGE1_SOURCE=build"
+  t="$(clang_default_runtimes)"
+  [ "$t" = "libgcc libstdc++ ld" ] \
+    || die "prebuilt clang's default rtlib/stdlib/linker are '$t', not the upstream 'libgcc libstdc++ ld' stage 30 expects; use STAGE1_SOURCE=build"
+  mkdir -p "$BUNDLE_DIR/sysroot"
+  ln -sfn "$BUNDLE_DIR/sysroot" "$STAGE1_DIR/sysroot"
+}
+
+# prune_prebuilt_runtimes — the release ships compiler-rt, libc++ and friends built for the host
+# glibc. Remove them so stage 1 matches a from-source build (clang + lld only): stages 30/31
+# install ours, and nothing from the release may satisfy their checks or leak into a link.
+prune_prebuilt_runtimes() {
+  local d
+  rm -rf "$STAGE1_DIR/lib/clang/$LLVM_MAJOR/lib" "$STAGE1_DIR/lib/clang/$LLVM_MAJOR/share" \
+    "$STAGE1_DIR/include/c++"
+  for d in "$STAGE1_DIR"/lib/*-linux-* "$STAGE1_DIR"/include/*-linux-*; do
+    if [ -d "$d" ]; then rm -rf "$d"; fi
+  done
+  [ -d "$STAGE1_DIR/lib/clang/$LLVM_MAJOR/include" ] \
+    || die "prebuilt LLVM has no lib/clang/$LLVM_MAJOR/include (version mismatch?)"
+}
+
+# check_stage1_tools — every tool later stages use exists and clang is LLVM_VERSION.
+check_stage1_tools() {
+  local f v
+  for f in $STAGE1_TOOLS; do
+    [ -x "$STAGE1_DIR/bin/$f" ] || die "stage 1 lacks bin/$f"
+  done
+  v="$("$STAGE1_DIR/bin/clang" --version 2>&1)" || die "stage-1 clang does not run on this host: $v"
+  case "$v" in
+    *"clang version $LLVM_VERSION"*) ;;
+    *) die "stage-1 clang is not $LLVM_VERSION: ${v%%$'\n'*}" ;;
+  esac
+  "$STAGE1_DIR/bin/ld.lld" --version >/dev/null 2>&1 || die "stage-1 ld.lld does not run on this host"
+}
+
+# clang_default_runtimes — "RTLIB STDLIB LINKER" stage-1 clang uses for a gnu target without a cfg
+# (libgcc libstdc++ ld for upstream defaults). Stage 30 builds the runtimes with bare clang and
+# relies on those defaults; a release built with CLANG_DEFAULT_* overrides would break it.
+clang_default_runtimes() {
+  local out rt=libgcc std=libstdc++ ld=ld
+  out="$("$STAGE1_DIR/bin/clang++" -### --no-default-config --target="$(bundle_triple_for_libc gnu)" \
+    -x c++ /dev/null -o /dev/null 2>&1)" || true
+  case "$out" in *libclang_rt.builtins*) rt=compiler-rt ;; esac
+  case "$out" in *'"-lc++"'*) std=libc++ ;; esac
+  case "$out" in *'ld.lld"'*) ld=lld ;; esac
+  printf '%s %s %s\n' "$rt" "$std" "$ld"
 }
 
 llvm_stage1_linux() {
