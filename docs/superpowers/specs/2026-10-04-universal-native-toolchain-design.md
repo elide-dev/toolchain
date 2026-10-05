@@ -55,6 +55,7 @@ elide-toolchain/
   bin/
     clang clang++ clang-cpp ld.lld lld llvm-ar llvm-nm llvm-ranlib llvm-objcopy llvm-strip …
     llvm-bolt perf2bolt merge-fdata llvm-profgen llvm-profdata llvm-dwarfdump llvm-dwp
+    generate_propeller_profiles             # Linux; see 2026-10-05-memprof-dedubb-design.md
     elide-toolchain                         # helper CLI (POSIX sh), see §5.3
     <triple>.cfg                            # one clang config per target triple
     <triple>-clang   -> clang
@@ -62,7 +63,7 @@ elide-toolchain/
     <arch>-linux-musl-gcc, <arch>-linux-musl-g++   # Linux: GCC-named shims, see §2.3
   lib/
     clang/<major>/include/…                 # clang resource dir
-    clang/<major>/lib/<triple>/libclang_rt.*  # Linux: builtins, crtbegin/crtend, profile
+    clang/<major>/lib/<triple>/libclang_rt.*  # Linux: builtins, crtbegin/crtend, profile; memprof (x86_64 gnu)
     clang/<major>/lib/darwin/libclang_rt.*    # macOS: osx builtins, profile
     <triple>/libc++.a libc++abi.a libunwind.a # per-target runtime dir (Linux)
   include/
@@ -229,6 +230,7 @@ canonical path. Relocatability of `libc.so`/`libpthread.so` linker scripts is ve
 | 35 | mimalloc | musl: mimalloc object (MI_OVERRIDE=OFF) + glue, then musl phase 2 with `USE_MIMALLOC=yes`, `-flto=thin -ffat-lto-objects` (archive members carry both bitcode and native code, so lld does cross-language LTO while GNU ld, older rust-lld, and GraalVM's link still work), ldso `-fno-lto` (existing logic, ported). gnu: `libmimalloc.a` standalone (MI_OVERRIDE=ON) | `libmimalloc.a` standalone |
 | 36 | llvm-deps | Static zlib-ng (compat) + zstd for the gnu triple into `out/…/llvm-deps` (not shipped), needed because stage 2 builds under `--sysroot` and lld must support `--compress-debug-sections=zstd` (used by `cflags/linux-bin.txt`) | skip (host SDK zlib; zstd optional) |
 | 40 | llvm-stage2 | Stage-1 clang with the gnu cfg builds `LLVM_PROJECTS=clang;lld;bolt;polly`, `LLVM_ENABLE_LIBCXX=ON`, `LLVM_STATIC_LINK_CXX_STDLIB=ON`, `LLVM_LINK_LLVM_DYLIB=OFF`, `CLANG_LINK_CLANG_DYLIB=OFF` (one static libc++ per executable, no shared libLLVM/libclang), `LLVM_ENABLE_ZLIB=FORCE_ON`, `LLVM_ENABLE_ZSTD=FORCE_ON` against stage 36, `LLVM_DEFAULT_TARGET_TRIPLE=<arch>-unknown-linux-gnu`. Installs into bundle `bin/`, `lib/` | skip |
+| 45 | propeller | `generate_propeller_profiles` (Propeller + DeduBB) against the stage-2 LLVM build tree, offline deps (2026-10-05-memprof-dedubb-design.md §3.3) | skip |
 | 50 | components | For each triple, each enabled component's `build_<name> <triple> <sysroot>/usr`, compiled with the bundle's own `<triple>-clang` (dogfoods the cfg) plus the cflags profile. Each installs `.pc` files to `<sysroot>/usr/lib/pkgconfig` | Same, single triple, installed into overlay sysroot |
 | 90 | package | Copy helper CLI, cfgs, musl-gcc shims; create triple symlinks; write `share/elide-toolchain/cmake/<triple>.cmake` toolchain files; generate `manifest.json` and `sbom.cdx.json` from `versions.env`; strip binaries; `tar -cJf elide-toolchain-<ver>-<os>-<arch>.tar.xz`; write `.sha256` | same |
 | 95 | verify | See §6 | same |
