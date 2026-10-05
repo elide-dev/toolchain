@@ -53,5 +53,9 @@ assert_ok memprof_supported x86_64-unknown-linux-gnu
 assert_fails memprof_supported x86_64-unknown-linux-musl
 assert_fails memprof_supported aarch64-unknown-linux-gnu
 assert_fails memprof_supported arm64-apple-darwin
+assert_eq "$(elidealloc_backend x86_64-unknown-linux-gnu)" mimalloc
+assert_eq "$(MUSL_USE_MIMALLOC=yes elidealloc_backend x86_64-unknown-linux-musl)" mimalloc
+assert_eq "$(MUSL_USE_MIMALLOC=no elidealloc_backend x86_64-unknown-linux-musl)" forward
+assert_eq "$(elidealloc_backend arm64-apple-darwin)" forward
 
 finish

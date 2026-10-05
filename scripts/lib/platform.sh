@@ -77,6 +77,16 @@ musl_loader() { printf 'lib/ld-musl-%s.so.1\n' "$1"; }
 # (memprof_rtl.cpp:181), which rules out musl. Profiles from it apply to every triple.
 memprof_supported() { [ "$1" = x86_64-unknown-linux-gnu ]; }
 
+# elidealloc_backend TRIPLE — libelidealloc-shim's build-time backend: mimalloc where mimalloc is
+# the process allocator (gnu, linked with -lmimalloc; musl with MUSL_USE_MIMALLOC), else forward.
+elidealloc_backend() {
+  case "$(triple_libc "$1")" in
+    gnu) echo mimalloc ;;
+    musl) if is_yes "${MUSL_USE_MIMALLOC:-yes}"; then echo mimalloc; else echo forward; fi ;;
+    *) echo forward ;;
+  esac
+}
+
 # musl_gcc_prefix TRIPLE — GCC-style prefix GraalVM looks for, e.g. x86_64-linux-musl.
 musl_gcc_prefix() { printf '%s-linux-musl\n' "$(triple_cpu "$1")"; }
 

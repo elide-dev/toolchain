@@ -11,7 +11,31 @@ stage_main() {
       musl) build_musl_phase2 "$t" ;;
       *) build_mimalloc_standalone "$t" ;;
     esac
+    build_elidealloc_shim "$t"
   done
+}
+
+# libelidealloc-shim: allocator-agnostic hint partitioning (MemProf hot/cold today, allocation
+# tokens later) over a build-time backend. Fat ThinLTO objects like the other shipped archives.
+build_elidealloc_shim() {
+  local t="$1" prefix b backend f libs src="$ROOT_DIR/src/elidealloc-shim"
+  prefix="$(target_prefix "$t")"
+  b="$(component_build_dir elidealloc-shim "$t")"
+  backend="$(elidealloc_backend "$t")"
+  for f in core hotcold "backend-$backend"; do
+    # shellcheck disable=SC2046
+    "$TOOLCHAIN_ROOT/bin/$t-clang++" -c -O2 -fPIC -std=c++17 -fvisibility=hidden \
+      -flto=thin -ffat-lto-objects $(arch_flags "$t") \
+      -I"$src" -I"$prefix/include" "$src/$f.cc" -o "$b/$f.o"
+  done
+  mkdir -p "$prefix/lib/pkgconfig" "$prefix/include"
+  rm -f "$prefix/lib/libelidealloc-shim.a"
+  "$TOOLCHAIN_ROOT/bin/llvm-ar" rcs "$prefix/lib/libelidealloc-shim.a" "$b/core.o" "$b/hotcold.o" "$b/backend-$backend.o"
+  cp "$src/elidealloc-shim.h" "$prefix/include/"
+  libs="-lelidealloc-shim"
+  if [ "$(triple_libc "$t")" = gnu ]; then libs="$libs -lmimalloc"; fi
+  sed -e "s|@LIBS@|$libs|" -e "s|@BACKEND@|$backend|" -e "s|@VERSION@|$TOOLCHAIN_VERSION|" \
+    "$src/elidealloc-shim.pc.in" > "$prefix/lib/pkgconfig/elidealloc-shim.pc"
 }
 
 mimalloc_args() { # OVERRIDE

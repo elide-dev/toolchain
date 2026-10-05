@@ -38,5 +38,36 @@ for t in $ALL_TARGETS; do
       assert_file "$p/lib/libmimalloc.a"
       ;;
   esac
+
+  # libelidealloc-shim: files, frozen v1 ABI, backend, and the behaviour test.
+  assert_file "$p/lib/libelidealloc-shim.a"
+  assert_file "$p/include/elidealloc-shim.h"
+  assert_file "$p/lib/pkgconfig/elidealloc-shim.pc"
+  backend="$(sed -n 's/^backend=//p' "$p/lib/pkgconfig/elidealloc-shim.pc")"
+  assert_eq "$backend" "$(elidealloc_backend "$t")" "shim backend ($t)"
+  re="$STAGE1_DIR/bin/llvm-readelf"; [ -x "$re" ] || re="$BUNDLE_DIR/bin/llvm-readelf"
+  tmp="$(mktemp -d)"
+  ar="$STAGE1_DIR/bin/llvm-ar"; [ -x "$ar" ] || ar="$BUNDLE_DIR/bin/llvm-ar"
+  (cd "$tmp" && "$ar" x "$p/lib/libelidealloc-shim.a")
+  syms="$(for o in "$tmp"/*.o; do "$re" -sW "$o"; done \
+    | awk '$5 == "GLOBAL" && $6 == "DEFAULT" && $7 != "UND" { print $8 }' | LC_ALL=C sort -u)"
+  assert_eq "$syms" "$(cat "$ROOT_DIR/src/elidealloc-shim/abi-v1.symbols")" "shim exports exactly the frozen v1 ABI ($t)"
+  if [ "$(triple_libc "$t")" = musl ]; then
+    [ -e "$p/lib/libmimalloc.a" ] && _fail "musl sysroot must not carry a second mimalloc (libmimalloc.a)"
+  fi
+  if [ "$(triple_os "$t")" = linux ] || [ "$HOST_OS" = darwin ]; then
+    cxx="$TOOLCHAIN_ROOT/bin/$t-clang++"; [ -x "$cxx" ] || cxx="$STAGE1_DIR/bin/$t-clang++"
+    [ -x "$cxx" ] || cxx="$BUNDLE_DIR/bin/$t-clang++"
+    extra=(); case "$(triple_libc "$t")" in gnu) extra=(-lmimalloc) ;; musl) extra=(-static) ;; esac
+    if "$cxx" -O2 -I"$p/include" "$ROOT_DIR/tests/fixtures/elidealloc-shim-test.cc" -lelidealloc-shim "${extra[@]}" \
+         -o "$tmp/shim-test" 2>"$tmp/err"; then
+      assert_ok "$tmp/shim-test"
+      assert_ok env ELIDEALLOC_DISABLE=1 "$tmp/shim-test" disabled
+      assert_ok env ELIDEALLOC_HOT_MIN=200 "$tmp/shim-test" hotmin200
+    else
+      _fail "shim test build ($t): $(head -3 "$tmp/err")"
+    fi
+  fi
+  rm -rf "$tmp"
 done
 finish

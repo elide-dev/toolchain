@@ -1,0 +1,10 @@
+prefix=/usr
+libdir=${prefix}/lib
+includedir=${prefix}/include
+backend=@BACKEND@
+
+Name: elidealloc-shim
+Description: Allocation-hint heap partitioning (MemProf hot/cold) for elide-toolchain
+Version: @VERSION@
+Libs: -L${libdir} @LIBS@
+Cflags: -I${includedir}
