@@ -1,15 +1,17 @@
 {
-  "name": "install-musl-toolchain",
+  "name": "setup-elide-toolchain",
   "version": "1.0.0",
-  "description": "GitHub Action to install the Elide musl toolchain for WHIPLASH",
+  "description": "GitHub Action to install an Elide toolchain bundle",
   "main": "main.ts",
   "type": "module",
   "scripts": {
     "build": "bun build main.ts --outdir dist --target node",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
   },
   "dependencies": {
     "@actions/core": "^1.11.1",
+    "@actions/exec": "^1.1.1",
     "@actions/tool-cache": "^2.0.2",
     "@actions/io": "^1.1.3"
   },

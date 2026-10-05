@@ -1,23 +1,39 @@
-name: Musl Toolchain
-description: Install Elide's musl toolchain in GHA
+name: Elide Toolchain
+description: Install an Elide native toolchain bundle (clang/lld + musl/glibc/macOS sysroots)
 
 inputs:
-  revision:
-    description: Revision
   version:
-    description: Version
-    default: "1.2.51"
-  baseline:
-    description: Baseline
-    default: "1.2.5"
-  arch:
-    description: Architecture
+    description: "Toolchain version (YYYY.MM.N, optionally v-prefixed) or 'latest'"
+    default: latest
+  target:
+    description: "Optional target triple; exports CC/CXX/AR/... and pkg-config/CMake settings for it"
     required: false
-    default: amd64
+  github-token:
+    description: "Token for the GitHub Releases API (avoids rate limits)"
+    default: ${{ github.token }}
+  os:
+    description: "Override bundle OS (linux|darwin); defaults to the runner"
+    required: false
+  arch:
+    description: "Override bundle arch (amd64|arm64); defaults to the runner"
+    required: false
+  archive:
+    description: "Install from a local .tar.xz instead of downloading (testing)"
+    required: false
+  base-url:
+    description: "Mirror base URL"
+    default: https://static.elideusercontent.com
+  repo:
+    description: "GitHub repository publishing releases"
+    default: elide-dev/toolchain
 
 outputs:
-  musl-home:
-    description: Path to the installed toolchain
+  home:
+    description: Bundle root (also exported as ELIDE_TOOLCHAIN_HOME)
+  version:
+    description: Installed bundle version
+  targets:
+    description: JSON array of target triples in the bundle
 
 runs:
   using: node24
