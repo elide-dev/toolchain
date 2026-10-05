@@ -2,7 +2,8 @@
 # Stage 30: LLVM runtimes for each Linux triple, cross-built by stage-1 clang with bare
 # --target/--sysroot (NOT the cfg: its -rtlib=compiler-rt would break cmake probes before the
 # builtins exist). Installed into both the stage-1 prefix (so stage-1 clang finds them in its
-# own resource dir in later stages) and the bundle.
+# own resource dir in later stages) and the bundle. --no-default-config keeps a rerun bare too:
+# clang >= 16 auto-loads bin/<target>.cfg, and this stage installs those cfgs into stage 1.
 
 stage_applies() { [ "$HOST_OS" = linux ]; }
 
@@ -18,7 +19,7 @@ stage_main() {
 
 runtimes_common_args() {
   local t="$1" s="$STAGE1_DIR/bin" af
-  af="$(arch_flags "$t")"
+  af="--no-default-config $(arch_flags "$t")"
   printf '%s\n' \
     -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \

@@ -35,14 +35,15 @@ build_musl_phase2() {
   local t="$1" s="$STAGE1_DIR/bin" sysroot prefix tflags lto="" ldflags libcc obj="" glue="" malloc_arg=""
   sysroot="$(sysroot_of "$t")"
   prefix="$(target_prefix "$t")"
-  tflags="--target=$t --sysroot=$sysroot"
+  # --no-default-config: bare stage-1 clang must not auto-load stage1/bin/<target>.cfg (spec §3.3).
+  tflags="--no-default-config --target=$t --sysroot=$sysroot"
   ldflags="$tflags -fuse-ld=lld"
   if is_yes "$MUSL_USE_LTO"; then
     lto="-flto=thin -ffat-lto-objects"
     # ldso bootstrap calls __dls2/__dls3 from asm, invisible to LTO: keep them, link libc.so without LTO.
     ldflags="$ldflags -fno-lto -Wl,--undefined=__dls2 -Wl,--undefined=__dls3"
   fi
-  libcc="$("$s/clang" --target="$t" -rtlib=compiler-rt -print-libgcc-file-name)"
+  libcc="$("$s/clang" --no-default-config --target="$t" -rtlib=compiler-rt -print-libgcc-file-name)"
   [ -f "$libcc" ] || die "compiler-rt builtins missing for $t ($libcc); run 30-runtimes"
 
   if is_yes "$MUSL_USE_MIMALLOC"; then

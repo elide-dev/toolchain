@@ -33,6 +33,9 @@ stage_main() {
   (cd "$ROOT_DIR/glibc" && git checkout -q .)   # leave the submodule pristine; patches live in src/patches
   ensure_loader_link "$sysroot" "$cpu"
   (cd "$sysroot" && find . -type f -o -type l | sed 's#^\./##' | sort) > "$OUT_DIR/glibc-files.txt"
+  # After the snapshot, so it is checked as ours, not exempted as a glibc file: rustc's gnu std
+  # always passes -lgcc_s; there is no libgcc in this toolchain, so redirect it to libunwind.
+  printf 'INPUT(-lunwind)\n' > "$sysroot/usr/lib/libgcc_s.so"
 }
 
 # ensure_loader_link SYSROOT CPU — the canonical PT_INTERP path must exist inside the sysroot
