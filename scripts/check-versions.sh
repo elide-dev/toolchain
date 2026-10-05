@@ -9,7 +9,7 @@ source "$ROOT_DIR/versions.env"
 status=0
 while read -r line; do
   flag="${line:0:1}"
-  sha="$(echo "$line" | awk '{print $1}' | tr -d '+-U')"
+  sha="$(echo "$line" | awk '{print $1}' | tr -d '+U-')"
   path="$(echo "$line" | awk '{print $2}')"
   gitlink="$(git -C "$ROOT_DIR" ls-files -s -- "$path" | awk '{print $2}')"   # staged gitlink
   var="$(echo "$path" | tr 'a-z-' 'A-Z_')_REV"

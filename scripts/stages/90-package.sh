@@ -18,7 +18,12 @@ stage_main() {
   archive="$DIST_DIR/$name.tar.xz"
   mkdir -p "$DIST_DIR"
   rm -f "$archive" "$archive.sha256"
-  XZ_OPT="-T0 -9" tar -C "$OUT_DIR" -cJf "$archive" "$TOOLCHAIN_NAME"
+  # Compress explicitly (macOS bsdtar ignores XZ_OPT) and keep xattrs/AppleDouble files out on
+  # darwin, so both OSes produce the same kind of archive.
+  local tar_flags=()
+  if [ "$HOST_OS" = darwin ]; then tar_flags=(--no-xattrs --no-mac-metadata); fi
+  COPYFILE_DISABLE=1 tar -C "$OUT_DIR" "${tar_flags[@]}" -cf - "$TOOLCHAIN_NAME" | xz -T0 -9 > "$archive.tmp"
+  mv "$archive.tmp" "$archive"
   printf '%s  %s\n' "$(sha256_of "$archive")" "$name.tar.xz" > "$archive.sha256"
   cp "$meta/sbom.cdx.json" "$DIST_DIR/$name.sbom.cdx.json"
   log "wrote $archive"

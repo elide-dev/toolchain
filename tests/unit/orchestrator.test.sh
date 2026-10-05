@@ -46,6 +46,10 @@ run --targets aarch64-unknown-linux-gnu; assert_eq "$?" 1 "foreign target reject
 run --only 99-nope;        assert_eq "$?" 1 "unknown stage rejected"
 run --bogus;               assert_eq "$?" 2 "unknown flag rejected"
 
+run --clean --only 99-nope; assert_eq "$?" 1 "--clean with unknown --only stage rejected"
+assert_file "$T/out/stamps/95-verify.done"
+run --clean --from 99-nope; assert_eq "$?" 1 "--clean with unknown --from stage rejected"
+assert_file "$T/out/stamps/95-verify.done"
 run --clean --only 00-sources
 assert_fails test -f "$T/out/stamps/95-verify.done"
 
