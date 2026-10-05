@@ -97,8 +97,8 @@ Nothing on `main` adds an aarch64 or Darwin memprof runtime [web].
 - Prototype shim (`operator new(size_t, __hot_cold_t)` → cold heap in an exclusive 256 MiB
   arena when hint < 128, else `::operator new`): cold allocation lands in the cold arena,
   hot does not, cross-thread alloc/free works; gnu (`-lmimalloc`) and musl `-static` [exp].
-- musl **dynamic**: the sysroot `libc.so` does not export `mi_*`, so a shim that calls
-  `mi_heap_*` fails to link dynamically (`undefined symbol: mi_reserve_os_memory_ex`) [exp].
+- musl is static-only downstream (dynamic musl is not a supported configuration), so the
+  shim always resolves `mi_*` from `libc.a`'s single `mimalloc.o` member [src: stage 35].
 
 ### 1.5 Rust
 
@@ -121,7 +121,35 @@ Nothing on `main` adds an aarch64 or Darwin memprof runtime [web].
 - `-Cllvm-args=-basic-block-address-map` is accepted by rustc 1.101 nightly and emits
   `.llvm_bb_addr_map` [exp] (relevant to DeduBB/Propeller).
 
-### 1.6 GraalVM native-image
+### 1.6 Allocation tokens (`-fsanitize=alloc-token`), for the shim's future interface
+
+What 23.1.2 offers [src: `clang/docs/AllocToken.rst`; `llvm/lib/Transforms/Instrumentation/AllocToken.cpp`]:
+- `-fsanitize=alloc-token` rewrites allocation calls to `__alloc_token_<fn>(args..., size_t token_id)`:
+  `__alloc_token_malloc`, `_calloc`, `_realloc`, `_aligned_alloc`, `_posix_memalign`, … and C++
+  `__alloc_token__Znwm`, `__alloc_token__Znam`, the nothrow/aligned variants, **and the hot/cold
+  variants** (`__alloc_token__Znwm12__hot_cold_t`, …, `__size_returning_new_hot_cold`)
+  (`AllocToken.cpp:413-461`). `strdup`/`strndup` are excluded (`:463-472`). Replaceable
+  `operator new` is covered by default (`-alloc-token-cover-replaceable-new`, `:93-96`).
+- Fast ABI `-fsanitize-alloc-token-fast-abi`: the token is in the name, `__alloc_token_<N>_malloc(size)`
+  (useful with a small `-falloc-token-max=<N>`) [src: AllocToken.rst; Options.td:2961-2979].
+- Token modes: default `typehashpointersplit` (type-name hash; the top half of the ID space
+  is for pointer-containing types). Experimental `typehash`, `random`, `increment` via
+  `-Xclang -falloc-token-mode=` [src: AllocToken.rst].
+- `-fsanitize-alloc-token-extended` also covers custom `malloc`/`alloc_size` functions;
+  `__builtin_infer_alloc_token(args…)` gives the token at compile time; `__SANITIZE_ALLOC_TOKEN__` macro;
+  `no_sanitize("alloc-token")` and ignorelists [src: AllocToken.rst].
+- **No runtime in compiler-rt**: the allocator must provide every `__alloc_token_*` entry point
+  [src: no `compiler-rt/lib/*token*`; exp: `-###` links nothing extra].
+- Pipeline: `AllocTokenPass` runs **after** LTO pre-link (`if (!isLTOPreLink(LTOPhase))`,
+  `PassBuilderPipelines.cpp:1687-1690`), i.e. in the ThinLTO backend (`:1993-1995`) and after
+  `SimplifyLibCalls`' hot/cold rewrite. MemProf hints and tokens therefore compose
+  into one call `__alloc_token__Znam12__hot_cold_t(size, hint, token)` (E21).
+- Frees are not tokenized: `free`/`operator delete` stay as they are, so a token-partitioning
+  allocator must free by pointer, which mimalloc's `mi_free` does across heaps.
+- Rust: rustc has no alloc-token flag *(not checked beyond the options.rs scan in §1.5)*.
+  `__rust_alloc` is not a TLI libfunc, so even LTO-linked Rust is not tokenized.
+
+### 1.7 GraalVM native-image
 
 - Java code is compiled by Graal's own backend; MemProf (an LLVM IR feature) cannot see
   it. The LLVM backend (`-H:CompilerBackend=llvm`) was experimental and has been
@@ -220,9 +248,11 @@ Against 23.1.2 [exp]:
 
 - DeduBB's Propeller patch is based on `google/llvm-propeller@e2c70493656` (2026-05-04,
   "Integrate LLVM at llvm/llvm-project@665984f5b327"); our pin `ddfb8b7cbdb8` is 22 commits
-  ahead [web]. Against our pin: `generate_propeller_profiles.cc` hunk fails (include list
-  changed) and `profile_generator.cc` hunk fails; other files apply with offsets [exp].
-  A rebase is needed (small, mechanical for the failing hunks; the 6.5k lines are mostly new files).
+  ahead [web]. Against our pin, two hunks are rejected (E23): the include block of
+  `generate_propeller_profiles.cc` and the context of the new `DisassembleOne(ArrayRef…)`
+  overload in `mini_disassembler.cc`. A third hunk must be **dropped**, not rebased: it switches
+  `MCContext`'s constructor to the older pointer API of DeduBB's LLVM base, while 23.1.2 (and our
+  propeller pin) use references. All three fixes are mechanical.
 - The repo's own `src/patches/llvm-propeller/0001-find-package-llvm.patch` and
   `0002-mccontext-asminfo-pointer.patch` **no longer apply** to the pinned `ddfb8b7` in
   either direction (`CMake/LLVM/LLVM.cmake` now pins LLVM `db9b595ae3b3` and
@@ -231,6 +261,35 @@ Against 23.1.2 [exp]:
   time (`CMake/*/CMakeLists.txt.in`, `CMake/Protobuf/Protobuf.cmake:27-28`) [src].
 - `generate_propeller_profiles` with DeduBB handles x86 and aarch64/arm ELF (`Triple::` switch,
   4-byte AArch64 patch size); subsequence/CR/SJ estimation is x86-64 only [src: patch ~1313-1322, 3189-3225].
+
+### 2.5 Propeller revival spike (2026-10-05)
+
+Goal: build the pinned `llvm-propeller` (`ddfb8b7`, which is upstream HEAD as of today) against
+the bundle's LLVM 23.1.2, read-only against `out/` (E22–E24).
+
+- Propeller pins LLVM `db9b595ae3b3` (2026-05-27) in `CMake/LLVM/LLVM.cmake`; that is an
+  ancestor of 23.1.2 (6659 commits behind the tag) [web].
+- Replaced `CMake/LLVM/LLVM.cmake` with a 15-line `find_package(LLVM CONFIG)` module
+  (`LLVM_DIR=out/linux-amd64/build/llvm-stage2/lib/cmake/llvm`, plus
+  `${LLVM_MAIN_SRC_DIR}/lib/Target/{X86,AArch64}` include dirs). Compiler: stage-1
+  `x86_64-unknown-linux-gnu-clang++` (cfg: glibc 2.34 sysroot, libc++, lld). So it is
+  ABI-compatible with the stage-2 static LLVM libraries.
+- Configure-time downloads (network): abseil `20260107.1`, protobuf `33.4`, googletest,
+  quipper (`google/perf_data_converter@f9eb05fcce80`) [src: `CMake/*`].
+- System libraries (`CMakeLists.txt:33-35`): `libz` → sysroot zlib-ng (compat) OK; `libcrypto` →
+  sysroot aws-lc OK (quipper uses MD5/EVP, `binary_data_utils.cc:7-8`); **`libelf` is not in
+  our sysroots**. quipper's `dso.cc` uses it only to read ELF build-id notes (`dso.cc:7-128`).
+  The spike used the host's `libelf.a` plus a one-line `__isoc23_strtol` shim (host libelf is
+  built against glibc ≥ 2.38).
+- Result: **every propeller, absl, protobuf and quipper TU compiled against 23.1.2 unmodified**;
+  `generate_propeller_profiles` linked (36 MB, max symbol version `GLIBC_2.34`) and runs.
+- With DeduBB's Propeller patch (3 mechanical fixes, §2.4): builds, and
+  `--binary=<-fbasic-block-address-map ThinLTO binary> --dedubb_profile=out.txt --dedubb_subsequence`
+  emitted `bbm`/`bbf` for the 2-function fixture (`fold_fn`/`master_fn`, BB 0, `block_insts=7`)
+  and 25 directives for DeduBB's `examples/test{1,2}.cpp`.
+- Not exercised: the layout path (`--profile=perf.data --cc_profile --ld_profile`). This
+  WSL2 host has no LBR (`perf record -j any,u`: "PMU Hardware or event type doesn't support
+  branch stack sampling"). Also not exercised: the DeduBB fold step, which needs a patched clang/lld.
 
 ## 3. Pipeline facts relevant to both
 
@@ -241,14 +300,6 @@ Against 23.1.2 [exp]:
   independently DeduBB'd relocatable inputs in one link would collide [unverified, by reading].
 - cflags profile: `-fcf-protection=full` and `-fbasic-block-sections=all` are parked in
   `cflags/labs.disabled.txt`; linux-arm64 uses `-mbranch-protection=standard` [src].
-
-## 4. Side finding (not in scope, flagged)
-
-A trivially dynamic musl C program built by the existing bundle
-(`x86_64-unknown-linux-musl-clang h.c`) segfaults when run through the sysroot's own loader
-(`sysroot/x86_64-unknown-linux-musl/lib/ld-musl-x86_64.so.1 ./h.musl` → rc 139), but runs
-with the host's stock `/lib/ld-musl-x86_64.so.1` [exp]. Dynamic musl with mimalloc-in-libc
-may be broken. Static musl (the supported path) is unaffected.
 
 ## Experiments (all in the session scratchpad)
 
@@ -265,7 +316,7 @@ may be broken. Static musl (the supported path) is unaffected.
 | E9 | patched `llc` (23.1.2 `llvm/` + DeduBB CodeGen patch, X86;AArch64, stage-1 clang), the patch's 6 `dedubb*.ll` tests via a minimal RUN-line runner | **6/6 pass** (21 RUN lines, incl. `-verify-machineinstrs`). 40 existing `test/CodeGen/X86` tests that use `blockaddress` / BB sections / BB address map also pass (regression probe for the unconditional `UnreachableBlockElim` change). Not run: full `check-llvm`, lld test, any end-to-end binary fold |
 | E10 | gnu: instrument (`-fmemory-profile -fno-pie -no-pie -Wl,-z,noseparate-code -Wl,--build-id`) → run → `memprof.profraw.<pid>` → `merge --profiled-binary` → use → link | works end to end; 6 match remarks; `_Znam12__hot_cold_t` emitted |
 | E11 | musl `-static` instrumented link | fails: `undefined hidden symbol: _DYNAMIC` (runtime needs dynamic) |
-| E12 | musl dynamic instrumented binary (host musl loader) | runs, profile merges and is consumed |
+| E12 | musl dynamic instrumented binary (host's musl loader) | runs, profile merges and is consumed (dynamic musl is not a supported downstream configuration; recorded only as runtime evidence) |
 | E13 | gnu-collected profile used for a musl compile | same 6 matches |
 | E14 | mimalloc hot/cold shim prototype, gnu + musl static | cold → cold arena, hot → default, cross-thread OK |
 | E15 | rustc `-Cpasses=memprof-module,function(memprof)` + bundle runtime | instruments, runs, profile merges |
@@ -273,4 +324,8 @@ may be broken. Static musl (the supported path) is unaffected.
 | E17 | rustc `-Cllvm-args=-basic-block-address-map` | accepted; `.llvm_bb_addr_map` emitted |
 | E18 | gnu instrumented build compiled and linked with `-flto=thin` | instrumentation survives the ThinLTO link; profile (2 contexts) merges; use step gets 6 matches |
 | E19 | `--target=arm64-apple-macos12 -fbasic-block-address-map` | `unsupported option` (BB address maps are ELF-only); accepted for `aarch64-unknown-linux-gnu` |
+| E21 | `-fsanitize=alloc-token` (C, non-LTO; fast ABI with `-falloc-token-max=4`; ThinLTO + MemProf hints) | `__alloc_token_malloc`/`_calloc`; `__alloc_token_3_malloc`/`__alloc_token_0_calloc`; pre-link objects carry only `!alloc_token` metadata; final link needs exactly `__alloc_token__Znam12__hot_cold_t` |
+| E22 | llvm-propeller `ddfb8b7` against stage-2 LLVM 23.1.2 (find_package, stage-1 gnu cfg compiler) | all TUs compile; link needs libelf (host `libelf.a` + `__isoc23_strtol` shim); binary runs, `GLIBC_2.34` floor |
+| E23 | DeduBB Propeller patch onto `ddfb8b7` | 2 rejected hunks + 1 hunk to drop (MCContext pointer API); fixed by hand; builds |
+| E24 | spike `generate_propeller_profiles --dedubb_profile` on fixtures | correct `bbm`/`bbf` directives (2-function fixture; 25 for DeduBB examples) |
 | E20 | scratch `libclang_rt.memprof.so` (gnu) | needs only `libc.so.6`, `libm.so.6`; highest symbol version `GLIBC_2.34` (passes the floor check) |
