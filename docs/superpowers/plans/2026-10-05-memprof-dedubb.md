@@ -8,6 +8,8 @@
 
 **Tech Stack:** bash, POSIX sh (helper), CMake + Ninja, LLVM 23.1.2, llvm-propeller (`ddfb8b7`), abseil/protobuf/googletest/quipper, compiler-rt, mimalloc 3.5.4, C++17/20, Python 3 (manifest).
 
+**Status (2026-10-05):** implemented on `design/memprof-dedubb`. Deviations and decisions made while implementing are recorded in spec §12 (notably: quipper also drops libcrypto/libz; feature checks live in `scripts/verify/checks-pgo.sh`; the shim's DEFAULT path is the stock allocator). The v2 token members remain a follow-up.
+
 **Spec:** `docs/superpowers/specs/2026-10-05-memprof-dedubb-design.md` (§N below). Evidence: `docs/notes/memprof-dedubb-research.md` (EN = experiment N). LLVM patch tracking: [elide-dev/toolchain#4](https://github.com/elide-dev/toolchain/issues/4) (source text `docs/notes/llvm-backports-issue.md`).
 
 ## Global Constraints

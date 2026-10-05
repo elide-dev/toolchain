@@ -88,11 +88,49 @@ eval "$(elide-toolchain env --target x86_64-unknown-linux-gnu)"
 
 **GraalVM native-image.** Linux bundles ship `<cpu>-linux-musl-gcc` / `-g++` (and `cc`, `c++`, `ar`, `ranlib`, `nm`, `strip`) as shims over clang and the llvm tools, so `native-image --libc=musl` works with `bin/` on `PATH`. The shims never add `-static`.
 
-**Doctor.** `elide-toolchain doctor` compiles, links and runs a C and C++ hello world for every triple in the bundle. Other subcommands: `home`, `targets`, `version`.
+**Doctor.** `elide-toolchain doctor` compiles, links and runs a C and C++ hello world for every triple in the bundle. Other subcommands: `home`, `targets`, `version`, `flags` (see below).
 
 **Link rules.** Component archives are pure ThinLTO bitcode by design, so link them with LLVM at least the bundle's major: the bundle's clang/lld, or rust-lld from a rustc whose LLVM major is <= the bundle's. A non-LLVM linker (GNU ld, Apple ld64) fails loudly; it does not silently skip LTO. On macOS, link through the bundle's `<triple>-clang` (its cfg sets `-fuse-ld=lld`), not Apple's `ld64`. musl `libc.a` and libc++ are fat objects: lld uses their native code unless the link passes `-flto=thin -ffat-lto-objects` (clang forwards `--fat-lto-objects`); pass it to get cross-module LTO into libc and libc++.
 
 C++ implies libc++ on every target; there is no libstdc++ in the bundle, so drop any `-lstdc++`.
+
+## Profile-guided layout, deduplication and memory hints
+
+Design: `docs/superpowers/specs/2026-10-05-memprof-dedubb-design.md`. LLVM carries a few local patches (MemProf backports, DeduBB), tracked in [#4](https://github.com/elide-dev/toolchain/issues/4) and `docs/notes/llvm-patches.md`. `elide-toolchain flags --target <triple> <mode>...` prints `ELIDE_CFLAGS`, `ELIDE_CXXFLAGS`, `ELIDE_LDFLAGS` and `ELIDE_RUSTFLAGS` (linker-plugin LTO) for each step below. Modes combine.
+
+| Feature | Linux x86_64 | Linux aarch64 | macOS |
+|---|---|---|---|
+| Propeller (`bin/generate_propeller_profiles`) | yes (LBR profiles) | yes (SPE profiles, unverified) | no (ELF only) |
+| DeduBB (code-size deduplication) | yes | yes (tail-call folds only) | no |
+| MemProf profile collection | gnu only | no | no |
+| MemProf use + `libelidealloc-shim` | yes | yes | shim forwards (no partitions) |
+
+**Propeller.** Profiles come from `perf` with branch sampling (LBR on x86, SPE on arm64), recorded **by you on your own perf-capable hosts** with real workloads. The bundle ships the tool and compiler support; our CI cannot branch-sample and verifies from fixtures (`docs/notes/propeller-fixtures.md`).
+```sh
+eval "$(elide-toolchain flags --target x86_64-unknown-linux-gnu propeller-baseline)"   # labelled build
+perf record -e cycles:u -j any,u -o perf.data -- ./app <workload>
+generate_propeller_profiles --binary=./app --profile=perf.data --cc_profile=cc.txt --ld_profile=ld.txt
+eval "$(elide-toolchain flags --target x86_64-unknown-linux-gnu propeller-use=cc.txt,ld.txt)"  # relink
+```
+
+**DeduBB** ([LCTES '26](https://dl.acm.org/doi/10.1145/3814943.3816169)) folds identical basic blocks across the whole program into jumps or calls to one copy. It is static: directives come from the labelled binary alone, with no profile needed. The patched compiler is unchanged unless you pass a directive file.
+```sh
+generate_propeller_profiles --binary=./app --dedubb_profile=dedubb.txt [--dedubb_subsequence]
+eval "$(elide-toolchain flags --target x86_64-unknown-linux-gnu dedubb-apply=dedubb.txt)"     # relink
+```
+Add `--dedubb_cold_only --profile=perf.data` to fold only never-executed blocks, and combine with `propeller-use=` for one relink. Apply it to final links only, never to static archives you ship. Never collect profiles from a DeduBB binary.
+
+**MemProf.** Collect on `x86_64-unknown-linux-gnu` (the only runtime upstream supports); use the profile on any triple. Hints need ThinLTO and an allocator: `libelidealloc-shim` (below).
+```sh
+eval "$(elide-toolchain flags --target x86_64-unknown-linux-gnu memprof-instrument)"; ./app   # memprof.profraw.<pid>
+llvm-profdata merge memprof.profraw.* --profiled-binary ./app -o app.memprofdata
+eval "$(elide-toolchain flags --target <triple> memprof-use=app.memprofdata)"
+```
+Only C++ `operator new` sites are hinted (not `malloc`, not Rust allocations). Rust binaries that link C++ through `-Clinker-plugin-lto` get hints for the C++ parts. Name profile and directive files by content hash: ThinLTO and compiler caches key on the path, not the contents.
+
+**libelidealloc-shim** (`-lelidealloc-shim`, `elidealloc-shim.h`, `pkg-config elidealloc-shim`; gnu also needs `-lmimalloc`; musl links static). Provides the tcmalloc-compatible `operator new(size_t, __hot_cold_t)` that MemProf calls, plus a small C API (`elidealloc_malloc(size, ELIDEALLOC_COLD, 0)`, `elidealloc_partition_of`, stats). Hint ≤ 63 goes to a dedicated COLD heap and ≥ 240 to a HOT heap. `notcold` (128) and `ambiguous` (222) stay with the stock allocator. The backend is mimalloc on Linux and `forward` on macOS. Tune with `ELIDEALLOC_COLD_MAX`, `ELIDEALLOC_HOT_MIN`, `ELIDEALLOC_{COLD,HOT}_RESERVE_MB`, `ELIDEALLOC_HOT_LARGE_PAGES`; `ELIDEALLOC_DISABLE=1` for A/B runs, `ELIDEALLOC_STATS=1` for counters at exit. ABI v1 is frozen (`src/elidealloc-shim/abi-v1.symbols`); allocation tokens will arrive as an additive v2.
+
+**GraalVM native-image** Java code cannot take part (Graal compiles it). Separately built C/C++ (JNI libraries) can.
 
 ## Layout
 
@@ -101,6 +139,7 @@ elide-toolchain/
   bin/
     clang clang++ clang-cpp ld.lld lld llvm-ar llvm-nm llvm-ranlib llvm-objcopy llvm-strip ...
     llvm-bolt perf2bolt merge-fdata llvm-profgen llvm-profdata llvm-dwarfdump llvm-dwp   (Linux)
+    generate_propeller_profiles           # Propeller layout profiles + DeduBB directives (Linux)
     elide-toolchain                       # helper CLI (POSIX sh)
     <triple>.cfg                          # clang config per target triple
     <triple>-clang  -> clang
@@ -108,7 +147,7 @@ elide-toolchain/
     <arch>-linux-musl-gcc, <arch>-linux-musl-g++   # Linux GCC-named shims
   lib/
     clang/<major>/include/                # resource dir
-    clang/<major>/lib/<triple>/libclang_rt.*   # Linux: builtins, crtbegin/crtend, profile
+    clang/<major>/lib/<triple>/libclang_rt.*   # Linux: builtins, crtbegin/crtend, profile; memprof (x86_64 gnu)
     clang/<major>/lib/darwin/libclang_rt.*     # macOS
     <triple>/libc++.a libc++abi.a libunwind.a  # Linux
   include/
@@ -117,6 +156,7 @@ elide-toolchain/
   sysroot/
     <arch>-unknown-linux-musl/usr/{include,lib}   # musl+mimalloc, kernel headers, components
     <arch>-unknown-linux-gnu/usr/{include,lib}    # glibc 2.34, kernel headers, components, libmimalloc.a
+    <every sysroot>/usr/lib/libelidealloc-shim.a, usr/include/elidealloc-shim.h
     <arch>-apple-darwin/usr/{include,lib}         # macOS component overlay (no SDK)
   share/elide-toolchain/
     manifest.json
@@ -124,7 +164,7 @@ elide-toolchain/
     cmake/<triple>.cmake
 ```
 
-`manifest.json` records the version, revision, host floors (`glibcFloor`, `march`), per-target libc and march/mtune, component versions, `llvmMajor` and the cflags profile.
+`manifest.json` records the version, revision, host floors (`glibcFloor`, `march`), per-target libc and march/mtune, component versions, `llvmMajor`, the cflags profile, and `features` (Propeller tool and pin, DeduBB, MemProf runtime targets and backports, shim ABI and per-triple backend).
 
 ## Migrating from musl-toolchain
 
@@ -185,10 +225,11 @@ Stages:
 | 10 | `llvm-stage1` | Linux: host compiler builds clang/lld (not shipped). macOS: builds the full LLVM (floor 12.0) and compiler-rt directly into the bundle |
 | 20 | `libc-gnu` | Host GCC builds glibc 2.34 into the gnu sysroot (Linux) |
 | 21 | `libc-musl` | Stage-1 clang builds musl phase 1 (Linux) |
-| 30 | `runtimes` | compiler-rt, libunwind, libc++abi, libc++ per Linux triple, as fat ThinLTO archives |
-| 35 | `mimalloc` | musl: mimalloc into musl phase 2; gnu/macOS: standalone `libmimalloc.a` |
+| 30 | `runtimes` | compiler-rt, libunwind, libc++abi, libc++ per Linux triple, as fat ThinLTO archives; the memprof runtime for x86_64 gnu |
+| 35 | `mimalloc` | musl: mimalloc into musl phase 2; gnu/macOS: standalone `libmimalloc.a`; `libelidealloc-shim.a` for every triple |
 | 36 | `llvm-deps` | Static zlib-ng and zstd for the stage-2 LLVM build (Linux, not shipped) |
 | 40 | `llvm-stage2` | Rebuild clang/lld/bolt/polly against the gnu 2.34 sysroot with static libc++ (Linux); these are the shipped tools |
+| 45 | `propeller` | `generate_propeller_profiles` (with DeduBB) linked against the stage-2 LLVM build tree, offline from cached deps (Linux) |
 | 50 | `components` | Build each enabled component per triple with the bundle's own `<triple>-clang`, installing `.pc` files |
 | 90 | `package` | Helper CLI, cfgs, shims, CMake files, manifest and SBOM; strip; `tar -cJf` plus `.sha256` |
 | 95 | `verify` | Run every check (see Verification) against a fresh extraction of the archive |
@@ -197,7 +238,9 @@ Stages:
 
 - Components: `BUILD_ZLIB_NG`, `BUILD_ZSTD`, `BUILD_BROTLI`, `BUILD_SNAPPY`, `BUILD_LZ4`, `BUILD_CRC32C`, `BUILD_AWS_LC` (default yes); `BUILD_OPENSSL`, `BUILD_ZLIB`, `BUILD_SQLITE`, `BUILD_SQLCIPHER`, `BUILD_CAPNP`, `BUILD_HIREDIS`, `BUILD_LEVELDB` (default no).
 - musl: `MUSL_USE_MIMALLOC`, `MUSL_USE_LTO`. mimalloc: `MIMALLOC_SECURE`, `MIMALLOC_GUARDED`.
-- `USE_SCCACHE`, `REQUIRE_CONTAINER_CHECKS` (fail instead of skip when docker is missing).
+- LLVM features: `LLVM_DEDUBB` (DeduBB patch, default yes), `BUILD_PROPELLER` (stage 45, default yes).
+- `USE_SCCACHE`, `REQUIRE_CONTAINER_CHECKS` (fail instead of skip when docker is missing), `REQUIRE_LBR` (fail instead of skip when the live Propeller check finds no LBR/SPE).
+- Local patches live in `src/patches/<component>/`. Stage 00 un-applies them before its clean-submodule check, and the stages that build a component apply them again.
 
 > [!IMPORTANT]
 > Switching providers (zlib vs zlib-ng, OpenSSL vs AWS-LC) or disabling components requires `./build.sh --clean`. Otherwise stale archives and shared objects already in the sysroot shadow the new ones.
@@ -229,6 +272,10 @@ Stage 95 (`scripts/verify/checks.sh`) runs against a fresh extraction of the pac
 - **gcc shims (musl):** `<arch>-linux-musl-gcc hello.c -static` links and runs.
 - **macOS minos / dylibs (macOS):** `minos` <= 12.0 and no unexpected dylib dependencies.
 - **containers (Linux):** gnu smoke binaries and `clang --version` run inside `almalinux:9` and `ubuntu:22.04` (skipped without docker unless `REQUIRE_CONTAINER_CHECKS=yes`).
+- **propeller (Linux):** the shipped tool reproduces upstream's golden profile from checked-in perf data; a relink of upstream's fixture with the generated profiles shows functions in profile order, `.text.hot`/`.text.split`, and cold parts in `.text.split`. A live check runs only on hosts with LBR/SPE (otherwise a warned skip; `REQUIRE_LBR=yes` makes it fail).
+- **dedubb (Linux):** directives from a labelled binary; a relink with them folds the duplicate into a branch to `DeduBB.master.0` and the program still works. Without directives, the compiler's output is deterministic and has no DeduBB trace.
+- **elidealloc shim:** the shim test (hot/cold/default mapping, all eight overloads, alignment, OOM, cross-thread frees, C API, stats, env tuning) links through the shipped `.pc` and passes.
+- **memprof:** on x86_64 gnu, instrument, run, merge `--profiled-binary`. On every triple, a YAML profile is matched, the ThinLTO link clones the allocation context and calls `_Znam12__hot_cold_t`, and the cold object lands in the COLD partition. Without `-supports-hot-cold-new` no hint survives. No memprof runtime ships for other triples.
 - **relocatable:** the bundle is copied elsewhere and smoke tests plus `elide-toolchain doctor` rerun.
 
 Unit tests and shellcheck: `tests/run.sh`. Per-stage checks: `tests/stages/*.check.sh`. Action tests: `cd action && bun test`.

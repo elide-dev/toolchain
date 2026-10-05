@@ -524,3 +524,45 @@ cannot branch-sample and won't be changed, so Propeller CI verification uses fix
 - rustc changes (MemProf use, tokens, applying cluster files to non-LTO crates).
 - Building the v2 token members (designed here, implemented in a follow-up).
 - Upstreaming DeduBB.
+
+## 12. Implementation decisions (2026-10-05)
+
+Recorded while implementing the plan. Each one refines or deviates from the text above.
+
+1. **quipper without libcrypto and libz.** Besides the libelf → LLVM `Object` rewrite (D5),
+   quipper's only crypto use (`Md5Prefix`, OpenSSL EVP MD5) now uses `llvm::MD5`, and nothing in
+   propeller or quipper needs zlib. Patch `0002-quipper-llvm-object-no-libelf-libcrypto.patch`
+   drops all three `find_library` calls, so stage 45 depends only on the stage-2 LLVM and
+   `out/<host>/llvm-deps` (zstd, zlib for LLVMSupport). It can run directly after stage 40,
+   before the stage-50 components. Quipper is patched after download through
+   `PROPELLER_QUIPPER_PATCHES` (`src/patches/llvm-propeller/quipper/*.patch`, applied with
+   `patch -p1`; stage 45 requires `patch`).
+2. **Stage 00 un-applies before its clean check.** `unapply_patches` reverses `glibc`, `llvm` and
+   `llvm-propeller` series (last first) before the dirty-submodule check that `main` added. Stages
+   10/30/40 (llvm) and 45 (llvm-propeller) apply them again.
+3. **Feature checks in their own file.** All stage-95 checks for this work live in
+   `scripts/verify/checks-pgo.sh` (`run_feature_checks`), sourced by `checks.sh` with a one-line
+   hook. That keeps the shared file's diff minimal while other work (sanitizer variants) also
+   touches it.
+4. **MemProf runtime flags appended.** Stage 30 appends `-DCOMPILER_RT_BUILD_MEMPROF=ON
+   -DSANITIZER_CXX_ABI=none -DCMAKE_SHARED_LINKER_FLAGS=…` after `runtimes_common_args`
+   (later `-D` wins) instead of changing that function's signature, for the same merge reason.
+5. **Shim details.** Backends are selected by compiling `backend-<name>.cc` (no `-D` macro
+   needed). The public header also declares the eight `__hot_cold_t` overloads, so C++ code
+   can pass hints explicitly. Hints that map to DEFAULT, and partition allocations that fail, go to
+   the **stock** `::operator new` / `malloc` (not the backend's default heap). That keeps user
+   replacements of `operator new` and stock OOM behaviour. Throwing OOM is therefore the process
+   allocator's business (gnu's mimalloc `operator new` override aborts without a new_handler), and
+   the test checks only the nothrow variants. `elidealloc_backend TRIPLE` lives in
+   `scripts/lib/platform.sh` so stage 35, its stage check, and the manifest agree.
+6. **Frozen ABI check.** "Exported" means GLOBAL, DEFAULT-visibility, defined symbols in the
+   archive's native symbol tables (`llvm-readelf -sW` per member). Internals are built
+   `-fvisibility=hidden`, so they are GLOBAL HIDDEN and excluded.
+7. **Propeller relink fixture is x86_64-only.** The upstream `bimodal_sample_v2` perf data
+   carries x86-64 BB IDs, so `check_propeller_relink` runs for the x86_64 triples (both libcs).
+   aarch64 bundles still run `check_propeller_golden`, `check_propeller_tool` and DeduBB end to end.
+8. **DeduBB check reads the fold site from the directives** (`bbf` record's function) and
+   requires a direct branch to the `DeduBB.master.0` address, so it doesn't depend on which of the
+   two identical functions the tool picks as the master.
+9. **Manifest knobs.** `gen-manifest.py` reads `BUILD_PROPELLER`, `LLVM_DEDUBB` and
+   `MUSL_USE_MIMALLOC` from the environment (90-package passes them) to fill `features`.
