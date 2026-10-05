@@ -3,7 +3,7 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Ship compiler-rt sanitizer runtimes in every bundle, plus, for the Linux gnu triples,
-a `-sanitizers` overlay archive with ASan-, TSan- and MSan-instrumented libc++ and components. A
+a `-sanitizers` add-on archives with ASan-, TSan- and MSan-instrumented libc++ and components. A
 consumer then builds an end-to-end sanitized binary with one switch:
 `elide-toolchain env --target T --sanitizer S`.
 
@@ -13,7 +13,7 @@ components with the repo's existing recipes. It also assembles a symlink-farm sy
 `sysroot/<G>+<san>/` per variant. Selection uses generated POSIX-sh wrappers
 `bin/<T>-<san>-clang{,++}`, which stack `--config` layers on top of the normal auto-loaded
 `<T>.cfg`, and per-variant CMake toolchain files. Stage 90 splits the output into the main archive
-and the overlay archive.
+and the add-on archive.
 
 **Tech Stack:** bash (build), POSIX sh (wrappers, helper), CMake + Ninja, LLVM 23.1.x
 compiler-rt/libc++, Python 3 (manifest), TypeScript + bun (action), GitHub Actions.
@@ -21,6 +21,21 @@ compiler-rt/libc++, Python 3 (manifest), TypeScript + bun (action), GitHub Actio
 **Spec:** `docs/superpowers/specs/2026-10-05-sanitizer-variants-design.md` (§N below). **Evidence:**
 `docs/notes/sanitizer-spikes.md` (spikes A–H). Read both first. The base spec
 `docs/superpowers/specs/2026-10-04-universal-native-toolchain-design.md` stays binding.
+
+> **Revision 2026-10-05 (user decisions, spec §12).** Where task text below predates these, the
+> spec wins:
+> - **One add-on archive per sanitizer**: `elide-toolchain-<ver>-linux-<arch>-sanitizer-<san>.tar.xz`
+>   (+ `.sha256`), each with its own `share/elide-toolchain/sanitizers/<san>.addon.json`, layer cfg
+>   `<G>-<san>.addon.cfg`, farm `sysroot/<G>+<san>/` and `lib/<G>/<san>/`. `addon_paths S` is
+>   per sanitizer, and stage 90 writes one archive per variant (Task 12).
+> - musl is **static-only by design**. Task 2 (dynamic-musl check) is **dropped**.
+> - libFuzzer ships in the main bundle on gnu triples (Tasks 3–4).
+> - `BUILD_SANITIZER_VARIANTS` defaults to `no`. CI sets it to `yes` only on push to `main` and on
+>   release (Task 15).
+> - Action: a single `sanitizer:` input that fetches, verifies and extracts that sanitizer's add-on
+>   (Task 14). Helper: `env --sanitizer S` and `addon install sanitizer-<san>` (Tasks 8, 16).
+> - The main bundle must stay mise's unambiguous match (Task 1, plus a release-time guard in Task 15).
+
 
 ## Global Constraints
 
@@ -49,8 +64,8 @@ compiler-rt/libc++, Python 3 (manifest), TypeScript + bun (action), GitHub Actio
    uninstrumented archives and any `libunwind.a` in the variant dir.
 2. **CMake bypassing `-L`.** CMake consumers must resolve the farm's archives. Pinned by
    `check_sanitizer_cmake` (Task 13).
-3. **Overlay/main drift.** One `overlay_paths` function drives both archives (Task 12). The
-   overlay refuses to load over a different bundle version (helper check, Task 8).
+3. **Overlay/main drift.** One `addon_paths` function drives both archives (Task 12). The
+   add-on refuses to load over a different bundle version (helper check, Task 8).
 4. **mimalloc.** The farm's `libmimalloc.a` is the forwarding shim, never the `MI_OVERRIDE=ON`
    archive. Pinned by `check_sanitizer_mimalloc` (Task 13).
 5. **Relocation.** Wrappers and farm symlinks must work after moving the bundle to a path with a
@@ -75,11 +90,11 @@ scripts/components/aws-lc.sh, openssl.sh   # MODIFY: variant hooks (Task 9)
 scripts/stages/10-llvm-stage1.sh           # MODIFY: darwin sanitizers (Task 5)
 scripts/stages/30-runtimes.sh              # MODIFY: pass 3 + prune (Task 4)
 scripts/stages/60-sanitizer-variants.sh    # NEW (Task 11)
-scripts/stages/90-package.sh               # MODIFY: overlay archive (Task 12)
-scripts/stages/95-verify.sh                # MODIFY: extract overlay (Task 13)
+scripts/stages/90-package.sh               # MODIFY: add-on archives (Task 12)
+scripts/stages/95-verify.sh                # MODIFY: extract add-ons (Task 13)
 scripts/verify/checks.sh                   # MODIFY: sanitizer checks (Tasks 2, 7, 13)
-scripts/gen-manifest.py                    # MODIFY: sanitizers section, overlay.json (Task 12)
-src/elide-toolchain                        # MODIFY: --sanitizer, sanitizers, overlay install (Tasks 8, 16)
+scripts/gen-manifest.py                    # MODIFY: sanitizers section, <san>.addon.json (Task 12)
+src/elide-toolchain                        # MODIFY: --sanitizer, sanitizers, addon install (Tasks 8, 16)
 src/mimalloc-sanitizer-shim.c              # NEW (Task 10)
 tests/fixtures/sanitizers/{asan,tsan,msan,ubsan,lsan,hwasan}.c   # NEW (Task 7)
 tests/fixtures/sanitizers/{clean.cpp,exc.cpp,workload.c,mimalloc-oob.c,mimalloc-api.c,jni-lib.c,jni-host.c,cmake/CMakeLists.txt,rust/main.rs,rust/c_part.c}  # NEW (Tasks 7, 13)
@@ -104,7 +119,7 @@ docs/notes/build-timings.md                # MODIFY (Task 17)
 
 **Files:** Modify `docs/notes/mise-assets.md`.
 
-**Interfaces:** Produces the decision on the overlay asset name, which Tasks 12, 14 and 16 consume.
+**Interfaces:** Produces the decision on the add-on asset name, which Tasks 12, 14 and 16 consume.
 
 - [ ] **Step 1:** In the mise checkout used for `docs/notes/mise-assets.md` (tag `v2026.9.12`), read
   the scoring in `src/backend/asset_matcher.rs`. Determine what autodetection picks when a release
@@ -115,7 +130,7 @@ docs/notes/build-timings.md                # MODIFY (Task 17)
   anything.
 - [ ] **Step 2:** Decide:
   - main asset always wins → keep `…-linux-<arch>-sanitizers.tar.xz`;
-  - ambiguous → rename the overlay so it carries **no** os/arch tokens that mise scores, e.g.
+  - ambiguous → rename the add-on so it carries **no** os/arch tokens that mise scores, e.g.
     `elide-toolchain-sanitizers-2026.10.0-linux-x86_64-gnu.tar.xz` will not do (`x86_64` matches).
     Prefer `elide-toolchain-<ver>-<os>-<arch>.sanitizers.overlay` (non-archive extension,
     scored 0). Record the exact rule.
@@ -124,39 +139,10 @@ docs/notes/build-timings.md                # MODIFY (Task 17)
 
 **Verification:** The note names the chosen asset pattern and cites the scoring code.
 
-### Task 2: Record the dynamic-musl defect as a visible check
+### Task 2: (dropped)
 
-**Files:** Modify `scripts/verify/checks.sh`, `vars.sh`.
-
-Spec §10: every dynamically linked musl executable segfaults in mimalloc init inside `libc.so`.
-This design does not depend on a fix, but verification must stop hiding it.
-
-- [ ] **Step 1:** Add to `vars.sh`: `REQUIRE_MUSL_DYNAMIC=${REQUIRE_MUSL_DYNAMIC:-no}`.
-- [ ] **Step 2:** Add the check:
-
-```bash
-# check_musl_dynamic ROOT TRIPLE — a dynamically linked musl hello must run through the sysroot's
-# own loader (spec 2026-10-05 §10). Known failure today; fatal only with REQUIRE_MUSL_DYNAMIC=yes.
-check_musl_dynamic() {
-  local root="$1" t="$2" tmp sr name="musl dynamic $2"
-  sr="$root/sysroot/$t"
-  tmp="$(mktemp -d)"
-  if "$root/bin/$t-clang" "$ROOT_DIR/tests/fixtures/hello.c" -o "$tmp/h" \
-       -Wl,--dynamic-linker="$sr/$(musl_loader "$(triple_cpu "$t")")" 2>"$tmp/err" \
-     && "$tmp/h" >/dev/null 2>>"$tmp/err"; then
-    pass "$name"
-  elif is_yes "${REQUIRE_MUSL_DYNAMIC:-no}"; then
-    fail "$name" "dynamic musl executable failed (see spec 2026-10-05 §10)"
-  else
-    printf 'note  %s: dynamic musl executables fail (known, spec 2026-10-05 §10)\n' "$name"
-  fi
-  rm -rf "$tmp"
-}
-```
-
-- [ ] **Step 3:** Call it from the `musl)` branch of `run_all_checks`.
-- [ ] **Step 4:** Run `./build.sh --only 95-verify` on the existing build and expect the `note`
-  line. Commit.
+Dropped by the user's decision: musl is static-only by design, and dynamic musl is neither
+supported nor needed (spec §3.2, §10). No dynamic-musl verification is added.
 
 ---
 
@@ -168,7 +154,7 @@ check_musl_dynamic() {
 
 **Interfaces (produced, used by every later task):**
 - `triple_sanitizers T` → space-separated selectable sanitizers for T
-- `triple_variants T` → overlay variants for T (empty unless gnu and `BUILD_SANITIZER_VARIANTS=yes`)
+- `triple_variants T` → add-on variants for T (empty unless gnu and `BUILD_SANITIZER_VARIANTS=yes`)
 - `triple_has_libfuzzer T` → exit status
 - `san_flag S`, `san_cmake S`, `san_symbol S`, `san_report S`, `san_runtimes S`
 - `crt_sanitizers_to_build T` → value for `COMPILER_RT_SANITIZERS_TO_BUILD`
@@ -215,7 +201,7 @@ In `vars.sh`:
 
 ```bash
 BUILD_SANITIZERS=${BUILD_SANITIZERS:-yes}                   # compiler-rt sanitizer runtimes in the bundle
-BUILD_SANITIZER_VARIANTS=${BUILD_SANITIZER_VARIANTS:-yes}   # Linux: instrumented libc++/components overlay
+BUILD_SANITIZER_VARIANTS=${BUILD_SANITIZER_VARIANTS:-no}    # Linux add-ons; CI: push to main + release only
 ```
 
 - [ ] **Step 3: Implement** in `scripts/lib/platform.sh`:
@@ -237,7 +223,7 @@ triple_sanitizers() {
 
 triple_variants() {
   if [ "$(triple_libc "$1")" = gnu ] && is_yes "${BUILD_SANITIZERS:-yes}" \
-     && is_yes "${BUILD_SANITIZER_VARIANTS:-yes}"; then
+     && is_yes "${BUILD_SANITIZER_VARIANTS:-no}"; then
     printf '%s\n' "$SANITIZER_VARIANTS"
   else
     echo ""
@@ -257,7 +243,7 @@ san_flag() {
     *) die "unknown sanitizer: $1" ;;
   esac
 }
-san_cmake() { # LLVM_USE_SANITIZER value for overlay variants
+san_cmake() { # LLVM_USE_SANITIZER value for add-on variants
   case "$1" in asan) echo Address ;; tsan) echo Thread ;; msan) echo MemoryWithOrigins ;; *) die "no variant for $1" ;; esac
 }
 san_symbol() {
@@ -478,13 +464,13 @@ fi
 
 **Interfaces (produced):**
 - `render_san_cfg T S` → runtime layer
-- `render_san_overlay_cfg T S` → overlay layer (gnu only)
+- `render_san_addon_cfg T S` → add-on layer (gnu only)
 - `render_san_wrapper T S DRIVER` → POSIX sh wrapper text
 - `render_san_toolchain_cmake T S`
 - `install_frontends PREFIX` now also writes, for every (T, S ∈ `triple_sanitizers T`):
   `share/elide-toolchain/sanitizers/<T>-<S>.cfg`, `bin/<T>-<S>-clang{,++}`,
   `share/elide-toolchain/cmake/<T>-<S>.cmake`
-- `install_sanitizer_overlay_frontends PREFIX T S` writes `<T>-<S>.overlay.cfg` (stage 60)
+- `install_sanitizer_addon_frontends PREFIX T S` writes `<T>-<S>.addon.cfg` (stage 60)
 
 - [ ] **Step 1: Failing unit tests** (append to `tests/unit/frontends.test.sh`, reusing its
   fake-tool prefix `"$T/pre fix"`, whose fake `clang`/`clang++` echo their argv):
@@ -492,11 +478,11 @@ fi
 ```bash
 assert_eq "$(render_san_cfg x86_64-unknown-linux-gnu msan)" \
   "$(printf '%s\n' -fsanitize=memory -fsanitize-memory-track-origins -fno-omit-frame-pointer)"
-assert_contains "$(render_san_overlay_cfg x86_64-unknown-linux-gnu asan)" \
+assert_contains "$(render_san_addon_cfg x86_64-unknown-linux-gnu asan)" \
   "--sysroot=<CFGDIR>/../../../sysroot/x86_64-unknown-linux-gnu+asan"
-assert_contains "$(render_san_overlay_cfg x86_64-unknown-linux-gnu asan)" \
+assert_contains "$(render_san_addon_cfg x86_64-unknown-linux-gnu asan)" \
   "-isystem <CFGDIR>/../../../include/x86_64-unknown-linux-gnu/asan/c++/v1"
-assert_not_contains "$(render_san_overlay_cfg x86_64-unknown-linux-gnu msan)" "-isystem"
+assert_not_contains "$(render_san_addon_cfg x86_64-unknown-linux-gnu msan)" "-isystem"
 assert_contains "$(render_san_toolchain_cmake x86_64-unknown-linux-gnu tsan)" \
   'bin/x86_64-unknown-linux-gnu-tsan-clang"'
 assert_contains "$(render_san_toolchain_cmake x86_64-unknown-linux-gnu tsan)" \
@@ -511,11 +497,11 @@ assert_fails test -e "$P/bin/x86_64-unknown-linux-musl-asan-clang"
 ln -sfn clang "$P/bin/x86_64-unknown-linux-gnu-clang"
 out="$("$P/bin/x86_64-unknown-linux-gnu-asan-clang" -c a.c)"
 assert_contains "$out" "--config=$P/share/elide-toolchain/sanitizers/x86_64-unknown-linux-gnu-asan.cfg"
-assert_not_contains "$out" "overlay.cfg" "no overlay layer before the overlay is installed"
-assert_fails "$P/bin/x86_64-unknown-linux-gnu-msan-clang" -c a.c   # msan requires the overlay
-install_sanitizer_overlay_frontends "$P" x86_64-unknown-linux-gnu msan
+assert_not_contains "$out" "addon.cfg" "no add-on layer before the add-on is installed"
+assert_fails "$P/bin/x86_64-unknown-linux-gnu-msan-clang" -c a.c   # msan requires the add-on
+install_sanitizer_addon_frontends "$P" x86_64-unknown-linux-gnu msan
 out="$("$P/bin/x86_64-unknown-linux-gnu-msan-clang" -c a.c)"
-assert_contains "$out" "x86_64-unknown-linux-gnu-msan.overlay.cfg"
+assert_contains "$out" "x86_64-unknown-linux-gnu-msan.addon.cfg"
 assert_contains "$out" "-c a.c"
 ```
 
@@ -531,7 +517,7 @@ render_san_cfg() {
   echo "-fno-omit-frame-pointer"
 }
 
-render_san_overlay_cfg() { # paths are relative to share/elide-toolchain/sanitizers/
+render_san_addon_cfg() { # paths are relative to share/elide-toolchain/sanitizers/
   local t="$1" s="$2"
   echo "--sysroot=<CFGDIR>/../../../sysroot/$t+$s"
   echo "-L<CFGDIR>/../../../lib/$t/$s"
@@ -541,15 +527,15 @@ render_san_overlay_cfg() { # paths are relative to share/elide-toolchain/sanitiz
 render_san_wrapper() { # TRIPLE SAN DRIVER(clang|clang++)
   local t="$1" s="$2" d="$3" req=""
   if [ "$s" = msan ]; then
-    req="echo \"$t-$s-$d: msan needs the sanitizers overlay (instrumented libc++ and components); see elide-toolchain sanitizers\" >&2; exit 2"
+    req="echo \"$t-$s-$d: msan needs the sanitizer add-on (instrumented libc++ and components); see elide-toolchain sanitizers\" >&2; exit 2"
   fi
   cat <<EOF
 #!/bin/sh
-# $t + $s: auto-loaded $t.cfg, the $s runtime layer, and the overlay layer when installed.
+# $t + $s: auto-loaded $t.cfg, the $s runtime layer, and the add-on layer when installed.
 here=\$(CDPATH='' cd -- "\$(dirname -- "\$0")" && pwd -P)
 sd=\$here/../share/elide-toolchain/sanitizers
-if [ -f "\$sd/$t-$s.overlay.cfg" ]; then
-  exec "\$here/$t-$d" --config="\$sd/$t-$s.cfg" --config="\$sd/$t-$s.overlay.cfg" "\$@"
+if [ -f "\$sd/$t-$s.addon.cfg" ]; then
+  exec "\$here/$t-$d" --config="\$sd/$t-$s.cfg" --config="\$sd/$t-$s.addon.cfg" "\$@"
 fi
 $req
 exec "\$here/$t-$d" --config="\$sd/$t-$s.cfg" "\$@"
@@ -585,8 +571,8 @@ install_sanitizer_frontends() { # PREFIX TRIPLE
   done
 }
 
-install_sanitizer_overlay_frontends() { # PREFIX TRIPLE SAN
-  render_san_overlay_cfg "$2" "$3" > "$1/share/elide-toolchain/sanitizers/$2-$3.overlay.cfg"
+install_sanitizer_addon_frontends() { # PREFIX TRIPLE SAN
+  render_san_addon_cfg "$2" "$3" > "$1/share/elide-toolchain/sanitizers/$2-$3.addon.cfg"
 }
 ```
 
@@ -678,8 +664,8 @@ check_sanitizer_trips() {
   if [ "$(triple_libc "$t")" = musl ]; then static=(-static); fi
   for s in $(triple_sanitizers "$t"); do
     name="sanitizer $s trips $t"
-    if [ "$s" = msan ] && [ ! -f "$root/share/elide-toolchain/sanitizers/$t-msan.overlay.cfg" ]; then
-      printf 'note  %s: overlay not installed; skipped\n' "$name"; continue
+    if [ "$s" = msan ] && [ ! -f "$root/share/elide-toolchain/sanitizers/$t-msan.addon.cfg" ]; then
+      printf 'note  %s: add-on not installed; skipped\n' "$name"; continue
     fi
     if [ "$s" = hwasan ] && ! hwasan_kernel_ok; then
       printf 'note  %s: kernel lacks the tagged-address ABI; skipped\n' "$name"; continue
@@ -763,20 +749,20 @@ assert_contains "$out" "\"CC\":\"$B/bin/x86_64-unknown-linux-gnu-asan-clang\""
 assert_contains "$out" "\"CMAKE_TOOLCHAIN_FILE\":\"$B/share/elide-toolchain/cmake/x86_64-unknown-linux-gnu-asan.cmake\""
 assert_contains "$out" "\"CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS\":\"-Zsanitizer=address -Zexternal-clangrt\""
 assert_contains "$out" "\"ELIDE_SANITIZER_RUNTIME\":\"$B/lib/clang/23/lib/x86_64-unknown-linux-gnu/libclang_rt.asan.so\""
-assert_contains "$(cat "$T/warn")" "not instrumented"            # no overlay yet
-assert_fails "$H" env --target x86_64-unknown-linux-gnu --sanitizer msan   # overlay required
+assert_contains "$(cat "$T/warn")" "not instrumented"            # no add-on yet
+assert_fails "$H" env --target x86_64-unknown-linux-gnu --sanitizer msan   # add-on required
 assert_fails "$H" env --target x86_64-unknown-linux-musl --sanitizer asan
 assert_fails "$H" env --target x86_64-unknown-linux-gnu --sanitizer asan --static
 assert_ok "$H" env --target x86_64-unknown-linux-musl --sanitizer ubsan --static
 out="$("$H" env --target x86_64-unknown-linux-gnu --sanitizer ubsan --format json)"
 assert_not_contains "$out" "RUSTFLAGS"
-# overlay present: farm used for pkg-config, version must match
+# add-on present: farm used for pkg-config, version must match
 mkdir -p "$B/sysroot/x86_64-unknown-linux-gnu+msan/usr/lib"
-: > "$B/share/elide-toolchain/sanitizers/x86_64-unknown-linux-gnu-msan.overlay.cfg"
-printf '{"version":"%s"}\n' "$(cat "$B/share/elide-toolchain/VERSION")" > "$B/share/elide-toolchain/sanitizers/overlay.json"
+: > "$B/share/elide-toolchain/sanitizers/x86_64-unknown-linux-gnu-msan.addon.cfg"
+printf '{"version":"%s"}\n' "$(cat "$B/share/elide-toolchain/VERSION")" > "$B/share/elide-toolchain/sanitizers/<san>.addon.json"
 out="$("$H" env --target x86_64-unknown-linux-gnu --sanitizer msan --format json)"
 assert_contains "$out" "\"PKG_CONFIG_SYSROOT_DIR\":\"$B/sysroot/x86_64-unknown-linux-gnu+msan\""
-printf '{"version":"1999.1.0"}\n' > "$B/share/elide-toolchain/sanitizers/overlay.json"
+printf '{"version":"1999.1.0"}\n' > "$B/share/elide-toolchain/sanitizers/<san>.addon.json"
 assert_fails "$H" env --target x86_64-unknown-linux-gnu --sanitizer msan
 assert_contains "$("$H" sanitizers --target x86_64-unknown-linux-gnu)" "msan"
 ```
@@ -789,15 +775,15 @@ san_flag() {
   case $1 in asan) echo address ;; tsan) echo thread ;; msan) echo memory ;; lsan) echo leak ;;
     hwasan) echo hwaddress ;; ubsan) echo undefined ;; *) return 1 ;; esac
 }
-overlay_version() { # prints the overlay's version, empty if none
-  f=$(san_dir)/overlay.json
+addon_version() { # prints the add-on's version, empty if none
+  f=$(san_dir)/<san>.addon.json
   [ -f "$f" ] || return 0
   sed -n 's/.*"version" *: *"\([^"]*\)".*/\1/p' "$f" | head -n 1
 }
-check_overlay() { # TARGET SAN -> 0 if the overlay layer for (T,S) is installed and matches
-  [ -f "$(san_dir)/$1-$2.overlay.cfg" ] || return 1
-  v=$(overlay_version); want=$(cat "$ROOT/share/elide-toolchain/VERSION")
-  [ "$v" = "$want" ] || die "sanitizers overlay is $v but the bundle is $want; install the matching -sanitizers archive"
+check_addon() { # TARGET SAN -> 0 if the add-on layer for (T,S) is installed and matches
+  [ -f "$(san_dir)/$1-$2.addon.cfg" ] || return 1
+  v=$(addon_version); want=$(cat "$ROOT/share/elide-toolchain/VERSION")
+  [ "$v" = "$want" ] || die "sanitizer add-on is $v but the bundle is $want; install the matching -sanitizers archive"
 }
 ```
 
@@ -808,11 +794,11 @@ In `cmd_env`: parse `--sanitizer S` / `--sanitizer=S`. After `has_target` and th
     san_flag "$san" >/dev/null || die "unknown sanitizer: $san (expected asan tsan msan ubsan lsan hwasan)"
     [ -f "$(san_dir)/$target-$san.cfg" ] || die "$san is not supported for $target (see: elide-toolchain sanitizers --target $target)"
     if [ "$static" = yes ] && [ "$san" != ubsan ]; then die "--static cannot be combined with --sanitizer $san (runtime needs dynamic linking)"; fi
-    if check_overlay "$target" "$san"; then
+    if check_addon "$target" "$san"; then
       sr="$ROOT/sysroot/$target+$san"
     else
-      [ "$san" != msan ] || die "msan needs the sanitizers overlay (elide-toolchain-$(cat "$ROOT/share/elide-toolchain/VERSION")-<os>-<arch>-sanitizers.tar.xz)"
-      case $san in asan|tsan) echo "elide-toolchain: warning: libc++ and components are not instrumented for $san; install the sanitizers overlay for full coverage" >&2 ;; esac
+      [ "$san" != msan ] || die "msan needs the sanitizer add-on (elide-toolchain-$(cat "$ROOT/share/elide-toolchain/VERSION")-<os>-<arch>-sanitizers.tar.xz)"
+      case $san in asan|tsan) echo "elide-toolchain: warning: libc++ and components are not instrumented for $san; install the sanitizer add-on for full coverage" >&2 ;; esac
       sr="$ROOT/sysroot/$target"
     fi
     replace CC "$bin/$target-$san-clang"
@@ -835,14 +821,14 @@ In `cmd_env`: parse `--sanitizer S` / `--sanitizer=S`. After `has_target` and th
 `replace KEY VALUE` rewrites an existing line in `$ENV_FILE`
 (`grep -v "^$1$TAB" … > tmp && add`). `cmd_sanitizers` prints a table
 `TARGET  SANITIZER  RUNTIME(yes/no)  OVERLAY(installed/required/recommended/n/a)` from the cfg
-files, `overlay.json` and `supported.json`. Extend the usage comment.
+files, `<san>.addon.json` and `supported.json`. Extend the usage comment.
 
 - [ ] **Step 3:** `tests/run.sh helper` → PASS; `shellcheck -s sh src/elide-toolchain` clean.
   Commit.
 
 ---
 
-## Phase C — The overlay
+## Phase C — The add-on
 
 ### Task 9: Variant compile layer for component recipes
 
@@ -853,7 +839,7 @@ files, `overlay.json` and `supported.json`. Extend the usage comment.
 **Interfaces:**
 - `SANITIZER_LAYER=<san>` (exported by stage 60) makes `target_cflags T` start with
   `--config=$TOOLCHAIN_ROOT/share/elide-toolchain/sanitizers/<T>-<san>.cfg -L$TOOLCHAIN_ROOT/lib/<T>/<san>`
-  (+ `-isystem $TOOLCHAIN_ROOT/include/<T>/asan/c++/v1` for asan). The overlay cfg is **not**
+  (+ `-isystem $TOOLCHAIN_ROOT/include/<T>/asan/c++/v1` for asan). The add-on cfg is **not**
   used here: the farm does not exist yet while components build.
 - `component_variant_args NAME` → extra args for the active `SANITIZER_LAYER` (empty otherwise).
 
@@ -947,7 +933,7 @@ Expected: no warnings with `-Wall -Wextra -Werror`. Commit.
   cfgs (Task 6), recipes (Task 9), shim (Task 10), `runtimes_common_args`/`cxx_runtime_args` (Task 4).
 - Produces in `$BUNDLE_DIR`, for each gnu T in `$TARGETS` and S in `triple_variants T`:
   `lib/T/S/libc++{,abi,experimental}.a`, `include/T/asan/c++/v1/__config_site` (asan),
-  `sysroot/T+S/` (farm), `share/elide-toolchain/sanitizers/T-S.overlay.cfg`.
+  `sysroot/T+S/` (farm), `share/elide-toolchain/sanitizers/T-S.addon.cfg`.
 
 - [ ] **Step 1: Failing stage check** `tests/stages/60-sanitizer-variants.check.sh` (common header):
 
@@ -962,7 +948,7 @@ for t in $ALL_TARGETS; do
     assert_ok test -L "$farm/usr/include"
     assert_ok test -f "$farm/usr/lib/libz.a"; assert_fails test -L "$farm/usr/lib/libz.a"
     assert_fails test -e "$farm/usr/lib/libcrypto.so"
-    assert_file "$BUNDLE_DIR/share/elide-toolchain/sanitizers/$t-$s.overlay.cfg"
+    assert_file "$BUNDLE_DIR/share/elide-toolchain/sanitizers/$t-$s.addon.cfg"
     sym="$(san_symbol "$s")"
     assert_ok sh -c "'$BUNDLE_DIR/bin/llvm-nm' '$farm/usr/lib/libz.a' 2>/dev/null | grep -q '$sym'"
     assert_ok sh -c "'$BUNDLE_DIR/bin/llvm-nm' '$d/libc++.a' 2>/dev/null | grep -q '$sym'"
@@ -997,7 +983,7 @@ stage_main() {
       build_variant_components "$t" "$s"
       build_mimalloc_shim "$t" "$s"
       assemble_variant_sysroot "$t" "$s"
-      install_sanitizer_overlay_frontends "$BUNDLE_DIR" "$t" "$s"
+      install_sanitizer_addon_frontends "$BUNDLE_DIR" "$t" "$s"
     done
   done
 }
@@ -1044,7 +1030,7 @@ build_variant_components() {
 build_mimalloc_shim() {
   local t="$1" s="$2" o
   o="$(variant_stage_dir "$t" "$s")/mimalloc-shim.o"
-  # Base front-end + the runtime layer: the msan wrapper refuses to run until the overlay cfg exists.
+  # Base front-end + the runtime layer: the msan wrapper refuses to run until the add-on cfg exists.
   # shellcheck disable=SC2046
   "$BUNDLE_DIR/bin/$t-clang" $(SANITIZER_LAYER="$s" sanitizer_layer_flags "$t") -O2 -flto=thin -fPIC \
     -I"$(target_prefix "$t")/include" -c "$ROOT_DIR/src/mimalloc-sanitizer-shim.c" -o "$o"
@@ -1079,51 +1065,51 @@ and to the usage text. When `triple_variants` is empty for every target, the sta
   → PASS. Expected wall time on 32 threads ≈ 3 min per gnu triple (spikes C/D). Commit with the
   measured time.
 
-### Task 12: Stage 90 — the overlay archive and manifest
+### Task 12: Stage 90 — per-sanitizer add-on archives and manifest
 
 **Files:** Modify `scripts/stages/90-package.sh`, `scripts/gen-manifest.py`,
 `tests/unit/manifest.test.sh`, `tests/stages/90-package.check.sh`.
 
 **Interfaces:**
-- `overlay_paths` → newline-separated paths relative to `$OUT_DIR` (each starts with `$TOOLCHAIN_NAME/`)
+- `addon_paths` → newline-separated paths relative to `$OUT_DIR` (each starts with `$TOOLCHAIN_NAME/`)
 - Main archive `…-<os>-<arch>.tar.xz` excludes them. Overlay archive (name from Task 1) contains
-  exactly them plus `share/elide-toolchain/sanitizers/overlay.json`.
-- `manifest.json` gains `sanitizers` (spec §4.4). `gen-manifest.py overlay` prints `overlay.json`.
+  exactly them plus `share/elide-toolchain/sanitizers/<san>.addon.json`.
+- `manifest.json` gains `sanitizers` (spec §4.4). `gen-manifest.py addon <san>` prints `<san>.addon.json`.
 
 - [ ] **Step 1: Failing tests.** `manifest.test.sh`:
 
 ```bash
 m="$(ENABLED_COMPONENTS="zlib-ng zstd" python3 "$ROOT_DIR/scripts/gen-manifest.py" manifest)"
 assert_contains "$m" '"sanitizers"'
-assert_contains "$m" '"x86_64-unknown-linux-musl": {"runtimes": ["ubsan"], "overlay": []}'
-o="$(python3 "$ROOT_DIR/scripts/gen-manifest.py" overlay)"
+assert_contains "$m" '"x86_64-unknown-linux-musl": {"runtimes": ["ubsan"], "addons": []}'
+o="$(python3 "$ROOT_DIR/scripts/gen-manifest.py" addon msan)"
 assert_contains "$o" "\"version\": \"$TOOLCHAIN_VERSION\""
 ```
 
 `90-package.check.sh`: list both archives with `tar -tJf`. No `+asan/` path appears in the main
-archive. Every overlay member matches an `overlay_paths` prefix. The overlay has exactly one
+archive. Every add-on member matches an `addon_paths` prefix. The add-on has exactly one
 top-level dir, `elide-toolchain/`.
 
 - [ ] **Step 2: Implement.** `90-package.sh`:
 
 ```bash
-# overlay_paths — bundle paths that belong to the sanitizers overlay, relative to $OUT_DIR.
-overlay_paths() {
+# addon_paths — bundle paths that belong to the sanitizer add-on, relative to $OUT_DIR.
+addon_paths() {
   local t s n="$TOOLCHAIN_NAME"
   for t in $ALL_TARGETS; do
     for s in $(triple_variants "$t"); do
-      printf '%s\n' "$n/lib/$t/$s" "$n/sysroot/$t+$s" "$n/share/elide-toolchain/sanitizers/$t-$s.overlay.cfg"
+      printf '%s\n' "$n/lib/$t/$s" "$n/sysroot/$t+$s" "$n/share/elide-toolchain/sanitizers/$t-$s.addon.cfg"
       if [ "$s" = asan ]; then printf '%s\n' "$n/include/$t/asan"; fi
     done
   done
 }
 ```
 
-Write `overlay.json` (via `gen-manifest.py overlay`) into `share/elide-toolchain/sanitizers/`
-before archiving. Main archive: `tar -C "$OUT_DIR" --exclude-from=<(overlay_paths) … -cf - "$TOOLCHAIN_NAME"`
-(GNU tar matches the exclude patterns against member names; on darwin `overlay_paths` is empty
-so `bsdtar` never sees the option). If `overlay_paths` is non-empty, the overlay archive is
-`tar -C "$OUT_DIR" -cf - $(overlay_paths) "$n/share/elide-toolchain/sanitizers/overlay.json" | xz -T0 -9`,
+Write `<san>.addon.json` (via `gen-manifest.py addon <san>`) into `share/elide-toolchain/sanitizers/`
+before archiving. Main archive: `tar -C "$OUT_DIR" --exclude-from=<(addon_paths) … -cf - "$TOOLCHAIN_NAME"`
+(GNU tar matches the exclude patterns against member names; on darwin `addon_paths` is empty
+so `bsdtar` never sees the option). If `addon_paths` is non-empty, the add-on archive is
+`tar -C "$OUT_DIR" -cf - $(addon_paths) "$n/share/elide-toolchain/sanitizers/<san>.addon.json" | xz -T0 -9`,
 plus a `.sha256`. `relocate_prefix` is not needed for farms: their `.pc` files are symlinks.
 `check_no_build_paths` still scans everything. `gen-manifest.py`: build the `sanitizers` map from
 the same env variables (pass `SANITIZERS_LINUX_GNU` etc. through `os.environ`), mirroring
@@ -1132,12 +1118,12 @@ the same env variables (pass `SANITIZERS_LINUX_GNU` etc. through `os.environ`), 
 - [ ] **Step 3:** `tests/run.sh manifest` → PASS; `./build.sh --only 90-package`; the stage check
   passes. Overlay size is ~65 MiB xz for linux-amd64 (spike D: 65.3 MiB). Commit.
 
-### Task 13: Verification of the overlay
+### Task 13: Verification of the add-on
 
 **Files:** Modify `scripts/stages/95-verify.sh`, `scripts/verify/checks.sh`; create
 `tests/fixtures/sanitizers/cmake/CMakeLists.txt`, `tests/fixtures/sanitizers/rust/{main.rs,c_part.c}`.
 
-- [ ] **Step 1:** In `95-verify.sh`, after extracting the main archive, extract the overlay
+- [ ] **Step 1:** In `95-verify.sh`, after extracting the main archive, extract the add-on
   (when it exists) into the same `$VERIFY_DIR`, after verifying its `.sha256`.
 - [ ] **Step 2: Checks** (spike B/D/E/F/G recipes). Add:
 
@@ -1196,7 +1182,7 @@ In `run_all_checks`, per gnu target and per `triple_variants` S: `check_sanitize
 `check_sanitizer_mimalloc`, `check_rust_sanitizer`.
 
 - [ ] **Step 3:** `./build.sh --from 90-package` → `verification: 0 failure(s)` on linux-amd64,
-  including the msan trip, which now runs because the overlay is extracted. Negative control,
+  including the msan trip, which now runs because the add-on is extracted. Negative control,
   once by hand: delete `libcrypto.a` from one farm in `$VERIFY_DIR`, recreate the `.so` symlink,
   rerun `check_sanitizer_variant_clean` for msan, and expect FAIL. Commit.
 
@@ -1204,21 +1190,21 @@ In `run_all_checks`, per gnu target and per `triple_variants` S: `check_sanitize
 
 ## Phase D — Distribution
 
-### Task 14: GitHub Action — `sanitizers` and `sanitizer` inputs
+### Task 14: GitHub Action — `sanitizer` input
 
 **Files:** Modify `action/action.yml`, `action/lib.ts`, `action/main.ts`, `action/lib.test.ts`,
 `action/dist/main.js`.
 
-- [ ] **Step 1: Failing tests** (`lib.test.ts`): `overlayAssetName("2026.10.0","linux","amd64")`
-  returns Task 1's name. `overlayAssetName(…,"darwin","arm64")` returns `null`.
+- [ ] **Step 1: Failing tests** (`lib.test.ts`): `addonAssetName("2026.10.0","linux","amd64")`
+  returns Task 1's name. `addonAssetName(…,"darwin","arm64")` returns `null`.
   `needsOverlay("msan")` and `needsOverlay("asan")` are true; `needsOverlay("ubsan")` is false.
   `envArgs({target, sanitizer: "tsan"})` yields
   `["env","--target",t,"--sanitizer","tsan","--format","github"]`.
 - [ ] **Step 2:** Inputs `sanitizers` (boolean, default `false`) and `sanitizer` (string; requires
   `target`; asan/tsan/msan imply `sanitizers: true`). In `main.ts`, after extracting the main
-  bundle, if needed, download and verify the overlay with the same resolver (Releases API → R2
+  bundle, if needed, download and verify the add-on with the same resolver (Releases API → R2
   fallback, `.sha256` check) and extract it into the **same** cache dir before `tc.cacheDir`.
-  Output `sanitizers`: the JSON list of `*.overlay.cfg` stems found. Rebuild `dist/main.js` with
+  Output `sanitizers`: the JSON list of `*.addon.cfg` stems found. Rebuild `dist/main.js` with
   bun.
 - [ ] **Step 3:** `bun test` → PASS; `bun run build` leaves `git diff --exit-code action/dist`
   clean after the commit. Commit.
@@ -1229,31 +1215,31 @@ In `run_all_checks`, per gnu target and per `triple_variants` S: `check_sanitize
 
 - [ ] **Step 1:** `job.build.yml`: on Linux, install a pinned Rust nightly for
   `check_rust_sanitizer` (`rustup toolchain install nightly-2026-09-29 --profile minimal`; bump
-  with LLVM). `dist/*` already uploads the overlay. Raise nothing else: the timeouts (720 min)
+  with LLVM). `dist/*` already uploads the add-on. Raise nothing else: the timeouts (720 min)
   have headroom.
 - [ ] **Step 2:** `on.release.yml`: attach `dist/*-sanitizers*` (and `.sha256`) to the release,
   and include them in the R2 mirror sync. Provenance attestation covers them (same `subject-path`
   glob).
 - [ ] **Step 3:** `job.action-e2e.yml`: add a matrix leg per Linux arch with
-  `target: <arch>-unknown-linux-gnu`, `sanitizer: msan`, and `archive` / an overlay archive input
-  (add an `overlay-archive` testing input mirroring `archive` in Task 14). It builds and runs
+  `target: <arch>-unknown-linux-gnu`, `sanitizer: msan`, and `archive` / an add-on archives input
+  (add an `sanitizer-archive` testing input mirroring `archive` in Task 14). It builds and runs
   `tests/fixtures/sanitizers/msan.c` (expect the report) and `workload.c` (expect clean) with
   `$CC` from the action env.
 - [ ] **Step 4:** Push to a branch, watch `on.pr.yml`, and record per-job wall-time deltas in the
   PR description (spec §9 estimates: Linux +12–20 min, darwin +5–8 min). Commit.
 
-### Task 16: Overlay install for mise users
+### Task 16: Add-on install for mise users
 
 **Files:** Modify `src/elide-toolchain`, `tests/unit/helper.test.sh`.
 
-- [ ] **Step 1: Failing tests:** `elide-toolchain overlay install sanitizers --from <local.tar.xz>`
-  extracts into the bundle root. It refuses an archive whose `overlay.json` version differs from
+- [ ] **Step 1: Failing tests:** `elide-toolchain addon install sanitizer-<san> --from <local.tar.xz>`
+  extracts into the bundle root. It refuses an archive whose `<san>.addon.json` version differs from
   `share/elide-toolchain/VERSION`. It refuses a missing `.sha256` unless `--no-verify` is given.
 - [ ] **Step 2:** Implement: `--from FILE|URL` (URL via `curl -fsSL` or `wget -qO-`); the default
   URL comes from the GitHub release `https://github.com/elide-dev/toolchain/releases/download/v<ver>/<asset>`,
   with an R2 fallback `https://static.elideusercontent.com/toolchain/<ver>/<asset>`. Verify the
   sha256 (`sha256sum`, or `shasum -a 256` on macOS). Extract with `tar -xJf - -C "$ROOT/.."`,
-  then check `overlay.json`. If the version check fails, remove what was extracted (list from
+  then check `<san>.addon.json`. If the version check fails, remove what was extracted (list from
   `tar -tJf`).
 - [ ] **Step 3:** `tests/run.sh helper` → PASS. Commit.
 
@@ -1262,7 +1248,7 @@ In `run_all_checks`, per gnu target and per `triple_variants` S: `check_sanitize
 **Files:** Modify `README.md`, `docs/notes/build-timings.md`.
 
 - [ ] **Step 1:** README: a "Sanitizers" section with the support matrix (spec §3, short form),
-  the overlay asset and how to install it (action input, `overlay install`, manual
+  the add-on asset and how to install it (action input, `addon install`, manual
   `tar -xJf … -C <parent of elide-toolchain>`), `elide-toolchain env --sanitizer`, wrappers and
   CMake files. Include the caveats: mimalloc (§7.1), one runtime for Rust (§7.3), native-image
   unsupported (§7.4), musl = UBSan only (§3.2), darwin rpath (§7.6), and the JNI `LD_PRELOAD`
@@ -1281,7 +1267,7 @@ In `run_all_checks`, per gnu target and per `triple_variants` S: `check_sanitize
 
 - musl ASan/TSan/MSan/LSan, through a mallocng `libc.so` farm (spec §3.2), and fixing dynamic
   musl (spec §10).
-- A darwin instrumented-components overlay (spec Q7).
+- A darwin instrumented-components add-ons (spec Q7).
 - CFI, DFSan, SafeStack, NSan, TySan, RTSan, MemProf, Scudo and GWP-ASan runtimes.
 - Pre-instrumented Rust `std` (`-Zbuild-std` artifacts) for MSan/TSan.
 - Sanitized builds of the shipped clang/lld.
