@@ -27,7 +27,10 @@ stage_main() {
   if [ "$HOST_OS" = darwin ]; then tar_flags=(--no-xattrs --no-mac-metadata); fi
   # Sanitizer add-on paths go into their own archives (scripts/lib/sanitizers.sh), never the main one.
   mapfile -t -O "${#tar_flags[@]}" tar_flags < <(addon_excludes)
-  COPYFILE_DISABLE=1 tar -C "$OUT_DIR" "${tar_flags[@]}" -cf - "$TOOLCHAIN_NAME" | xz -T0 -9 > "$archive.tmp"
+  local level
+  level="$(xz_level)"
+  log "compressing with xz -$level ($(is_release_build && echo release || echo non-release) build)"
+  COPYFILE_DISABLE=1 tar -C "$OUT_DIR" "${tar_flags[@]}" -cf - "$TOOLCHAIN_NAME" | xz -T0 "-$level" > "$archive.tmp"
   mv "$archive.tmp" "$archive"
   printf '%s  %s\n' "$(sha256_of "$archive")" "$name.tar.xz" > "$archive.sha256"
   cp "$meta/sbom.cdx.json" "$DIST_DIR/$name.sbom.cdx.json"

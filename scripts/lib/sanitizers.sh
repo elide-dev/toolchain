@@ -338,7 +338,8 @@ addon_excludes() {
 
 # package_sanitizer_addons — write one .tar.xz (+ .sha256) per variant into $DIST_DIR.
 package_sanitizer_addons() {
-  local s p archive paths=() seen=" "
+  local s p archive paths=() seen=" " level
+  level="$(xz_level)"
   for s in $(all_variants); do
     addon_json "$s" > "$BUNDLE_DIR/$(addon_json_rel "$s")"
     paths=()
@@ -350,7 +351,7 @@ package_sanitizer_addons() {
     done < <(addon_paths "$s")
     archive="$DIST_DIR/$(addon_asset_name "$s")"
     rm -f "$archive" "$archive.sha256"
-    tar -C "$OUT_DIR" -cf - "${paths[@]}" | xz -T0 -9 > "$archive.tmp"
+    tar -C "$OUT_DIR" -cf - "${paths[@]}" | xz -T0 "-$level" > "$archive.tmp"
     mv "$archive.tmp" "$archive"
     printf '%s  %s\n' "$(sha256_of "$archive")" "${archive##*/}" > "$archive.sha256"
     log "wrote $archive"

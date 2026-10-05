@@ -55,6 +55,20 @@ default_link_jobs() {
   echo "$n"
 }
 
+# is_release_build — RELEASE_BUILD=yes|no decides; otherwise a TOOLCHAIN_VERSION without a
+# -dev or + suffix is a release.
+is_release_build() {
+  if [ -n "${RELEASE_BUILD:-}" ]; then is_yes "$RELEASE_BUILD"; return; fi
+  case "${TOOLCHAIN_VERSION:-}" in *-dev*|*+*) return 1 ;; *) return 0 ;; esac
+}
+
+# xz_level — XZ_LEVEL, else 9 for release builds and 6 otherwise (much faster, slightly larger).
+xz_level() {
+  if [ -n "${XZ_LEVEL:-}" ]; then
+    case "$XZ_LEVEL" in [0-9]) echo "$XZ_LEVEL" ;; *) die "XZ_LEVEL must be 0-9 (got $XZ_LEVEL)" ;; esac
+  elif is_release_build; then echo 9; else echo 6; fi
+}
+
 sha256_of() {
   if command -v sha256sum >/dev/null 2>&1; then
     sha256sum "$1" | awk '{print $1}'

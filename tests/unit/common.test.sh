@@ -123,6 +123,17 @@ assert_eq "$(default_link_jobs 31)" 3
 assert_eq "$(default_link_jobs 256)" 4 "capped at 4"
 assert_eq "$(default_link_jobs '')" 2 "unknown memory"
 
+# Release detection and xz level
+assert_ok env RELEASE_BUILD= TOOLCHAIN_VERSION=2026.10.0 bash -c "source '$ROOT_DIR/scripts/lib/common.sh'; is_release_build"
+assert_eq "$(TOOLCHAIN_VERSION=2026.10.0 xz_level)" 9 "release version"
+assert_eq "$(TOOLCHAIN_VERSION=2026.10.0-rc1 xz_level)" 9 "-rc suffix is a release"
+assert_eq "$(TOOLCHAIN_VERSION=2026.10.0-dev.abc1234 xz_level)" 6 "dev build"
+assert_eq "$(TOOLCHAIN_VERSION=2026.10.0+local xz_level)" 6 "+ suffix"
+assert_eq "$(TOOLCHAIN_VERSION=2026.10.0-dev.abc RELEASE_BUILD=yes xz_level)" 9 "RELEASE_BUILD=yes forces 9"
+assert_eq "$(TOOLCHAIN_VERSION=2026.10.0 RELEASE_BUILD=no xz_level)" 6 "RELEASE_BUILD=no forces 6"
+assert_eq "$(TOOLCHAIN_VERSION=2026.10.0 XZ_LEVEL=3 xz_level)" 3 "XZ_LEVEL overrides"
+assert_fails env XZ_LEVEL=12 bash -c "source '$ROOT_DIR/scripts/lib/common.sh'; xz_level"
+
 # fetch_pinned: verified download via a fake curl; bad checksums never land in the cache
 fp="$(mktemp -d)"
 mkdir -p "$fp/bin"
