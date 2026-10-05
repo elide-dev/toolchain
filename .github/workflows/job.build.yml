@@ -49,6 +49,9 @@ jobs:
         # GitHub mirror by SHA, then a mirror branch fetch. The final HEAD == gitlink assertion (and
         # stage 00's scripts/check-versions.sh) keeps the mirror honest. Must stay bash 3.2-safe.
         run: |
+          # Self-hosted runners keep .git/modules across jobs; a git process killed by a cancelled run
+          # leaves *.lock files that make every later fetch fail. This job owns the workspace.
+          if [ -d .git/modules ]; then find .git/modules -name '*.lock' -type f -print -delete; fi
           subs="$(git config -f .gitmodules --get-regexp '^submodule\..*\.path$' | awk '$2 != "glibc" {print $2}')"
           # shellcheck disable=SC2086 # submodule paths contain no spaces
           git submodule update --init --depth=1 --recursive --jobs 8 -- $subs
