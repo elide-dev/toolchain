@@ -5,16 +5,18 @@
 #   elide-toolchain home
 #   elide-toolchain targets
 #   elide-toolchain version
-#   elide-toolchain env [--target TRIPLE] [--static] [--format sh|github|json]
+#   elide-toolchain env [--target TRIPLE] [--static] [--sanitizer SAN] [--format sh|github|json]
 #   elide-toolchain flags --target TRIPLE MODE... [--format sh|github|json]
 #       MODE: propeller-baseline | propeller-use=CC,LD | dedubb-apply=FILE |
 #             memprof-instrument | memprof-use=FILE   (prints ELIDE_{C,CXX,LD,RUST}FLAGS)
-#   elide-toolchain doctor
+#   elide-toolchain sanitizers [--target TRIPLE]
+#   elide-toolchain addon install sanitizer-SAN [--from FILE|URL] [--no-verify]
+#   elide-toolchain doctor [--sanitizers]
 set -eu
 
 die() { echo "elide-toolchain: $*" >&2; exit 1; }
 
-usage() { sed -n '2,13s/^# \{0,1\}//p' "$0"; }
+usage() { sed -n '2,15s/^# \{0,1\}//p' "$0"; }
 
 self=$0
 while [ -L "$self" ]; do
@@ -79,12 +81,14 @@ emit() {
 }
 
 cmd_env() {
-  target="" static=no fmt=sh
+  target="" static=no fmt=sh san=""
   while [ $# -gt 0 ]; do
     case $1 in
       --target) [ $# -ge 2 ] || die "--target needs a triple"; target=$2; shift 2 ;;
       --target=*) target=${1#--target=}; shift ;;
       --static) static=yes; shift ;;
+      --sanitizer) [ $# -ge 2 ] || die "--sanitizer needs a value"; san=$2; shift 2 ;;
+      --sanitizer=*) san=${1#--sanitizer=}; shift ;;
       --format) [ $# -ge 2 ] || die "--format needs a value"; fmt=$2; shift 2 ;;
       --format=*) fmt=${1#--format=}; shift ;;
       *) die "env: unknown option: $1" ;;
@@ -94,6 +98,7 @@ cmd_env() {
   add ELIDE_TOOLCHAIN_HOME "$ROOT"
   if [ -z "$target" ]; then
     [ "$static" = no ] || die "--static requires --target"
+    [ -z "$san" ] || die "--sanitizer requires --target"
     emit "$fmt"
     return
   fi
@@ -118,6 +123,7 @@ cmd_env() {
   esac
   rt=$(rust_triple "$target" | tr 'abcdefghijklmnopqrstuvwxyz-' 'ABCDEFGHIJKLMNOPQRSTUVWXYZ_')
   add "CARGO_TARGET_${rt}_LINKER" "$bin/$target-clang"
+  if [ -n "$san" ]; then sanitizer_env "$target" "$san" "$static" "$rt"; fi
   if [ "$static" = yes ]; then
     case $target in
       *-linux-musl) add LDFLAGS "-static" ;;
@@ -186,7 +192,167 @@ cmd_flags() {
   NO_PATH=1 emit "$fmt"
 }
 
+# ---- sanitizers (docs/superpowers/specs/2026-10-05-sanitizer-variants-design.md §5) ----------
+
+san_dir() { echo "$ROOT/share/elide-toolchain/sanitizers"; }
+
+san_flag() {
+  case $1 in
+    asan) echo address ;; tsan) echo thread ;; msan) echo memory ;; lsan) echo leak ;;
+    hwasan) echo hwaddress ;; ubsan) echo undefined ;; *) return 1 ;;
+  esac
+}
+
+host_os_arch() {
+  case $(uname -s) in Linux) os=linux ;; Darwin) os=darwin ;; *) os=$(uname -s) ;; esac
+  case $(uname -m) in x86_64|amd64) arch=amd64 ;; aarch64|arm64) arch=arm64 ;; *) arch=$(uname -m) ;; esac
+  echo "$os-$arch"
+}
+
+addon_asset() { echo "elide-toolchain-$(cat "$ROOT/share/elide-toolchain/VERSION")-$(host_os_arch)-sanitizer-$1.tar.xz"; }
+
+# addon_state TARGET SAN -> installed | absent; dies on a version mismatch.
+addon_state() {
+  if [ ! -f "$(san_dir)/$1-$2.addon.cfg" ]; then echo absent; return; fi
+  meta=$(san_dir)/$2.addon.json
+  v=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$meta" 2>/dev/null | head -n 1)
+  want=$(cat "$ROOT/share/elide-toolchain/VERSION")
+  [ "$v" = "$want" ] || die "the $2 add-on is version '$v' but this bundle is $want; install $(addon_asset "$2")"
+  echo installed
+}
+
+replace() { # KEY VALUE: set KEY, dropping an earlier value
+  grep -v "^$1$TAB" "$ENV_FILE" > "$ENV_FILE.new" || true
+  mv "$ENV_FILE.new" "$ENV_FILE"
+  add "$1" "$2"
+}
+
+sanitizer_env() { # TARGET SAN STATIC RUST_TRIPLE_VAR
+  target=$1; s=$2
+  san_flag "$s" >/dev/null || die "unknown sanitizer: $s (expected asan tsan msan ubsan lsan hwasan)"
+  if [ ! -f "$(san_dir)/$target-$s.cfg" ]; then
+    case $target in
+      *-linux-musl) die "$s is not supported for musl targets (musl is static-only); use the gnu target" ;;
+      *) die "$s is not supported for $target (see: elide-toolchain sanitizers --target $target)" ;;
+    esac
+  fi
+  if [ "$3" = yes ] && [ "$s" != ubsan ]; then die "--static cannot be combined with --sanitizer $s (its runtime needs dynamic linking)"; fi
+  sr=$ROOT/sysroot/$target
+  case $s in
+    asan|tsan|msan)
+      case $target in *-linux-gnu)
+        st=$(addon_state "$target" "$s") || exit 1
+        if [ "$st" = installed ]; then
+          sr=$ROOT/sysroot/$target+$s
+        elif [ "$s" = msan ]; then
+          die "msan needs its add-on (instrumented libc++ and components): elide-toolchain addon install sanitizer-msan, or install $(addon_asset msan)"
+        else
+          echo "elide-toolchain: warning: libc++ and components are not instrumented for $s; install the sanitizer-$s add-on ($(addon_asset "$s")) for full coverage" >&2
+        fi ;;
+      esac ;;
+  esac
+  bin=$ROOT/bin
+  replace CC "$bin/$target-$s-clang"
+  replace CXX "$bin/$target-$s-clang++"
+  replace CMAKE_TOOLCHAIN_FILE "$ROOT/share/elide-toolchain/cmake/$target-$s.cmake"
+  replace "CARGO_TARGET_${4}_LINKER" "$bin/$target-$s-clang"
+  case $target in *-linux-*)
+    replace PKG_CONFIG_SYSROOT_DIR "$sr"
+    replace PKG_CONFIG_LIBDIR "$sr/usr/lib/pkgconfig:$sr/usr/share/pkgconfig" ;;
+  esac
+  [ "$s" = ubsan ] || add "CARGO_TARGET_${4}_RUSTFLAGS" "-Zsanitizer=$(san_flag "$s") -Zexternal-clangrt"
+  add ELIDE_SANITIZER "$s"
+  for so in "$ROOT"/lib/clang/*/lib/"$target"/libclang_rt."$s".so \
+            "$ROOT"/lib/clang/*/lib/darwin/libclang_rt."${s}"_osx_dynamic.dylib; do
+    if [ -f "$so" ]; then add ELIDE_SANITIZER_RUNTIME "$so"; break; fi
+  done
+}
+
+cmd_sanitizers() {
+  only=""
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --target) [ $# -ge 2 ] || die "--target needs a triple"; only=$2; shift 2 ;;
+      --target=*) only=${1#--target=}; shift ;;
+      *) die "sanitizers: unknown option: $1" ;;
+    esac
+  done
+  [ -z "$only" ] || has_target "$only" || die "target $only is not in this bundle"
+  printf '%-28s %-8s %s\n' TARGET SANITIZER ADD-ON
+  for cfg in "$(san_dir)"/*.cfg; do
+    [ -e "$cfg" ] || continue
+    name=${cfg##*/}; name=${name%.cfg}
+    case $name in *.addon) continue ;; esac
+    t=${name%-*}; s=${name##*-}
+    [ -z "$only" ] || [ "$t" = "$only" ] || continue
+    case $s:$t in
+      asan:*-linux-gnu|tsan:*-linux-gnu) a="$(addon_state "$t" "$s") (recommended)" || exit 1 ;;
+      msan:*-linux-gnu) a="$(addon_state "$t" "$s") (required)" || exit 1 ;;
+      *) a="n/a" ;;
+    esac
+    printf '%-28s %-8s %s\n' "$t" "$s" "$a"
+  done
+}
+
+sha256_file() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi
+}
+
+fetch() { # URL OUT
+  if command -v curl >/dev/null 2>&1; then curl -fsSL -o "$2" "$1"; else wget -q -O "$2" "$1"; fi
+}
+
+cmd_addon() {
+  [ "${1:-}" = install ] || die "usage: elide-toolchain addon install sanitizer-SAN [--from FILE|URL] [--no-verify]"
+  shift
+  [ $# -ge 1 ] || die "addon install: name the add-on (sanitizer-asan, sanitizer-tsan, sanitizer-msan)"
+  case $1 in sanitizer-asan|sanitizer-tsan|sanitizer-msan) s=${1#sanitizer-} ;; *) die "unknown add-on: $1" ;; esac
+  shift
+  from="" verify=yes
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --from) [ $# -ge 2 ] || die "--from needs a file or URL"; from=$2; shift 2 ;;
+      --from=*) from=${1#--from=}; shift ;;
+      --no-verify) verify=no; shift ;;
+      *) die "addon install: unknown option: $1" ;;
+    esac
+  done
+  ver=$(cat "$ROOT/share/elide-toolchain/VERSION")
+  asset=$(addon_asset "$s")
+  archive=$WORK/$asset
+  if [ -n "$from" ] && [ -f "$from" ]; then
+    cp "$from" "$archive"
+    if [ "$verify" = yes ]; then
+      [ -f "$from.sha256" ] || die "no $from.sha256 (use --no-verify to skip the checksum)"
+      cp "$from.sha256" "$archive.sha256"
+    fi
+  else
+    ok=no
+    for url in ${from:-"https://github.com/elide-dev/toolchain/releases/download/v$ver/$asset" "https://static.elideusercontent.com/toolchain/$ver/$asset"}; do
+      if fetch "$url" "$archive" && { [ "$verify" = no ] || fetch "$url.sha256" "$archive.sha256"; }; then ok=yes; break; fi
+    done
+    [ "$ok" = yes ] || die "could not download $asset"
+  fi
+  if [ "$verify" = yes ]; then
+    want=$(cut -d' ' -f1 "$archive.sha256")
+    [ "$(sha256_file "$archive")" = "$want" ] || die "checksum mismatch for $asset"
+  fi
+  meta=$(tar -xJOf "$archive" "elide-toolchain/share/elide-toolchain/sanitizers/$s.addon.json" 2>/dev/null) \
+    || die "$asset is not a sanitizer add-on (no $s.addon.json)"
+  v=$(printf '%s' "$meta" | sed -n 's/.*"version": *"\([^"]*\)".*/\1/p')
+  [ "$v" = "$ver" ] || die "$asset is version '$v' but this bundle is $ver"
+  tar -xJf "$archive" -C "$ROOT/.."
+  echo "installed sanitizer-$s add-on into $ROOT"
+}
+
 cmd_doctor() {
+  sans=no
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --sanitizers) sans=yes; shift ;;
+      *) die "doctor: unknown option: $1" ;;
+    esac
+  done
   printf '#include <stdio.h>\nint main(void){puts("ok");return 0;}\n' > "$WORK/hello.c"
   printf '#include <iostream>\nint main(){std::cout<<"ok"<<std::endl;return 0;}\n' > "$WORK/hello.cpp"
   rc=0
@@ -202,7 +368,65 @@ cmd_doctor() {
       rc=1
     fi
   done
+  if [ "$sans" = yes ]; then doctor_sanitizers || rc=1; fi
   return "$rc"
+}
+
+# san_trip_source SAN — a tiny program with the bug SAN reports (argc keeps it from folding away).
+san_trip_source() {
+  case $1 in
+    asan) printf '#include <stdlib.h>\nint main(int c,char**v){(void)v;char*p=malloc(8);p[7+c]=1;int r=p[7+c];free(p);return r==7;}\n' ;;
+    lsan) printf '#include <stdlib.h>\nvoid*volatile g;int main(int c,char**v){(void)v;g=malloc(64+c);g=0;return 0;}\n' ;;
+    tsan) printf '#include <pthread.h>\nint x;static void*f(void*a){(void)a;x++;return 0;}\nint main(void){pthread_t a,b;pthread_create(&a,0,f,0);pthread_create(&b,0,f,0);pthread_join(a,0);pthread_join(b,0);return x==7;}\n' ;;
+    msan) printf '#include <stdio.h>\n#include <stdlib.h>\nint main(int c,char**v){(void)v;int*p=malloc(8*sizeof(int));if(p[c])puts("y");free(p);return 0;}\n' ;;
+    ubsan) printf '#include <limits.h>\nint main(int c,char**v){(void)v;int x=INT_MAX;x+=c;return x==7;}\n' ;;
+    *) return 1 ;;
+  esac
+}
+
+san_report() {
+  case $1 in
+    asan) echo heap-buffer-overflow ;; lsan) echo "detected memory leaks" ;; tsan) echo "data race" ;;
+    msan) echo use-of-uninitialized-value ;; ubsan) echo "runtime error" ;; *) return 1 ;;
+  esac
+}
+
+# doctor_sanitizers — for every shipped (target, sanitizer): a clean C++ program builds through the
+# wrapper (with the add-on's libc++ when installed) and runs without a report, and the sanitizer's
+# trip program reports its bug. msan without its add-on and hwasan (kernel-dependent) are skipped.
+doctor_sanitizers() {
+  src=0
+  for cfg in "$(san_dir)"/*.cfg; do
+    [ -e "$cfg" ] || continue
+    name=${cfg##*/}; name=${name%.cfg}
+    case $name in *.addon) continue ;; esac
+    t=${name%-*}; s=${name##*-}
+    has_target "$t" || continue
+    label="$t $s"
+    [ "$(addon_state "$t" "$s")" = installed ] && label="$label (add-on)"
+    if [ "$s" = hwasan ]; then echo "skip  $label: needs the kernel's tagged-address ABI"; continue; fi
+    if [ "$s" = msan ] && [ ! -f "$(san_dir)/$t-msan.addon.cfg" ]; then echo "skip  $label: needs its add-on"; continue; fi
+    extra=""
+    case $t in *-linux-musl) extra=-static ;; esac
+    san_trip_source "$s" > "$WORK/trip-$name.c"
+    # shellcheck disable=SC2086
+    if ! "$ROOT/bin/$t-$s-clang++" $extra -g "$WORK/hello.cpp" -o "$WORK/clean-$name" 2>"$WORK/err-$name" \
+       || ! "$WORK/clean-$name" >"$WORK/log-$name" 2>&1 || grep -qE 'Sanitizer|runtime error' "$WORK/log-$name"; then
+      echo "FAIL  $label: clean program: $(head -n 2 "$WORK/err-$name" "$WORK/log-$name" 2>/dev/null | tr '\n' ' ')"
+      src=1; continue
+    fi
+    # shellcheck disable=SC2086
+    if ! "$ROOT/bin/$t-$s-clang" $extra -g -fno-sanitize-recover=all "$WORK/trip-$name.c" -lpthread -o "$WORK/trip-$name" 2>"$WORK/err-$name"; then
+      echo "FAIL  $label: trip program does not build: $(head -n 2 "$WORK/err-$name" | tr '\n' ' ')"
+      src=1; continue
+    fi
+    if "$WORK/trip-$name" >"$WORK/log-$name" 2>&1 || ! grep -qF "$(san_report "$s")" "$WORK/log-$name"; then
+      echo "FAIL  $label: no '$(san_report "$s")' report"
+      src=1; continue
+    fi
+    echo "ok    $label"
+  done
+  return "$src"
 }
 
 cmd=${1:-help}
@@ -213,7 +437,9 @@ case $cmd in
   version) cat "$ROOT/share/elide-toolchain/VERSION" ;;
   env) cmd_env "$@" ;;
   flags) cmd_flags "$@" ;;
-  doctor) cmd_doctor ;;
+  sanitizers) cmd_sanitizers "$@" ;;
+  addon) cmd_addon "$@" ;;
+  doctor) cmd_doctor "$@" ;;
   help|-h|--help) usage ;;
   *) die "unknown command: $cmd (try --help)" ;;
 esac
