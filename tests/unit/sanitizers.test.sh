@@ -20,6 +20,9 @@ assert_eq "$(BUILD_SANITIZER_VARIANTS=yes triple_variants $G)" "asan tsan msan"
 assert_eq "$(BUILD_SANITIZER_VARIANTS=yes triple_variants $M)" ""
 assert_eq "$(BUILD_SANITIZER_VARIANTS=no triple_variants $G)" ""
 assert_eq "$(BUILD_SANITIZER_VARIANTS=yes all_variants)" "asan tsan msan"
+# add-ons are x86_64-only (SANITIZER_VARIANT_CPUS)
+assert_eq "$(BUILD_SANITIZER_VARIANTS=yes triple_variants aarch64-unknown-linux-gnu)" ""
+assert_eq "$(BUILD_SANITIZER_VARIANTS=yes ALL_TARGETS="aarch64-unknown-linux-gnu aarch64-unknown-linux-musl" all_variants)" ""
 assert_ok triple_has_libfuzzer $G
 assert_fails triple_has_libfuzzer $M
 assert_eq "$(san_flag msan)" "memory"

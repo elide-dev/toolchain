@@ -23,7 +23,8 @@ triple_sanitizers() {
 # triple_variants TRIPLE — sanitizers with an add-on (instrumented libc++ + components) for TRIPLE.
 triple_variants() {
   if [ "$(triple_libc "$1")" = gnu ] && is_yes "${BUILD_SANITIZERS:-yes}" \
-     && is_yes "${BUILD_SANITIZER_VARIANTS:-no}"; then
+     && is_yes "${BUILD_SANITIZER_VARIANTS:-no}" \
+     && [[ " $SANITIZER_VARIANT_CPUS " == *" $(triple_cpu "$1") "* ]]; then
     printf '%s\n' "$SANITIZER_VARIANTS"
   else
     echo ""

@@ -109,6 +109,10 @@ assert_contains "$(cat "$T/warn")" "not instrumented"
 assert_eq "$(printf '%s' "$out" | grep -o '"CC"' | wc -l | xargs)" "1" "CC emitted once"
 assert_fails "$H" env --target $G --sanitizer msan
 assert_contains "$("$H" env --target $G --sanitizer msan 2>&1 || true)" "sanitizer-msan"
+A=aarch64-unknown-linux-gnu   # add-ons are x86_64-only: no add-on path for aarch64 msan
+touch "$B/bin/$A.cfg"; : > "$SD/$A-msan.cfg"; mkdir -p "$B/lib/clang/23/lib/$A"
+assert_contains "$("$H" env --target $A --sanitizer msan 2>&1 || true)" "published only for x86_64-unknown-linux-gnu"
+rm -f "$B/bin/$A.cfg" "$SD/$A-msan.cfg"
 assert_fails "$H" env --target $M --sanitizer asan
 assert_contains "$("$H" env --target $M --sanitizer asan 2>&1 || true)" "static-only"
 assert_fails "$H" env --target $G --sanitizer asan --static

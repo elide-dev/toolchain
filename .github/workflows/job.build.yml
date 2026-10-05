@@ -8,7 +8,7 @@ on:
         required: false
         type: string
       sanitizer-addons:
-        description: "Also build the per-sanitizer add-on archives (Linux)"
+        description: "Also build the per-sanitizer add-on archives (linux-amd64)"
         required: false
         type: boolean
         default: false
@@ -19,7 +19,7 @@ on:
         type: string
         default: ""
       sanitizer-addons:
-        # Per-sanitizer add-on archives (asan/tsan/msan, Linux gnu triples). Only push-to-main and
+        # Per-sanitizer add-on archives (asan/tsan/msan, x86_64 gnu only). Only push-to-main and
         # release builds set this (spec 2026-10-05 §9); PR builds stay fast.
         required: false
         type: boolean

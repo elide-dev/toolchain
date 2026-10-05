@@ -246,7 +246,7 @@ sanitizer_env() { # TARGET SAN STATIC RUST_TRIPLE_VAR
   sr=$ROOT/sysroot/$target
   case $s in
     asan|tsan|msan)
-      case $target in *-linux-gnu)
+      case $target in x86_64-*-linux-gnu)
         st=$(addon_state "$target" "$s") || exit 1
         if [ "$st" = installed ]; then
           sr=$ROOT/sysroot/$target+$s
@@ -255,6 +255,10 @@ sanitizer_env() { # TARGET SAN STATIC RUST_TRIPLE_VAR
         else
           echo "elide-toolchain: warning: libc++ and components are not instrumented for $s; install the sanitizer-$s add-on ($(addon_asset "$s")) for full coverage" >&2
         fi ;;
+      *-linux-gnu)
+        # Add-ons are published for x86_64 only: no instrumented libc++/components here.
+        if [ "$s" = msan ]; then die "msan needs an instrumented libc++ and components, published only for x86_64-unknown-linux-gnu; use asan or tsan on $target"; fi
+        echo "elide-toolchain: warning: libc++ and components are not instrumented for $s on $target (add-ons exist for x86_64 only)" >&2 ;;
       esac ;;
   esac
   bin=$ROOT/bin
@@ -313,6 +317,7 @@ cmd_addon() {
   shift
   [ $# -ge 1 ] || die "addon install: name the add-on (sanitizer-asan, sanitizer-tsan, sanitizer-msan)"
   case $1 in sanitizer-asan|sanitizer-tsan|sanitizer-msan) s=${1#sanitizer-} ;; *) die "unknown add-on: $1" ;; esac
+  has_target x86_64-unknown-linux-gnu || die "sanitizer add-ons are published for linux-amd64 bundles only"
   shift
   from="" verify=yes
   while [ $# -gt 0 ]; do

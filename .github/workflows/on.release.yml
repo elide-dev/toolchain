@@ -44,13 +44,13 @@ jobs:
       - name: "Verify checksums"
         run: cd dist && for f in *.tar.xz; do sha256sum -c "$f.sha256"; done
       - name: "Verify sanitizer add-ons"
-        # Every Linux bundle ships one add-on per SANITIZER_VARIANTS entry (spec 2026-10-05 §4.2);
+        # Every linux-amd64 bundle (SANITIZER_VARIANT_CPUS) ships one add-on per SANITIZER_VARIANTS entry;
         # `elide-toolchain addon install` and the action fetch them by exact name from this release
         # (then R2), so a release must not go out without them.
         run: |
           . src/versions.env
           missing=0
-          for b in dist/elide-toolchain-*-linux-*.tar.xz; do
+          for b in dist/elide-toolchain-*-linux-amd64.tar.xz; do
             case "$b" in *-sanitizer-*) continue ;; esac
             for s in $SANITIZER_VARIANTS; do
               a="${b%.tar.xz}-sanitizer-$s.tar.xz"
