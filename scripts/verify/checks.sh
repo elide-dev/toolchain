@@ -162,35 +162,54 @@ bitcode_producer() {
 # scanned), glibc's own archives (listed in glibc-files.txt), and hand-written assembly members
 # (*.S.o, *.s.o, *.asm.o), which have no IR and so cannot carry bitcode.
 check_bitcode() {
-  local root="$1" t="$2" a rel tmp m kind bad="" sample bc producer
+  local root="$1" t="$2" a rel tmp m kind bad="" bc producer checked nonasm n sections
   tmp="$(mktemp -d)"
   while IFS= read -r a; do
     rel="${a#"$root/sysroot/$t"/}"
     if [ "$a" != "$rel" ] && grep -qxF "$rel" "$OUT_DIR/glibc-files.txt"; then continue; fi
+    # musl ships bare-header stub archives (libm.a, libpthread.a, ...): 8 bytes, no members, nothing to carry.
+    if [ "$(wc -c < "$a")" -le 8 ] && [ -z "$("$root/bin/llvm-ar" t "$a" 2>/dev/null)" ]; then continue; fi
     rm -rf "$tmp/x"; mkdir -p "$tmp/x"
+    if [ -n "$("$root/bin/llvm-ar" t "$a" 2>/dev/null | sort | uniq -d)" ]; then
+      bad="$bad$a: duplicate member names, cannot verify all members"$'\n'; continue
+    fi
     if ! (cd "$tmp/x" || exit 1; "$root/bin/llvm-ar" x "$a"); then bad="$bad$a: cannot extract"$'\n'; continue; fi
-    sample=""
+    checked=0; nonasm=0; n=0
     for m in "$tmp/x"/*; do
       [ -f "$m" ] || continue
+      n=$((n + 1))
       case "$m" in *.S.o|*.s.o|*.asm.o) continue ;; esac
+      nonasm=$((nonasm + 1))
       kind="$(head -c 4 "$m" | od -An -tx1 | tr -d ' \n')"
+      bc=""
       case "$kind" in
-        4243c0de) sample="${sample:-$m}" ;;
+        4243c0de) bc="$m" ;;
         7f454c46)
-          if "$root/bin/llvm-readelf" -S "$m" 2>/dev/null | grep -q '\.llvm\.lto'; then
-            if [ -z "$sample" ]; then
-              "$root/bin/llvm-objcopy" --dump-section ".llvm.lto=$tmp/fat.bc" "$m" "$tmp/discard.o" && sample="$tmp/fat.bc"
+          sections="$("$root/bin/llvm-readelf" -S "$m" 2>/dev/null || true)"
+          if grep -q '\.llvm\.lto' <<< "$sections"; then
+            rm -f "$tmp/fat.bc"
+            if "$root/bin/llvm-objcopy" --dump-section ".llvm.lto=$tmp/fat.bc" "$m" "$tmp/discard.o" 2>/dev/null && [ -s "$tmp/fat.bc" ]; then
+              bc="$tmp/fat.bc"
+            else
+              bad="$bad$a($(basename "$m")): cannot dump .llvm.lto section"$'\n'
             fi
           else
             bad="$bad$a($(basename "$m")): native code only, no bitcode"$'\n'
           fi ;;
+        cffaedfe|cefaedfe|feedface|feedfacf|cafebabe) bad="$bad$a($(basename "$m")): native code only, no bitcode"$'\n' ;;
         *) bad="$bad$a($(basename "$m")): not an object (magic $kind)"$'\n' ;;
       esac
+      if [ -n "$bc" ]; then
+        checked=$((checked + 1))
+        producer="$(bitcode_producer "$root/bin/llvm-bcanalyzer" "$bc")"
+        producer="${producer#LLVM}"
+        if [ "${producer%%.*}" != "$LLVM_MAJOR" ]; then
+          bad="$bad$a($(basename "$m")): bitcode producer 'LLVM$producer', want LLVM$LLVM_MAJOR.x"$'\n'
+        fi
+      fi
     done
-    if [ -n "$sample" ]; then
-      producer="$(bitcode_producer "$root/bin/llvm-bcanalyzer" "$sample")"
-      bc="${producer#LLVM}"
-      if [ "${bc%%.*}" != "$LLVM_MAJOR" ]; then bad="$bad$a: bitcode producer '$producer', want LLVM$LLVM_MAJOR.x"$'\n'; fi
+    if [ "$checked" -eq 0 ] && { [ "$nonasm" -gt 0 ] || [ "$n" -eq 0 ]; }; then
+      bad="$bad$a: no member checked (empty archive or no bitcode)"$'\n'
     fi
   done < <(find "$root/sysroot/$t/usr/lib" "$root/lib/$t" -name '*.a' -type f 2>/dev/null | sort)
   rm -rf "$tmp"
