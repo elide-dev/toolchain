@@ -41,7 +41,7 @@ and keeps the ThinLTO-everywhere model.
 | Topic | Decision | Why (evidence) |
 |---|---|---|
 | Runtimes | Build compiler-rt sanitizers into the **main** bundle for every triple, subset per §3 | +2.7 MiB xz per gnu triple, about +0.3 MiB per musl triple, against a 525.7 MiB bundle; ~30 s of build per triple (spike A, sizes) |
-| Instrumented libraries | Ship them in a **separate overlay archive** per Linux bundle: `elide-toolchain-<ver>-linux-<arch>-sanitizers.tar.xz`, with the same root dir and extracted over the main bundle | Real payload is 63.6 MiB xz (asan+tsan+msan, gnu). Full variant bundles would re-ship 525 MiB of LLVM per sanitizer; putting it all in the main bundle costs +12 % for everyone (spike D) |
+| Instrumented libraries | Ship them in a **separate overlay archive** per Linux bundle: `elide-toolchain-<ver>-linux-<arch>-sanitizers.tar.xz`, with the same root dir and extracted over the main bundle | Real payload is 65.3 MiB xz (asan+tsan+msan, gnu). Full variant bundles would re-ship 525 MiB of LLVM per sanitizer; putting it all in the main bundle costs +12 % for everyone (spike D) |
 | Which variants | `asan`, `tsan`, `msan`, gnu triples only | MSan needs them (false positives otherwise). ASan/TSan work without them but miss bugs inside libc++/components, and TSan cannot see synchronisation done in uninstrumented code. UBSan and LSan need no instrumented libraries |
 | musl | UBSan (standalone + minimal, static) only | ASan/TSan/MSan/LSan cannot link `-static` (`_DYNAMIC` undefined); dynamically linked musl executables crash today (§10); upstream does not test TSan/MSan on musl (spike B) |
 | darwin | ASan, TSan, UBSan dylibs in the main bundle; no overlay | MSan unsupported by clang on Darwin; macOS uses the system libc++, which cannot be swapped; components overlay is a possible follow-up |
@@ -133,8 +133,8 @@ share/elide-toolchain/sanitizers/<G>-{asan,tsan,msan}.overlay.cfg    # sysroot/-
 share/elide-toolchain/sanitizers/overlay.json                        # {"version": "...", "revision": "...", "variants": {...}}
 ```
 
-Sizes, measured on x86_64-gnu (xz -9): msan 27.4 MiB, asan 23.5 MiB, tsan 15.6 MiB; **63.6 MiB
-together** (208.7 MiB raw). aarch64 is assumed similar (**unverified**).
+Sizes, measured on x86_64-gnu (xz -9): msan 28.1 MiB, asan 24.0 MiB, tsan 15.8 MiB; **65.3 MiB
+together** (212.0 MiB raw). aarch64 is assumed similar (**unverified**).
 
 **Alternatives rejected.**
 (a) Everything in the main bundle: +12 % download for every consumer, almost none of whom
@@ -142,7 +142,7 @@ sanitize.
 (b) Full per-sanitizer bundles (`…-linux-amd64-msan.tar.xz` with LLVM included): about 590 MiB
 each, three times per arch, for about 22 MiB of distinct content, and the action/mise would have
 to pick among four "linux-amd64" toolchains.
-(c) One overlay per sanitizer: smaller single downloads (16–27 MiB) but three more assets per
+(c) One overlay per sanitizer: smaller single downloads (16–28 MiB) but three more assets per
 arch and more action logic. Reasonable if the user prefers it (open question Q2).
 
 ### 4.3 Variant sysroot farm
@@ -481,7 +481,7 @@ installed (T, S).
 | Packaging the overlay (xz -9, ~210 MiB raw) | +1–2 min |
 | New stage 95 checks | +2–3 min |
 | **Total** | Linux about +12–20 min per job on top of ~22 min locally (CI ~1–2 h); darwin about +5–8 min |
-| Artifacts | +64 MiB per Linux arch (overlay), +~3 MiB per Linux main bundle |
+| Artifacts | +65 MiB per Linux arch (overlay), +~3 MiB per Linux main bundle |
 
 Matrix: unchanged, with the same three jobs. Everything is gated by `BUILD_SANITIZERS` /
 `BUILD_SANITIZER_VARIANTS` (default yes), so a PR can be fast-pathed later if time hurts.
@@ -547,7 +547,7 @@ loader. Root cause **not investigated**.
 ## 12. Open questions
 
 - **Q1.** Ship libFuzzer in the main bundle (+0.6 MiB xz per gnu triple)? Recommended yes.
-- **Q2.** One combined overlay (64 MiB) or one per sanitizer (16–27 MiB each)? Recommended
+- **Q2.** One combined overlay (65 MiB) or one per sanitizer (16–28 MiB each)? Recommended
   combined.
 - **Q3.** Build the overlay on every PR, or only on push/release? Recommended every run.
 - **Q4.** Fix or formally drop dynamically linked musl executables (§10) before shipping?

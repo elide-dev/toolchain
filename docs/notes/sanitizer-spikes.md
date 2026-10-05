@@ -153,9 +153,21 @@ components into a staging prefix. aws-lc was static-only, plus `-DOPENSSL_NO_ASM
 
 | Variant | Build (all 7) | raw | xz -9 | Instrumented? |
 |---|---|---|---|---|
-| msan | 43 s | 51.1 MiB | 21.6 MiB | every archive references `__msan_*` (libz 28 … libcrypto 6807 refs) |
-| asan | 35 s | 49.6 MiB | 18.6 MiB | yes |
-| tsan | 34 s | 33.7 MiB | 12.5 MiB | yes |
+| msan | 39 s | 52.5 MiB | 22.3 MiB | every archive references `__msan_*` (libz 1459, libzstd 987, libcrypto 6807 refs; mimalloc shim 28) |
+| asan | 35 s | 50.9 MiB | 19.1 MiB | yes |
+| tsan | 35 s | 34.3 MiB | 12.7 MiB | yes |
+
+**Correction (first pass discarded).** The first pass copied the zlib-ng sources without VCS
+metadata, and the main checkout's zlib-ng tree held stale *in-tree* objects from an earlier musl
+build. `make` reused them, so `libz.a` mixed instrumented and uninstrumented
+`x86_64-unknown-linux-musl` bitcode (lld: `Linking two modules of different target triples`), with
+only 28 `__msan` refs. The first `workload.c` also used static (zero-initialised, therefore
+"initialised") buffers, which hides MSan false positives from uninstrumented stores. Both were
+fixed: zlib-ng is copied honouring `.gitignore`, as the repo's `stage_source` does by copying only
+tracked files, and `workload.c` uses heap buffers. All three variants were then rebuilt from clean
+sources; the numbers and results in this section are from that second pass. The **negative
+control**, the same heap-buffer workload under `-fsanitize=memory` against the *base* sysroot,
+reports `use-of-uninitialized-value`, so the check is sensitive.
 
 With instrumented libc++ and components behind a layered cfg, `run-variant.sh` per sanitizer
 (fixtures `clean.cpp`, `workload.c`, each with and without `-flto=thin`, plus the trigger) gave:
@@ -167,7 +179,7 @@ asan          clean      clean              clean       clean               trip
 tsan          clean      clean              clean       clean               trips
 ```
 
-**All variant payloads together (x86_64-gnu, asan+tsan+msan libc++ and components): 208.7 MiB raw, 63.6 MiB xz.**
+**All variant payloads together (x86_64-gnu, asan+tsan+msan libc++ and components): 212.0 MiB raw, 65.3 MiB xz.**
 For scale, the main linux-amd64 bundle is 525.7 MiB xz.
 
 ## Spike E: mimalloc under sanitizers
@@ -259,3 +271,15 @@ was all PASS again, and the MSan workload's `NEEDED` is only libc/libm/libresolv
 **Negative control:** with the `libcrypto.so` symlink restored in the msan farm, lld links the
 uninstrumented shared aws-lc and the workload reports `use-of-uninitialized-value … in
 MemcmpInterceptorCommon`. Dropping replaced `.so` symlinks is therefore mandatory.
+
+## Addendum: plan-wrapper validation
+
+The wrapper text that the plan's `render_san_wrapper` (Task 6) generates was rendered from the
+plan file itself and is `shellcheck -s sh` clean. Run against the bundle copy, with a runtime
+layer `<T>-msan.cfg` and an overlay layer `<T>-msan.overlay.cfg`, it stacks both `--config`s:
+the MSan trigger reports `use-of-uninitialized-value`, and the heap-buffer workload linked
+`-flto=thin` against every farm component runs clean with no cross-triple bitcode warnings. With
+the overlay cfg hidden, the msan wrapper exits 2 with the "needs the sanitizers overlay" message.
+The final-layout re-test above was repeated after the spike D correction (clean sources, heap
+buffers), with the same all-PASS result, and all three CMake consumers again resolved
+`sysroot/<G>+<san>/usr/lib/libz.a` and ran clean.
