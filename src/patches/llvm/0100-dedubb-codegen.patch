@@ -1,0 +1,4718 @@
+# requires: LLVM_DEDUBB
+# upstream: https://github.com/chaitanyaupp18/DeduBB/blob/07d730dab798a18440cd7b6ecca103794a86dfc2/patches/llvm-project-dedubb.patch
+#   DeduBB: Binary Code Size Reduction via Post-Link Basic Block Deduplication (LCTES '26)
+#   base llvm/llvm-project@333edde4e80e (ancestor of llvmorg-23.1.2); Apache-2.0 WITH LLVM-exception
+# local: rebased to llvmorg-23.1.2 (X86InstrInfo.cpp offset); UnreachableBlockElim change gated on
+#   non-empty -dedubb-directives so the compiler is unchanged without directives.
+# Tracked in https://github.com/elide-dev/toolchain/issues/4
+diff --git a/clang/tools/driver/CMakeLists.txt b/clang/tools/driver/CMakeLists.txt
+--- a/clang/tools/driver/CMakeLists.txt
++++ b/clang/tools/driver/CMakeLists.txt
+@@ -56,6 +56,15 @@
+ 
+ setup_host_tool(clang CLANG clang_exe clang_target)
+ 
++# DeduBB: apply a directive file (from `generate_propeller_profiles
++# --dedubb_profile`) when linking the clang executable, and nothing else.
++set(CLANG_DEDUBB_DIRECTIVES "" CACHE FILEPATH
++    "DeduBB directive file applied when linking the clang executable")
++if(CLANG_DEDUBB_DIRECTIVES)
++  target_link_options(clang PRIVATE
++    "-Wl,-mllvm,-dedubb-directives=${CLANG_DEDUBB_DIRECTIVES}")
++endif()
++
+ clang_target_link_libraries(clang
+   PRIVATE
+   clangBasic
+diff --git a/lld/ELF/LinkerScript.cpp b/lld/ELF/LinkerScript.cpp
+--- a/lld/ELF/LinkerScript.cpp
++++ b/lld/ELF/LinkerScript.cpp
+@@ -96,10 +96,13 @@
+   // cold parts in .text.split instead of .text.unlikely mitigates against poor
+   // profile inaccuracy. Techniques such as hugepage remapping can make
+   // conservative decisions at the section granularity.
++  // ".text.dedubb." holds the masters of DeduBB: the code that the duplicate
++  // blocks it removes from functions in other input sections call or jump to.
+   if (isSectionPrefix(".text", s->name)) {
+     if (ctx.arg.zKeepTextSectionPrefix)
+       for (StringRef v : {".text.hot", ".text.unknown", ".text.unlikely",
+-                          ".text.startup", ".text.exit", ".text.split"})
++                          ".text.startup", ".text.exit", ".text.split",
++                          ".text.dedubb"})
+         if (isSectionPrefix(v.substr(5), s->name.substr(5)))
+           return v;
+     return ".text";
+diff --git a/lld/test/ELF/text-section-prefix.s b/lld/test/ELF/text-section-prefix.s
+--- a/lld/test/ELF/text-section-prefix.s
++++ b/lld/test/ELF/text-section-prefix.s
+@@ -1,7 +1,7 @@
+ # REQUIRES: x86
+ ## -z keep-text-section-prefix separates text sections with prefix .text.hot,
+-## .text.unknown, .text.unlikely, .text.startup, or .text.exit, in the absence
+-## of a SECTIONS command.
++## .text.unknown, .text.unlikely, .text.startup, .text.exit, or .text.dedubb,
++## in the absence of a SECTIONS command.
+ 
+ # RUN: llvm-mc -filetype=obj -triple=x86_64 %s -o %t.o
+ # RUN: ld.lld %t.o -o %t1
+@@ -19,6 +19,7 @@
+ # KEEP-NEXT: [ 5] .text.startup
+ # KEEP-NEXT: [ 6] .text.exit
+ # KEEP-NEXT: [ 7] .text.unlikely
++# KEEP-NEXT: [ 8] .text.dedubb
+ 
+ # NOKEEP:    [ 1] .text
+ # NOKEEP-NOT:     .text
+@@ -37,6 +38,7 @@
+ # SCRIPT-NEXT: .text.startup.f_startup
+ # SCRIPT-NEXT: .text.exit.f_exit
+ # SCRIPT-NEXT: .text.unlikely.f_unlikely
++# SCRIPT-NEXT: .text.dedubb.f_dedubb
+ 
+ .globl _start
+ _start:
+@@ -62,3 +64,6 @@
+ 
+ .section .text.unlikely.f_unlikely,"ax"
+   nop
++
++.section .text.dedubb.f_dedubb,"ax"
++  nop
+diff --git a/llvm/include/llvm/CodeGen/DeduBBDirectives.h b/llvm/include/llvm/CodeGen/DeduBBDirectives.h
+new file mode 100644
+--- /dev/null
++++ b/llvm/include/llvm/CodeGen/DeduBBDirectives.h
+@@ -0,0 +1,193 @@
++//===- llvm/CodeGen/DeduBBDirectives.h - DeduBB directive reader -*- C++ -*-===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++//
++// Reads the DeduBB tail-call deduplication directive file produced by Propeller
++// (the `--tail_call_profile=dedubb.txt` output) and answers per-block queries
++// used by the DeduBB CodeGen pass and the AsmPrinter.
++//
++// The directive file groups directives by module and function:
++//
++//     m <module>
++//     f <function>
++//     bbm <bb_id> (DeduBB.master.<K>) [callees=<c>] ; master copy K
++//     bbf <bb_id> (DeduBB.master.<K>) [callees=<c>] ; fold into master K
++//     bbmsj <bb_id> (DeduBB.master.sj.<K>)  ; Save-and-Jump master copy K
++//     bbfsj <bb_id> (DeduBB.master.sj.<K>)  ; Save-and-Jump fold into K
++//     bbmsj2 <bb_id> (DeduBB.master.sj2.<K>) ; two-exit Save-and-Jump master
++//     bbfsj2 <bb_id> (DeduBB.master.sj2.<K>) ; two-exit Save-and-Jump fold
++//     bbmcr <bb_id> (DeduBB.master.cr.<K>) callees=<c> insts=<n> body=<b>
++//     bbfcr <bb_id> (DeduBB.master.cr.<K>) callees=<c> insts=<n>
++//     ... [at=<i> block_insts=<m>]   ; a Call-Return fold of a range
++//
++// `bbm` marks a basic block as the master copy: the compiler emits a global
++// symbol `DeduBB.master.<K>` at the start of the block so that duplicates in
++// this and other modules can branch to it. `bbf` marks a duplicate that ends
++// in a tail call or return: the compiler replaces the whole block with a single
++// jump to `DeduBB.master.<K>`. The copies are byte-identical, except that a
++// direct call or jump reaches the same target from each: <c> names those
++// targets like a Call-Return `callees=` below, and a block whose calls and
++// jumps do not match it (or that has any without it) is not folded.
++//
++// `bbmsj`/`bbfsj` do the same for single-successor blocks that fall through.
++// The fold passes its successor's address to the master in the target's link
++// register (R11 on x86-64), and the master returns with an indirect jump
++// through it. `bbmsj2`/`bbfsj2` do the same for blocks that end in a
++// conditional branch: the fold passes both successors (R11 and R10 on x86-64)
++// and the master's conditional branch picks the one to return through. See
++// DeduBB.cpp for the eligibility rules.
++//
++// `bbmcr`/`bbfcr` are Call-Return directives. Every block of the group, the
++// master's included, keeps its branches but its body, everything before them,
++// becomes a call to one shared copy of the body that ends in a return. The
++// DeduBBCallReturn pass emits that copy, labelled `DeduBB.master.cr.<K>`, in a
++// function of its own. <c> lists the calls the body makes, in order and
++// separated by ',': the names of a direct call's target separated by '|', or
++// '*' for a call through a register or memory. It is empty if the body makes
++// no call. <n> is the number of instructions in the body. <b> is the body
++// itself in hex, split by '.' where each direct call goes. See
++// DeduBBCallReturn.cpp for the eligibility rules.
++//
++// With `at=<i> block_insts=<m>`, a directive covers a range of the block, the
++// instructions from i, counting from 0 the instructions that emit code, in a
++// block of m of them, branches included; everything else in the block stays
++// where it is. A block may have several, for ranges that do not overlap.
++//
++//     bbmcr / bbfcr <bb_id> (DeduBB.master.cr.<K>) callees=<c> insts=<n>
++//         at=<i> block_insts=<m> [body=<b>]
++//       a Call-Return run: instructions i to i + n become a call to the
++//       master, emitted from <b> like a whole-body one.
++//     bbmsj / bbfsj <bb_id> (DeduBB.master.sj.<K>) insts=<n> at=<i>
++//         block_insts=<m> [body=<b>]
++//       a Save-and-Jump run (no call): instructions i to i + n become
++//       `lea 1f(%rip),%r11; jmp DeduBB.master.sj.<K>; 1:`, and the master,
++//       emitted from <b> (hex, no '.'), ends with `jmp *%r11`.
++//     bbm / bbf <bb_id> (DeduBB.master.<K>) [callees=<c>] at=<i>
++//         block_insts=<m>
++//       a tail-call ending: instructions i to the end of the block, with no
++//       call but a final tail call, whose target <c> names. A master keeps
++//       them and gets the label `DeduBB.master.<K>` in front of the first; a
++//       fold replaces them with a jump to that label. A master block may
++//       carry several labels, for endings of several lengths.
++//
++// The ranges and all Call-Return directives are applied by the
++// DeduBBCallReturn module pass (DeduBBCallReturn.cpp), the whole-block
++// tail-call and Save-and-Jump directives by the DeduBB function pass
++// (DeduBB.cpp).
++//
++//===----------------------------------------------------------------------===//
++
++#ifndef LLVM_CODEGEN_DEDUBBDIRECTIVES_H
++#define LLVM_CODEGEN_DEDUBBDIRECTIVES_H
++
++#include "llvm/ADT/ArrayRef.h"
++#include "llvm/ADT/DenseMap.h"
++#include "llvm/ADT/SmallVector.h"
++#include "llvm/ADT/StringMap.h"
++#include "llvm/ADT/StringRef.h"
++#include "llvm/Support/Compiler.h"
++#include <cstdint>
++#include <string>
++
++namespace llvm {
++
++class Function;
++class MachineOperand;
++class Module;
++
++class DeduBBDirectives {
++public:
++  enum Kind {
++    Master,
++    Fold,
++    MasterSaveJump,
++    FoldSaveJump,
++    MasterSaveJump2,
++    FoldSaveJump2,
++    MasterCallReturn,
++    FoldCallReturn
++  };
++
++  struct Directive {
++    Kind K;
++    uint64_t MasterID; // K in `DeduBB.master.K`.
++    // The `callees=` list (tail-call and Call-Return directives), the
++    // `insts=` count (Call-Return, Save-and-Jump ranges) and a master's
++    // `body=` hex.
++    std::string Callees;
++    unsigned NumInsts = 0;
++    std::string Body;
++    // Ranges only: `at=` and `block_insts=`.
++    bool IsRange = false;
++    unsigned At = 0;
++    unsigned BlockInsts = 0;
++  };
++
++  // Parses directive text (the contents of a dedubb.txt file). Lines starting
++  // with '#' are comments. Returns false and reports to errs() on a malformed
++  // line, leaving already-parsed directives in place.
++  LLVM_ABI bool parse(StringRef Text);
++
++  // Returns the directive for basic block `BBID` of function `FuncName`, or
++  // nullptr if the block has no directive.
++  LLVM_ABI const Directive *lookup(StringRef FuncName, unsigned BBID) const;
++
++  // Returns the directive for basic block `BBID` of `F`, looked up by the
++  // function's name and then by the names of its aliases.
++  LLVM_ABI const Directive *lookup(const Function &F, unsigned BBID) const;
++
++  // Returns the directives of `F` by basic block id, looked up like the
++  // above, or nullptr if it has none.
++  LLVM_ABI const DenseMap<unsigned, Directive> *
++  getFunction(const Function &F) const;
++
++  // Returns the directives of `F` that the DeduBBRanges pass applies, by
++  // basic block id, looked up like the above, or nullptr if it has none: the
++  // ranges of every kind and the whole-body Call-Return directives. A block
++  // has several for ranges.
++  LLVM_ABI const DenseMap<unsigned, SmallVector<Directive, 1>> *
++  getRanges(const Function &F) const;
++
++  // Returns true if the function has any Save-and-Jump directives.
++  LLVM_ABI bool hasSaveJump(StringRef FuncName) const;
++
++  // Returns true if \p Listed, a directive's `callees=`, names the calls
++  // \p Actual in order. Each call may match any of its '|'-separated names.
++  LLVM_ABI static bool calleesMatch(StringRef Listed,
++                                    ArrayRef<std::string> Actual);
++
++  // Returns the name the target of a direct call, \p MO, has in the object
++  // file.
++  LLVM_ABI static std::string getCalleeName(const MachineOperand &MO);
++
++  // Returns true if \p M is compiled for indirect branch tracking
++  // (-fcf-protection=branch): an indirect jump must then land on an `endbr`,
++  // which Save-and-Jump's return points do not have.
++  LLVM_ABI static bool hasIndirectBranchTracking(const Module &M);
++
++  // Returns true if there are any directives for the DeduBBRanges pass.
++  bool hasRanges() const { return !RangeMap.empty(); }
++
++  bool empty() const { return Map.empty() && RangeMap.empty(); }
++
++  // Returns the process-wide directives, lazily parsed from the file named by
++  // the `-dedubb-directives` command-line option (empty if the option is
++  // unset). Shared by the DeduBB pass and the AsmPrinter.
++  LLVM_ABI static const DeduBBDirectives &get();
++
++private:
++  // Function name -> (basic block id -> directive), for the whole-block
++  // tail-call and Save-and-Jump kinds.
++  StringMap<DenseMap<unsigned, Directive>> Map;
++  // The same for the ranges and Call-Return, which a block can have several
++  // of.
++  StringMap<DenseMap<unsigned, SmallVector<Directive, 1>>> RangeMap;
++};
++
++} // namespace llvm
++
++#endif // LLVM_CODEGEN_DEDUBBDIRECTIVES_H
+diff --git a/llvm/include/llvm/CodeGen/Passes.h b/llvm/include/llvm/CodeGen/Passes.h
+--- a/llvm/include/llvm/CodeGen/Passes.h
++++ b/llvm/include/llvm/CodeGen/Passes.h
+@@ -67,6 +67,14 @@
+ /// basic blocks and is enabled with -fbasic-block-sections.
+ LLVM_ABI MachineFunctionPass *createBasicBlockSectionsPass();
+ 
++/// createDeduBB Pass - This pass applies DeduBB tail-call deduplication
++/// directives (bbm/bbf) read from the file named by -dedubb-directives.
++LLVM_ABI MachineFunctionPass *createDeduBBPass();
++
++/// createDeduBBCallReturnPass - This pass applies the DeduBB Call-Return
++/// directives (bbmcr/bbfcr) read from the file named by -dedubb-directives.
++LLVM_ABI ModulePass *createDeduBBCallReturnPass();
++
+ LLVM_ABI MachineFunctionPass *createBasicBlockPathCloningPass();
+ 
+ /// createBasicBlockMatchingAndInferencePass - This pass enables matching
+diff --git a/llvm/include/llvm/CodeGen/TargetInstrInfo.h b/llvm/include/llvm/CodeGen/TargetInstrInfo.h
+--- a/llvm/include/llvm/CodeGen/TargetInstrInfo.h
++++ b/llvm/include/llvm/CodeGen/TargetInstrInfo.h
+@@ -2282,6 +2282,138 @@
+         "Target didn't implement TargetInstrInfo::insertOutlinedCall!");
+   }
+ 
++  /// Returns true if this target implements \c insertDeduBBTailBranch, i.e. it
++  /// supports DeduBB tail-call basic block deduplication.
++  virtual bool supportsDeduBB() const { return false; }
++
++  /// Appends a tail branch to the external symbol \p MasterSym at the end of
++  /// \p MBB. Used by the DeduBB pass to fold a duplicate tail-call/return block
++  /// into its master copy. Modeled on \c insertOutlinedCall's tail-call path so
++  /// that the current stack frame is preserved.
++  virtual void insertDeduBBTailBranch(MachineBasicBlock &MBB,
++                                      StringRef MasterSym) const {
++    llvm_unreachable(
++        "Target didn't implement TargetInstrInfo::insertDeduBBTailBranch!");
++  }
++
++  /// Returns the register that carries a folded block's return address into
++  /// its Save-and-Jump master (R11 on x86-64), or an invalid register if the
++  /// target does not support Save-and-Jump. The DeduBB pass only folds blocks
++  /// that never touch this register and where it is dead on exit.
++  virtual MCRegister getDeduBBLinkRegister() const { return MCRegister(); }
++
++  /// Returns the register that carries the not-taken return address of a
++  /// two-exit Save-and-Jump fold (R10 on x86-64), or an invalid register if the
++  /// target has no two-exit Save-and-Jump. The taken return address travels in
++  /// \c getDeduBBLinkRegister.
++  virtual MCRegister getDeduBBSecondLinkRegister() const {
++    return MCRegister();
++  }
++
++  /// Appends a load of \p Target's address into \p Reg to \p MBB.
++  virtual void insertDeduBBLoadReturnAddress(MachineBasicBlock &MBB,
++                                             MachineBasicBlock &Target,
++                                             MCRegister Reg) const {
++    llvm_unreachable(
++        "Target didn't implement TargetInstrInfo::insertDeduBBLoadReturnAddress!");
++  }
++
++  /// Appends a Save-and-Jump master's return, an indirect jump through \p Reg,
++  /// to \p MBB.
++  virtual void insertDeduBBSaveAndJumpReturn(MachineBasicBlock &MBB,
++                                             MCRegister Reg) const {
++    llvm_unreachable(
++        "Target didn't implement TargetInstrInfo::insertDeduBBSaveAndJumpReturn!");
++  }
++
++  /// DeduBB ranges: returns true if \p MI, an instruction that emits code, is
++  /// emitted as exactly one machine instruction, so that counting such
++  /// instructions finds the instructions a range directive names. Pseudos are
++  /// assumed not to be, unless the target knows better.
++  virtual bool isDeduBBSingleInstruction(const MachineInstr &MI) const {
++    return !MI.getDesc().isPseudo();
++  }
++
++  /// DeduBB tail-call ranges: returns true if the linker fills in symbol
++  /// operand \p MO of an instruction that is not a call with the same value
++  /// wherever the instruction is, a value DeduBB does not change, such as the
++  /// offset of a thread-local variable. Equal bytes in the binary Step 1
++  /// read then mean equal code after DeduBB too.
++  virtual bool isDeduBBLinkTimeConstant(const MachineOperand &MO) const {
++    return false;
++  }
++
++  /// DeduBB Call-Return: returns the registers that the body of a folded block
++  /// must not reference, other than through the stack effects of its calls:
++  /// the stack pointer, the program counter and any shadow-stack pointer. The
++  /// body runs inside a master with the stack pointer moved. Empty if the
++  /// target does not support Call-Return.
++  virtual ArrayRef<MCPhysReg> getDeduBBCallReturnForbiddenRegs() const {
++    return {};
++  }
++
++  /// DeduBB Call-Return: returns false if a block holding \p MI must keep its
++  /// body because of what \p MI is, rather than its operands: a call other
++  /// than a plain direct or indirect one, or a pseudo lowered into more than
++  /// one instruction, or into code that belongs to its function or place or
++  /// that the linker rewrites. For a call, sets \p Callee to the callee
++  /// operand of a direct call, or to nullptr for a call through a register or
++  /// memory.
++  virtual bool isDeduBBCallReturnMovable(const MachineInstr &MI,
++                                         const MachineOperand *&Callee) const {
++    return false;
++  }
++
++  /// DeduBB Call-Return: returns true if the blocks of \p MF may call a
++  /// master: the calling convention, code model and hardening options allow
++  /// an extra call anywhere in the function.
++  virtual bool supportsDeduBBCallReturn(const MachineFunction &MF) const {
++    return false;
++  }
++
++  /// DeduBB Call-Return: returns true if \p MF may keep data below the stack
++  /// pointer, where a call's return address would overwrite it.
++  virtual bool hasDeduBBRedZone(const MachineFunction &MF) const {
++    return true;
++  }
++
++  /// DeduBB Call-Return: inserts a call to the master \p MasterSym before
++  /// \p InsertPt and returns the call instruction. If \p WithCalls, the master
++  /// makes calls itself, and the stack must stay aligned for them; \p EmitCFI
++  /// then asks for CFI describing the stack adjustment.
++  virtual MachineInstr *
++  insertDeduBBCallReturnStub(MachineBasicBlock &MBB,
++                             MachineBasicBlock::iterator InsertPt,
++                             StringRef MasterSym, bool WithCalls,
++                             bool EmitCFI) const {
++    llvm_unreachable(
++        "Target didn't implement TargetInstrInfo::insertDeduBBCallReturnStub!");
++  }
++
++  /// DeduBB Call-Return: appends a master's return to \p MBB.
++  virtual void insertDeduBBCallReturnRet(MachineBasicBlock &MBB) const {
++    llvm_unreachable(
++        "Target didn't implement TargetInstrInfo::insertDeduBBCallReturnRet!");
++  }
++
++  /// DeduBB Call-Return: appends to a master, \p MBB, a direct call to \p GV,
++  /// or to the function named \p Name if \p GV is null, made the way a call
++  /// of this module reaches it.
++  virtual void insertDeduBBCallReturnMasterCall(MachineBasicBlock &MBB,
++                                                const GlobalValue *GV,
++                                                StringRef Name) const {
++    llvm_unreachable("Target didn't implement "
++                     "TargetInstrInfo::insertDeduBBCallReturnMasterCall!");
++  }
++
++  /// DeduBB Call-Return: returns the "target-features" of the function that
++  /// holds the masters taken from a function with \p Features, without any
++  /// feature that would change how the masters return.
++  virtual std::string
++  getDeduBBCallReturnMasterFeatures(StringRef Features) const {
++    return Features.str();
++  }
++
+   /// Insert an architecture-specific instruction to clear a register. If you
+   /// need to avoid sideeffects (e.g. avoid XOR on x86, which sets EFLAGS), set
+   /// \p AllowSideEffects to \p false.
+diff --git a/llvm/include/llvm/InitializePasses.h b/llvm/include/llvm/InitializePasses.h
+--- a/llvm/include/llvm/InitializePasses.h
++++ b/llvm/include/llvm/InitializePasses.h
+@@ -61,6 +61,8 @@
+ LLVM_ABI void
+ initializeBasicBlockSectionsProfileReaderWrapperPassPass(PassRegistry &);
+ LLVM_ABI void initializeBasicBlockSectionsPass(PassRegistry &);
++LLVM_ABI void initializeDeduBBPass(PassRegistry &);
++LLVM_ABI void initializeDeduBBCallReturnPass(PassRegistry &);
+ LLVM_ABI void initializeBarrierNoopPass(PassRegistry &);
+ LLVM_ABI void initializeBasicAAWrapperPassPass(PassRegistry &);
+ LLVM_ABI void initializeBlockFrequencyInfoWrapperPassPass(PassRegistry &);
+diff --git a/llvm/lib/CodeGen/AsmPrinter/AsmPrinter.cpp b/llvm/lib/CodeGen/AsmPrinter/AsmPrinter.cpp
+--- a/llvm/lib/CodeGen/AsmPrinter/AsmPrinter.cpp
++++ b/llvm/lib/CodeGen/AsmPrinter/AsmPrinter.cpp
+@@ -38,6 +38,7 @@
+ #include "llvm/BinaryFormat/ELF.h"
+ #include "llvm/CodeGen/AsmPrinterAnalysis.h"
+ #include "llvm/CodeGen/BasicBlockSectionsProfileReader.h"
++#include "llvm/CodeGen/DeduBBDirectives.h"
+ #include "llvm/CodeGen/GCMetadata.h"
+ #include "llvm/CodeGen/GCMetadataPrinter.h"
+ #include "llvm/CodeGen/InsertCodePrefetch.h"
+@@ -2154,9 +2155,18 @@
+         emitFrameAlloc(MI);
+         break;
+       case TargetOpcode::ANNOTATION_LABEL:
+-      case TargetOpcode::GC_LABEL:
+-        OutStreamer->emitLabel(MI.getOperand(0).getMCSymbol());
++      case TargetOpcode::GC_LABEL: {
++        MCSymbol *Sym = MI.getOperand(0).getMCSymbol();
++        // The DeduBB pass labels a Save-and-Jump master only after rewriting
++        // it. Folded blocks in other functions and modules branch to it.
++        if (MI.getOpcode() == TargetOpcode::ANNOTATION_LABEL &&
++            Sym->getName().starts_with("DeduBB.master.")) {
++          OutStreamer->emitSymbolAttribute(Sym, MCSA_Global);
++          OutStreamer->emitSymbolAttribute(Sym, MCSA_Hidden);
++        }
++        OutStreamer->emitLabel(Sym);
+         break;
++      }
+       case TargetOpcode::EH_LABEL:
+         OutStreamer->AddComment("EH_LABEL");
+         OutStreamer->emitLabel(MI.getOperand(0).getMCSymbol());
+@@ -4835,6 +4845,34 @@
+     }
+   }
+ 
++  // DeduBB: if this block is a tail-call master copy, emit a global symbol at
++  // its start so that folded duplicate blocks (in this and other modules) can
++  // branch to it. Save-and-Jump masters are labelled by the DeduBB pass itself
++  // (an ANNOTATION_LABEL), and only once it has actually rewritten the block.
++  if (const DeduBBDirectives &DD = DeduBBDirectives::get(); !DD.empty()) {
++    if (std::optional<UniqueBBID> ID = MBB.getBBID()) {
++      const DeduBBDirectives::Directive *D = nullptr;
++      if (ID->CloneID == 0) {
++        D = DD.lookup(MF->getName(), ID->BaseID);
++        if (!D) {
++          for (const GlobalAlias &A : MF->getFunction().getParent()->aliases()) {
++            if (A.getAliaseeObject() == &MF->getFunction()) {
++              if ((D = DD.lookup(A.getName(), ID->BaseID)))
++                break;
++            }
++          }
++        }
++      }
++      if (D && D->K == DeduBBDirectives::Master) {
++        MCSymbol *Sym = OutContext.getOrCreateSymbol(
++            "DeduBB.master." + Twine(D->MasterID));
++        OutStreamer->emitSymbolAttribute(Sym, MCSA_Global);
++        OutStreamer->emitSymbolAttribute(Sym, MCSA_Hidden);
++        OutStreamer->emitLabel(Sym);
++      }
++    }
++  }
++
+   if (MBB.isEHContTarget() &&
+       MAI.getExceptionHandlingType() == ExceptionHandling::WinEH) {
+     OutStreamer->emitLabel(MBB.getEHContSymbol());
+diff --git a/llvm/lib/CodeGen/CMakeLists.txt b/llvm/lib/CodeGen/CMakeLists.txt
+--- a/llvm/lib/CodeGen/CMakeLists.txt
++++ b/llvm/lib/CodeGen/CMakeLists.txt
+@@ -36,6 +36,8 @@
+   BasicBlockPathCloning.cpp
+   BasicBlockSectionsProfileReader.cpp
+   BasicBlockMatchingAndInference.cpp
++  DeduBB.cpp
++  DeduBBCallReturn.cpp
+   CalcSpillWeights.cpp
+   CallingConvLower.cpp
+   CFGuardLongjmp.cpp
+diff --git a/llvm/lib/CodeGen/CodeGen.cpp b/llvm/lib/CodeGen/CodeGen.cpp
+--- a/llvm/lib/CodeGen/CodeGen.cpp
++++ b/llvm/lib/CodeGen/CodeGen.cpp
+@@ -24,6 +24,8 @@
+   initializeBasicBlockPathCloningPass(Registry);
+   initializeBasicBlockSectionsPass(Registry);
+   initializeBasicBlockSectionsProfileReaderWrapperPassPass(Registry);
++  initializeDeduBBPass(Registry);
++  initializeDeduBBCallReturnPass(Registry);
+   initializeBranchFolderLegacyPass(Registry);
+   initializeBranchRelaxationLegacyPass(Registry);
+   initializeBreakFalseDepsLegacyPass(Registry);
+diff --git a/llvm/lib/CodeGen/DeduBB.cpp b/llvm/lib/CodeGen/DeduBB.cpp
+new file mode 100644
+--- /dev/null
++++ b/llvm/lib/CodeGen/DeduBB.cpp
+@@ -0,0 +1,965 @@
++//===- DeduBB.cpp - DeduBB tail-call basic block deduplication ------------===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++//
++// This pass applies DeduBB tail-call deduplication directives produced by
++// Propeller (`--tail_call_profile=dedubb.txt`). The directive file marks
++// byte-identical basic blocks that end in a tail call or return:
++//
++//   bbm <id> (DeduBB.master.K)  -- block <id> is the master copy K. The
++//                                  AsmPrinter emits a global symbol
++//                                  `DeduBB.master.K` at the block start (see
++//                                  AsmPrinter::emitBasicBlockStart).
++//   bbf <id> (DeduBB.master.K)  -- block <id> is a duplicate. This pass deletes
++//                                  the block body and replaces it with a single
++//                                  jump to `DeduBB.master.K`.
++//
++// Either may end in `callees=<c>`, the targets of the block's direct calls and
++// jumps. A copy of the block reaches them from another address, so its bytes
++// differ there; a duplicate is folded only if its calls name exactly these.
++//
++// Folding is realized as a tail branch (the same instruction the
++// MachineOutliner uses for tail-called outlined functions) so that the current
++// stack frame is preserved: control jumps into the identical master block,
++// whose tail call or return then transfers control exactly as the original
++// block would have.
++//
++// Save-and-Jump (bbmsj/bbfsj) extends this to byte-identical blocks with a
++// single fall-through successor. The fold loads its successor's address into
++// the target's link register (R11 on x86-64) and jumps to the master; the
++// master ends with an indirect jump through that register:
++//
++//   fold:    leaq Succ(%rip), %r11        master:  <identical computation>
++//            jmp  DeduBB.master.sj.K               jmpq *%r11
++//
++// Nothing touches the stack and no frame layout changes, so the master's code
++// is valid in every folded function's frame.
++//
++// Two-exit Save-and-Jump (bbmsj2/bbfsj2) covers blocks that end in a
++// conditional branch. The fold passes both successors, the taken one in the
++// link register and the other in a second link register (R10 on x86-64), and
++// the master's own conditional branch picks the one to return through:
++//
++//   fold:    leaq Taken(%rip), %r11       master:  <identical computation>
++//            leaq NotTaken(%rip), %r10             j<cc> 1f
++//            jmp  DeduBB.master.sj2.K              jmpq *%r10
++//                                               1: jmpq *%r11
++//
++// Call-Return directives (bbmcr/bbfcr) are applied earlier, by the
++// DeduBBCallReturn module pass, and are ignored here.
++//
++//===----------------------------------------------------------------------===//
++
++#include "llvm/CodeGen/DeduBBDirectives.h"
++#include "llvm/ADT/ArrayRef.h"
++#include "llvm/ADT/DenseMap.h"
++#include "llvm/ADT/STLExtras.h"
++#include "llvm/ADT/SmallVector.h"
++#include "llvm/ADT/Statistic.h"
++#include "llvm/ADT/StringExtras.h"
++#include "llvm/ADT/StringRef.h"
++#include "llvm/ADT/Twine.h"
++#include "llvm/CodeGen/LiveRegUnits.h"
++#include "llvm/CodeGen/MachineBasicBlock.h"
++#include "llvm/CodeGen/MachineFunction.h"
++#include "llvm/CodeGen/MachineFunctionPass.h"
++#include "llvm/CodeGen/MachineInstrBuilder.h"
++#include "llvm/CodeGen/MachineJumpTableInfo.h"
++#include "llvm/CodeGen/Passes.h"
++#include "llvm/CodeGen/TargetInstrInfo.h"
++#include "llvm/CodeGen/TargetRegisterInfo.h"
++#include "llvm/CodeGen/TargetSubtargetInfo.h"
++#include "llvm/IR/Constants.h"
++#include "llvm/IR/GlobalAlias.h"
++#include "llvm/IR/Metadata.h"
++#include "llvm/IR/Module.h"
++#include "llvm/InitializePasses.h"
++#include "llvm/MC/MCContext.h"
++#include "llvm/MC/MCSymbol.h"
++#include "llvm/Support/CommandLine.h"
++#include "llvm/Support/MemoryBuffer.h"
++#include "llvm/Support/UniqueBBID.h"
++#include "llvm/Support/raw_ostream.h"
++#include <optional>
++#include <string>
++
++using namespace llvm;
++
++#define DEBUG_TYPE "dedubb"
++
++// Always enabled, so `-mllvm -stats` reports how many directives were applied,
++// and why the rest were not, in release builds too.
++ALWAYS_ENABLED_STATISTIC(NumTailCallFolds, "Number of tail-call blocks folded");
++ALWAYS_ENABLED_STATISTIC(
++    NumTailCallSkipSymbols,
++    "Number of tail-call folds skipped: the block names a symbol other than "
++    "the calls and jumps its directive lists");
++ALWAYS_ENABLED_STATISTIC(
++    NumTailCallSkipSuccessors,
++    "Number of tail-call folds skipped: the block has a successor");
++ALWAYS_ENABLED_STATISTIC(NumSJFolds, "Number of Save-and-Jump blocks folded");
++ALWAYS_ENABLED_STATISTIC(NumSJMastersInPlace,
++                         "Number of Save-and-Jump masters rewritten in place");
++ALWAYS_ENABLED_STATISTIC(
++    NumSJMastersCopied,
++    "Number of Save-and-Jump masters emitted as an out-of-line copy");
++ALWAYS_ENABLED_STATISTIC(NumSJ2Folds,
++                         "Number of two-exit Save-and-Jump blocks folded");
++ALWAYS_ENABLED_STATISTIC(
++    NumSJ2MastersInPlace,
++    "Number of two-exit Save-and-Jump masters rewritten in place");
++ALWAYS_ENABLED_STATISTIC(
++    NumSJ2MastersCopied,
++    "Number of two-exit Save-and-Jump masters emitted as a copy");
++ALWAYS_ENABLED_STATISTIC(
++    NumSJIneligible,
++    "Number of Save-and-Jump directives skipped: block not eligible");
++ALWAYS_ENABLED_STATISTIC(
++    NumSJLinkRegLive,
++    "Number of Save-and-Jump blocks left as is: the link register (R11 on "
++    "x86-64) is live into a successor");
++ALWAYS_ENABLED_STATISTIC(
++    NumSJ2SecondLinkRegLive,
++    "Number of two-exit Save-and-Jump blocks left as is: the second link "
++    "register (R10 on x86-64) is live into a successor");
++ALWAYS_ENABLED_STATISTIC(
++    NumSJBadExit,
++    "Number of Save-and-Jump blocks left as is: a successor is the block "
++    "itself or an EH pad");
++ALWAYS_ENABLED_STATISTIC(
++    NumSJNotReplaceable,
++    "Number of Save-and-Jump folds skipped: CFI, frame, EH or asm code");
++
++static cl::opt<std::string> DeduBBDirectivesFile(
++    "dedubb-directives", cl::Hidden, cl::init(""),
++    cl::desc("Path to a DeduBB tail-call deduplication directive file "
++             "(m/f/bbm/bbf directives) to apply during code generation."));
++
++//===----------------------------------------------------------------------===//
++// Directive file parsing.
++//===----------------------------------------------------------------------===//
++
++// Parses the master id K out of a "(DeduBB.master.K)", "(DeduBB.master.sj.K)",
++// "(DeduBB.master.sj2.K)" or "(DeduBB.master.cr.K)" token.
++static bool parseMasterID(StringRef S, uint64_t &K) {
++  constexpr StringRef kPrefix = "DeduBB.master.";
++  size_t Pos = S.find(kPrefix);
++  if (Pos == StringRef::npos)
++    return false;
++  StringRef Rest = S.substr(Pos + kPrefix.size());
++  if (Rest.starts_with("sj2."))
++    Rest = Rest.substr(4);
++  else if (Rest.starts_with("sj."))
++    Rest = Rest.substr(3);
++  else if (Rest.starts_with("cr."))
++    Rest = Rest.substr(3);
++  size_t End = 0;
++  while (End < Rest.size() && Rest[End] >= '0' && Rest[End] <= '9')
++    ++End;
++  return End != 0 && !Rest.substr(0, End).getAsInteger(10, K);
++}
++
++// Returns the value of `<Key>=<value>` among the space-separated \p Fields.
++static std::optional<StringRef> getField(StringRef Fields, StringRef Key) {
++  SmallVector<StringRef, 8> Parts;
++  Fields.split(Parts, ' ', /*MaxSplit=*/-1, /*KeepEmpty=*/false);
++  for (StringRef Part : Parts)
++    if (Part.consume_front(Key) && Part.consume_front("="))
++      return Part;
++  return std::nullopt;
++}
++
++// Reads the `at=` and `block_insts=` fields of a range: both, or neither.
++// Returns false if they are malformed.
++static bool parseRange(StringRef Fields, DeduBBDirectives::Directive &D) {
++  std::optional<StringRef> At = getField(Fields, "at");
++  std::optional<StringRef> BlockInsts = getField(Fields, "block_insts");
++  if (At.has_value() != BlockInsts.has_value())
++    return false;
++  if (!At)
++    return true;
++  if (At->getAsInteger(10, D.At) ||
++      BlockInsts->getAsInteger(10, D.BlockInsts) || D.At >= D.BlockInsts)
++    return false;
++  D.IsRange = true;
++  return true;
++}
++
++// Returns true if \p Hex is non-empty hex, two digits a byte.
++static bool isHexBytes(StringRef Hex) {
++  return !Hex.empty() && Hex.size() % 2 == 0 && all_of(Hex, isHexDigit);
++}
++
++// Reads the `callees=`, `insts=` and, for a master, `body=` fields of a
++// Call-Return directive, and `at=` and `block_insts=` for a range. The callees
++// and the instruction count are checked against every block, and the master
++// is emitted from the body, so all are required; the body must hold one piece
++// of hex more than there are direct callees.
++static bool parseCallReturn(StringRef Fields, bool IsMaster,
++                            DeduBBDirectives::Directive &D) {
++  std::optional<StringRef> Callees = getField(Fields, "callees");
++  std::optional<StringRef> Insts = getField(Fields, "insts");
++  if (!Callees || !Insts || Insts->getAsInteger(10, D.NumInsts) ||
++      D.NumInsts == 0)
++    return false;
++  D.Callees = Callees->str();
++  if (!parseRange(Fields, D) ||
++      (D.IsRange && uint64_t(D.At) + D.NumInsts > D.BlockInsts))
++    return false;
++  if (!IsMaster)
++    return true;
++  std::optional<StringRef> Body = getField(Fields, "body");
++  if (!Body || Body->empty())
++    return false;
++  SmallVector<StringRef, 4> Calls, Pieces;
++  if (!Callees->empty())
++    Callees->split(Calls, ',');
++  Body->split(Pieces, '.');
++  const size_t DirectCalls =
++      count_if(Calls, [](StringRef C) { return C != "*"; });
++  if (Pieces.size() != 1 + DirectCalls)
++    return false;
++  for (StringRef Piece : Pieces)
++    if (Piece.size() % 2 != 0 || !all_of(Piece, isHexDigit))
++      return false;
++  D.Body = Body->str();
++  return true;
++}
++
++// Reads the fields of a Save-and-Jump range: `insts=`, `at=`, `block_insts=`
++// and, for a master, `body=`, the run's bytes (it makes no call).
++static bool parseSaveJumpRange(StringRef Fields, bool IsMaster,
++                               DeduBBDirectives::Directive &D) {
++  std::optional<StringRef> Insts = getField(Fields, "insts");
++  if (!Insts || Insts->getAsInteger(10, D.NumInsts) || D.NumInsts == 0 ||
++      !parseRange(Fields, D) || !D.IsRange ||
++      uint64_t(D.At) + D.NumInsts > D.BlockInsts)
++    return false;
++  if (!IsMaster)
++    return true;
++  std::optional<StringRef> Body = getField(Fields, "body");
++  if (!Body || !isHexBytes(*Body))
++    return false;
++  D.Body = Body->str();
++  return true;
++}
++
++bool DeduBBDirectives::parse(StringRef Text) {
++  StringRef CurFunc;
++  bool Ok = true;
++  // Reports the first few bad lines; a file from another version of Step 1
++  // could have a bad line for every block.
++  unsigned NumErrors = 0, NumBadRange = 0;
++  const auto Error = [&](const Twine &Msg) {
++    if (++NumErrors <= 10)
++      errs() << "dedubb: " << Msg << "\n";
++    Ok = false;
++  };
++  SmallVector<StringRef> Lines;
++  Text.split(Lines, '\n');
++  for (StringRef Line : Lines) {
++    Line = Line.trim();
++    if (Line.empty() || Line.starts_with("#"))
++      continue;
++    auto [Kw, Rest] = Line.split(' ');
++    Rest = Rest.trim();
++    if (Kw == "m") {
++      // Module header. Matching is by function name, so this is informational.
++      continue;
++    }
++    if (Kw == "f") {
++      CurFunc = Rest.split(".llvm.").first;
++      continue;
++    }
++    if (Kw == "bbm" || Kw == "bbf" || Kw == "bbmsj" || Kw == "bbfsj" ||
++        Kw == "bbmsj2" || Kw == "bbfsj2" || Kw == "bbmcr" || Kw == "bbfcr") {
++      if (CurFunc.empty()) {
++        Error("directive before any 'f' line: '" + Line + "'");
++        continue;
++      }
++      auto [IdStr, Tail] = Rest.split(' ');
++      unsigned BBID;
++      uint64_t K;
++      if (IdStr.getAsInteger(10, BBID) || !parseMasterID(Tail, K)) {
++        Error("malformed directive: '" + Line + "'");
++        continue;
++      }
++      DeduBBDirectives::Kind DK;
++      if (Kw == "bbm") DK = DeduBBDirectives::Master;
++      else if (Kw == "bbf") DK = DeduBBDirectives::Fold;
++      else if (Kw == "bbmsj") DK = DeduBBDirectives::MasterSaveJump;
++      else if (Kw == "bbfsj") DK = DeduBBDirectives::FoldSaveJump;
++      else if (Kw == "bbmsj2") DK = DeduBBDirectives::MasterSaveJump2;
++      else if (Kw == "bbfsj2") DK = DeduBBDirectives::FoldSaveJump2;
++      else if (Kw == "bbmcr") DK = DeduBBDirectives::MasterCallReturn;
++      else DK = DeduBBDirectives::FoldCallReturn;
++
++      Directive D;
++      D.K = DK;
++      D.MasterID = K;
++      const auto BadRange = [&](const char *What) {
++        Error(Twine("malformed ") + What + ": '" + Line + "'");
++        ++NumBadRange;
++      };
++      if (DK == DeduBBDirectives::Master || DK == DeduBBDirectives::Fold) {
++        if (std::optional<StringRef> Callees = getField(Tail, "callees"))
++          D.Callees = Callees->str();
++        if (!parseRange(Tail, D)) {
++          BadRange("tail-call range");
++          continue;
++        }
++        if (D.IsRange) {
++          RangeMap[CurFunc][BBID].push_back(std::move(D));
++          continue;
++        }
++      }
++      if (getField(Tail, "at") || getField(Tail, "block_insts")) {
++        if (DK == DeduBBDirectives::MasterSaveJump ||
++            DK == DeduBBDirectives::FoldSaveJump) {
++          if (!parseSaveJumpRange(
++                  Tail, DK == DeduBBDirectives::MasterSaveJump, D)) {
++            BadRange("Save-and-Jump range");
++            continue;
++          }
++          RangeMap[CurFunc][BBID].push_back(std::move(D));
++          continue;
++        }
++        if (DK == DeduBBDirectives::MasterSaveJump2 ||
++            DK == DeduBBDirectives::FoldSaveJump2) {
++          BadRange("two-exit Save-and-Jump range");
++          continue;
++        }
++      }
++      if (DK == DeduBBDirectives::MasterCallReturn ||
++          DK == DeduBBDirectives::FoldCallReturn) {
++        if (!parseCallReturn(Tail, DK == DeduBBDirectives::MasterCallReturn,
++                             D)) {
++          BadRange("Call-Return directive");
++          continue;
++        }
++        RangeMap[CurFunc][BBID].push_back(std::move(D));
++        continue;
++      }
++      Map[CurFunc][BBID] = std::move(D);
++      continue;
++    }
++    Error("unknown directive '" + Kw + "'");
++  }
++  if (NumErrors > 10)
++    errs() << "dedubb: " << NumErrors - 10 << " more bad line(s)\n";
++  // A group whose master was dropped would leave its other blocks branching
++  // to a master nobody defines, so one bad line drops every range and
++  // Call-Return directive.
++  if (NumBadRange != 0) {
++    errs() << "dedubb: " << NumBadRange
++           << " malformed range or Call-Return directive(s): ignoring every "
++              "one of them\n";
++    RangeMap.clear();
++  }
++  return Ok;
++}
++
++const DeduBBDirectives::Directive *
++DeduBBDirectives::lookup(StringRef FuncName, unsigned BBID) const {
++  auto It = Map.find(FuncName.split(".llvm.").first);
++  if (It == Map.end())
++    return nullptr;
++  auto J = It->second.find(BBID);
++  return J == It->second.end() ? nullptr : &J->second;
++}
++
++const DeduBBDirectives::Directive *
++DeduBBDirectives::lookup(const Function &F, unsigned BBID) const {
++  if (const Directive *D = lookup(F.getName(), BBID))
++    return D;
++  for (const GlobalAlias &A : F.getParent()->aliases())
++    if (A.getAliaseeObject() == &F)
++      if (const Directive *D = lookup(A.getName(), BBID))
++        return D;
++  return nullptr;
++}
++
++const DenseMap<unsigned, DeduBBDirectives::Directive> *
++DeduBBDirectives::getFunction(const Function &F) const {
++  auto It = Map.find(F.getName().split(".llvm.").first);
++  if (It != Map.end())
++    return &It->second;
++  for (const GlobalAlias &A : F.getParent()->aliases())
++    if (A.getAliaseeObject() == &F) {
++      It = Map.find(A.getName().split(".llvm.").first);
++      if (It != Map.end())
++        return &It->second;
++    }
++  return nullptr;
++}
++
++const DenseMap<unsigned, SmallVector<DeduBBDirectives::Directive, 1>> *
++DeduBBDirectives::getRanges(const Function &F) const {
++  auto It = RangeMap.find(F.getName().split(".llvm.").first);
++  if (It != RangeMap.end())
++    return &It->second;
++  for (const GlobalAlias &A : F.getParent()->aliases())
++    if (A.getAliaseeObject() == &F) {
++      It = RangeMap.find(A.getName().split(".llvm.").first);
++      if (It != RangeMap.end())
++        return &It->second;
++    }
++  return nullptr;
++}
++
++bool DeduBBDirectives::hasSaveJump(StringRef FuncName) const {
++  auto It = Map.find(FuncName.split(".llvm.").first);
++  if (It == Map.end())
++    return false;
++  for (const auto &Entry : It->second) {
++    Kind K = Entry.second.K;
++    if (K == MasterSaveJump || K == FoldSaveJump || K == MasterSaveJump2 ||
++        K == FoldSaveJump2)
++      return true;
++  }
++  return false;
++}
++
++bool DeduBBDirectives::calleesMatch(StringRef Listed,
++                                    ArrayRef<std::string> Actual) {
++  SmallVector<StringRef, 4> Calls;
++  if (!Listed.empty())
++    Listed.split(Calls, ',');
++  if (Calls.size() != Actual.size())
++    return false;
++  for (auto [Names, Name] : zip_equal(Calls, Actual)) {
++    SmallVector<StringRef, 4> Alternatives;
++    Names.split(Alternatives, '|');
++    if (!is_contained(Alternatives, StringRef(Name)))
++      return false;
++  }
++  return true;
++}
++
++std::string DeduBBDirectives::getCalleeName(const MachineOperand &MO) {
++  if (MO.isGlobal()) {
++    StringRef Name = MO.getGlobal()->getName();
++    Name.consume_front("\1");
++    return Name.str();
++  }
++  if (MO.isSymbol())
++    return MO.getSymbolName();
++  return MO.getMCSymbol()->getName().str();
++}
++
++bool DeduBBDirectives::hasIndirectBranchTracking(const Module &M) {
++  if (const auto *Flag = mdconst::extract_or_null<ConstantInt>(
++          M.getModuleFlag("cf-protection-branch")))
++    return !Flag->isZero();
++  return false;
++}
++
++const DeduBBDirectives &DeduBBDirectives::get() {
++  static DeduBBDirectives Directives;
++  static bool Initialized = [] {
++    if (DeduBBDirectivesFile.empty())
++      return true;
++    ErrorOr<std::unique_ptr<MemoryBuffer>> Buf =
++        MemoryBuffer::getFile(DeduBBDirectivesFile);
++    if (!Buf) {
++      errs() << "dedubb: cannot open directive file '" << DeduBBDirectivesFile
++             << "': " << Buf.getError().message() << "\n";
++      return true;
++    }
++    Directives.parse((*Buf)->getBuffer());
++    return true;
++  }();
++  (void)Initialized;
++  return Directives;
++}
++
++//===----------------------------------------------------------------------===//
++// Save-and-Jump helpers.
++//===----------------------------------------------------------------------===//
++
++// Where control leaves a Save-and-Jump block. Exits[0] is the only successor of
++// a single-exit block, or the target of a two-exit block's conditional branch;
++// Exits[1] is a two-exit block's other successor (its fall-through or the
++// target of its unconditional branch).
++struct SaveJumpExits {
++  SmallVector<MachineBasicBlock *, 2> Exits;
++  SmallVector<MachineOperand, 4> Cond; // The conditional branch's condition.
++};
++
++// Reads the exits of \p MBB if its terminators have the Save-and-Jump shape.
++// Single-exit: a fall-through or one unconditional branch to its only
++// successor. Two-exit: one conditional branch, then a fall-through or one
++// unconditional branch, to two distinct successors; conditions that expand to
++// two conditional branches (such as X86's COND_NE_OR_P) are refused. The shape
++// is encoded in the block's bytes, so every member of a group of byte-identical
++// blocks agrees on it.
++static bool getSaveJumpExits(MachineBasicBlock &MBB, const TargetInstrInfo &TII,
++                             bool TwoExit, SaveJumpExits &X) {
++  MachineBasicBlock *TBB = nullptr, *FBB = nullptr;
++  SmallVector<MachineOperand, 4> Cond;
++  if (TII.analyzeBranch(MBB, TBB, FBB, Cond, /*AllowModify=*/false))
++    return false;
++  unsigned NumCond = 0, NumUncond = 0;
++  for (const MachineInstr &MI : MBB.terminators()) {
++    if (MI.isDebugInstr())
++      continue;
++    if (MI.isConditionalBranch())
++      ++NumCond;
++    else if (MI.isUnconditionalBranch())
++      ++NumUncond;
++    else
++      return false;
++  }
++  if (NumCond != (TwoExit ? 1u : 0u) || NumUncond > 1)
++    return false;
++
++  X.Exits.clear();
++  X.Cond.clear();
++  if (!TwoExit) {
++    if (!Cond.empty() || FBB || MBB.succ_size() != 1)
++      return false;
++    MachineBasicBlock *Succ = *MBB.succ_begin();
++    if (TBB ? TBB != Succ : MBB.getFallThrough() != Succ)
++      return false;
++    X.Exits.push_back(Succ);
++    return true;
++  }
++  if (Cond.empty() || !TBB)
++    return false;
++  if (!FBB)
++    FBB = MBB.getFallThrough();
++  if (!FBB || FBB == TBB || MBB.succ_size() != 2 || !MBB.isSuccessor(TBB) ||
++      !MBB.isSuccessor(FBB))
++    return false;
++  X.Exits.push_back(TBB);
++  X.Exits.push_back(FBB);
++  X.Cond = std::move(Cond);
++  return true;
++}
++
++// Returns true if \p MBB's body, everything before its terminators, can run in
++// any folded function's frame:
++//   * no calls, since a call clobbers the link registers;
++//   * no read or write of the link registers \p LinkRegs;
++//   * no symbolic, block-address or jump-table operands, whose bytes depend on
++//     where the block is placed.
++// Like the exit shape, these are encoded in the instruction bytes, so a fold is
++// only ever emitted against a master that its own function also emits.
++static bool isSaveJumpBody(const MachineBasicBlock &MBB,
++                           const TargetRegisterInfo &TRI,
++                           ArrayRef<MCRegister> LinkRegs) {
++  for (const MachineInstr &MI : MBB) {
++    if (MI.isDebugInstr() || MI.isTerminator())
++      continue; // The terminators were checked by getSaveJumpExits.
++    if (MI.isCall())
++      return false;
++    for (MCRegister Reg : LinkRegs)
++      if (MI.readsRegister(Reg, &TRI) || MI.modifiesRegister(Reg, &TRI))
++        return false;
++    for (const MachineOperand &MO : MI.operands())
++      if (MO.isRegMask() || MO.isGlobal() || MO.isSymbol() || MO.isCPI() ||
++          MO.isJTI() || MO.isBlockAddress() || MO.isMCSymbol() || MO.isMBB() ||
++          MO.isTargetIndex())
++        return false;
++  }
++  return true;
++}
++
++// Why a block with the Save-and-Jump shape still cannot be folded where it is.
++enum class SiteProblem {
++  None,
++  BadExit,           // An exit is the block itself or an EH pad.
++  LinkRegLive,       // LinkRegs[0] is live into an exit.
++  SecondLinkRegLive, // LinkRegs[1] is live into an exit.
++};
++
++// Checks the exits of \p MBB: each must be another, non-EH-pad block, and no
++// link register may be live on entry to it, since the fold overwrites them
++// with return addresses. The block itself never touches the link registers
++// (isSaveJumpBody), so a value still needed in one would be live into an exit.
++static SiteProblem checkSite(const MachineBasicBlock &MBB,
++                             ArrayRef<MachineBasicBlock *> Exits,
++                             const TargetRegisterInfo &TRI,
++                             ArrayRef<MCRegister> LinkRegs) {
++  for (const MachineBasicBlock *Exit : Exits) {
++    if (Exit == &MBB || Exit->isEHPad())
++      return SiteProblem::BadExit;
++    LiveRegUnits LiveIn(TRI);
++    LiveIn.addLiveIns(*Exit);
++    for (auto [I, Reg] : enumerate(LinkRegs))
++      if (!LiveIn.available(Reg))
++        return I == 0 ? SiteProblem::LinkRegLive
++                      : SiteProblem::SecondLinkRegLive;
++  }
++  return SiteProblem::None;
++}
++
++// Returns true if \p MBB's body may be replaced by a stub. Blocks holding CFI,
++// prologue/epilogue code, labels, inline asm or an EH pad are left alone:
++// deleting them would break the function's unwind info or EH tables.
++static bool isReplaceable(const MachineBasicBlock &MBB) {
++  if (MBB.isEHPad())
++    return false;
++  for (const MachineInstr &MI : MBB)
++    if (MI.isCFIInstruction() || MI.isLabel() || MI.isInlineAsm() ||
++        MI.getFlag(MachineInstr::FrameSetup) ||
++        MI.getFlag(MachineInstr::FrameDestroy))
++      return false;
++  return true;
++}
++
++// The master can stay in place only if every way into it can be redirected
++// through a block that loads its own return address first.
++static bool canRewriteMasterInPlace(const MachineBasicBlock &MBB) {
++  return !MBB.isEntryBlock() && !MBB.hasAddressTaken() &&
++         !MBB.isInlineAsmBrIndirectTarget() && !MBB.isEHPad();
++}
++
++// Places the global `DeduBB.master.sj.K` label at the start of \p MBB. The
++// AsmPrinter gives it global, hidden binding.
++static void addMasterLabel(MachineBasicBlock &MBB, StringRef MasterSym,
++                           const TargetInstrInfo &TII) {
++  MCSymbol *Sym = MBB.getParent()->getContext().getOrCreateSymbol(MasterSym);
++  BuildMI(MBB, MBB.begin(), DebugLoc(), TII.get(TargetOpcode::ANNOTATION_LABEL))
++      .addSym(Sym);
++}
++
++// Replaces \p MBB's body with the fold stub: load each exit's address into its
++// link register, then jump to the master. The CFG edges to the exits stay,
++// since control reaches them again through the master.
++static void emitSaveJumpFold(MachineBasicBlock &MBB,
++                             ArrayRef<MachineBasicBlock *> Exits,
++                             ArrayRef<MCRegister> LinkRegs, StringRef MasterSym,
++                             const TargetInstrInfo &TII) {
++  MBB.erase(MBB.begin(), MBB.end());
++  for (auto [Exit, Reg] : zip_equal(Exits, LinkRegs)) {
++    TII.insertDeduBBLoadReturnAddress(MBB, *Exit, Reg);
++    Exit->setLabelMustBeEmitted();
++  }
++  TII.insertDeduBBTailBranch(MBB, MasterSym);
++}
++
++// Ends \p MBB, whose terminators have been removed, with the master's return.
++// Single exit: `jmp *LinkRegs[0]` in \p MBB itself. Two exits:
++//
++//       j<Cond> RetTaken
++//     RetNotTaken:  jmp *LinkRegs[1]
++//     RetTaken:     jmp *LinkRegs[0]
++//
++// with both return blocks placed right after \p MBB. Returns the blocks that
++// hold the returns, in exit order.
++static SmallVector<MachineBasicBlock *, 2>
++emitMasterReturn(MachineBasicBlock &MBB, ArrayRef<MCRegister> LinkRegs,
++                 ArrayRef<MachineOperand> Cond, const TargetInstrInfo &TII) {
++  if (LinkRegs.size() == 1) {
++    TII.insertDeduBBSaveAndJumpReturn(MBB, LinkRegs[0]);
++    return {&MBB};
++  }
++  MachineFunction &MF = *MBB.getParent();
++  MachineBasicBlock *RetNotTaken = MF.CreateMachineBasicBlock();
++  MachineBasicBlock *RetTaken = MF.CreateMachineBasicBlock();
++  MF.insert(std::next(MBB.getIterator()), RetNotTaken);
++  MF.insert(std::next(RetNotTaken->getIterator()), RetTaken);
++  TII.insertBranch(MBB, RetTaken, /*FBB=*/nullptr, Cond, DebugLoc());
++  TII.insertDeduBBSaveAndJumpReturn(*RetNotTaken, LinkRegs[1]);
++  TII.insertDeduBBSaveAndJumpReturn(*RetTaken, LinkRegs[0]);
++  RetTaken->addLiveIn(LinkRegs[0]);
++  RetNotTaken->addLiveIn(LinkRegs[1]);
++  return {RetTaken, RetNotTaken};
++}
++
++//===----------------------------------------------------------------------===//
++// The pass.
++//===----------------------------------------------------------------------===//
++
++namespace {
++class DeduBB : public MachineFunctionPass {
++public:
++  static char ID;
++  DeduBB() : MachineFunctionPass(ID) {
++    initializeDeduBBPass(*PassRegistry::getPassRegistry());
++  }
++  StringRef getPassName() const override {
++    return "DeduBB tail-call deduplication";
++  }
++  bool runOnMachineFunction(MachineFunction &MF) override;
++
++private:
++  bool applySaveAndJump(MachineFunction &MF,
++                        ArrayRef<std::pair<MachineBasicBlock *,
++                                           const DeduBBDirectives::Directive *>>
++                            Items);
++};
++} // namespace
++
++char DeduBB::ID = 0;
++INITIALIZE_PASS(DeduBB, DEBUG_TYPE, "DeduBB tail-call deduplication",
++                /*cfg=*/false, /*is_analysis=*/false)
++
++bool DeduBB::applySaveAndJump(
++    MachineFunction &MF,
++    ArrayRef<std::pair<MachineBasicBlock *, const DeduBBDirectives::Directive *>>
++        Items) {
++  const TargetInstrInfo &TII = *MF.getSubtarget().getInstrInfo();
++  const TargetRegisterInfo &TRI = *MF.getSubtarget().getRegisterInfo();
++  const MCRegister Link = TII.getDeduBBLinkRegister();
++  const MCRegister Link2 = TII.getDeduBBSecondLinkRegister();
++  if (!Link.isValid())
++    return false;
++  // Decide everything on the untouched function first, so eligibility matches
++  // the byte-identical blocks the profile was computed from.
++  struct Work {
++    MachineBasicBlock *MBB;
++    bool IsMaster;
++    bool TwoExit;
++    // Whether the block's own exits allow a fold here (checkSite).
++    SiteProblem Site;
++    bool InPlace;
++    SmallVector<MCRegister, 2> LinkRegs; // One per exit, in exit order.
++    SmallVector<MachineOperand, 4> Cond; // Two-exit only.
++    std::string Sym;
++  };
++  SmallVector<Work, 8> Todo;
++  for (auto [MBB, D] : Items) {
++    Work W;
++    W.MBB = MBB;
++    W.IsMaster = D->K == DeduBBDirectives::MasterSaveJump ||
++                 D->K == DeduBBDirectives::MasterSaveJump2;
++    W.TwoExit = D->K == DeduBBDirectives::MasterSaveJump2 ||
++                D->K == DeduBBDirectives::FoldSaveJump2;
++    W.LinkRegs.push_back(Link);
++    if (W.TwoExit)
++      W.LinkRegs.push_back(Link2);
++    SaveJumpExits X;
++    if ((W.TwoExit && !Link2.isValid()) ||
++        !getSaveJumpExits(*MBB, TII, W.TwoExit, X) ||
++        !isSaveJumpBody(*MBB, TRI, W.LinkRegs)) {
++      ++NumSJIneligible;
++      continue;
++    }
++    W.Site = checkSite(*MBB, X.Exits, TRI, W.LinkRegs);
++    // A master whose own exits rule out the in-place rewrite is still emitted,
++    // as an out-of-line copy: folds in other functions depend on its label.
++    W.InPlace = W.IsMaster && W.Site == SiteProblem::None &&
++                canRewriteMasterInPlace(*MBB);
++    W.Cond = std::move(X.Cond);
++    W.Sym = ((W.TwoExit ? "DeduBB.master.sj2." : "DeduBB.master.sj.") +
++             Twine(D->MasterID))
++                .str();
++    Todo.push_back(std::move(W));
++  }
++  if (Todo.empty())
++    return false;
++
++  // Phase 1: route every edge into an in-place master through a new block that
++  // will load the master's return address. Doing this before any stub is
++  // emitted means every return address computed below already points at
++  // these blocks, never directly at a master.
++  DenseMap<MachineBasicBlock *, MachineBasicBlock *> SaveBlockOf;
++  for (Work &W : Todo) {
++    if (!W.InPlace)
++      continue;
++    MachineBasicBlock &MBB = *W.MBB;
++    MachineBasicBlock *SaveBlock = MF.CreateMachineBasicBlock();
++    MF.insert(MBB.getIterator(), SaveBlock);
++    SmallVector<MachineBasicBlock *, 4> Preds(MBB.predecessors());
++    for (MachineBasicBlock *Pred : Preds)
++      Pred->ReplaceUsesOfBlockWith(&MBB, SaveBlock);
++    if (MachineJumpTableInfo *JTI = MF.getJumpTableInfo())
++      JTI->ReplaceMBBInJumpTables(&MBB, SaveBlock);
++    for (const MachineBasicBlock::RegisterMaskPair &LI : MBB.liveins())
++      SaveBlock->addLiveIn(LI);
++    SaveBlock->addSuccessor(&MBB); // Falls through into the master.
++    SaveBlockOf[&MBB] = SaveBlock;
++  }
++
++  // Out-of-line copies go right after the last block that ends in a barrier
++  // (an unconditional jump or a return), so nothing falls into them. Blocks
++  // after it keep their place at the end of the function: an empty block left
++  // by `unreachable` must stay last, so a branch to it still runs off the end
++  // of the function (into padding) rather than into a copy. Found after phase 1
++  // so that a SaveBlock stays in front of its master.
++  MachineFunction::iterator CopyPt = MF.end();
++  for (MachineBasicBlock &MBB : reverse(MF)) {
++    MachineBasicBlock::iterator Last = MBB.getLastNonDebugInstr();
++    if (Last != MBB.end() && Last->isBarrier()) {
++      CopyPt = std::next(MBB.getIterator());
++      break;
++    }
++  }
++
++  // Phase 2: emit the masters and the folds.
++  for (Work &W : Todo) {
++    MachineBasicBlock &MBB = *W.MBB;
++    // Re-read the exits: phase 1 may have redirected them to SaveBlocks.
++    SaveJumpExits X;
++    const bool HaveExits = getSaveJumpExits(MBB, TII, W.TwoExit, X);
++
++    if (W.IsMaster) {
++      if (W.InPlace && HaveExits) {
++        // SaveBlock: load the master's own return addresses, then fall through
++        // into the master.
++        MachineBasicBlock &SaveBlock = *SaveBlockOf[&MBB];
++        for (auto [Exit, Reg] : zip_equal(X.Exits, W.LinkRegs)) {
++          TII.insertDeduBBLoadReturnAddress(SaveBlock, *Exit, Reg);
++          Exit->setLabelMustBeEmitted();
++        }
++        // Master: return through the link registers instead of branching.
++        MBB.erase(MBB.getFirstTerminator(), MBB.end());
++        SmallVector<MachineBasicBlock *, 2> Rets =
++            emitMasterReturn(MBB, W.LinkRegs, X.Cond, TII);
++        if (W.TwoExit) {
++          // The exits are now reached from the return blocks.
++          for (auto [Exit, Ret] : zip_equal(X.Exits, Rets)) {
++            MBB.replaceSuccessor(Exit, Ret);
++            Ret->addSuccessor(Exit);
++            for (const MachineBasicBlock::RegisterMaskPair &LI :
++                 Exit->liveins())
++              Ret->addLiveIn(LI);
++          }
++        }
++        for (MCRegister Reg : W.LinkRegs)
++          MBB.addLiveIn(Reg);
++        addMasterLabel(MBB, W.Sym, TII);
++        if (W.TwoExit)
++          ++NumSJ2MastersInPlace;
++        else
++          ++NumSJMastersInPlace;
++        continue;
++      }
++      // Out-of-line copy at CopyPt, reachable only from folded blocks.
++      // Instructions that emit no bytes (CFI, labels, debug info) are not
++      // copied.
++      MachineBasicBlock *Copy = MF.CreateMachineBasicBlock();
++      MF.insert(CopyPt, Copy);
++      for (MachineInstr &MI : MBB)
++        if (!MI.isTerminator() && !MI.isMetaInstruction())
++          Copy->push_back(MF.CloneMachineInstr(&MI));
++      for (const MachineBasicBlock::RegisterMaskPair &LI : MBB.liveins())
++        Copy->addLiveIn(LI);
++      for (MCRegister Reg : W.LinkRegs)
++        Copy->addLiveIn(Reg);
++      for (MachineBasicBlock *Ret :
++           emitMasterReturn(*Copy, W.LinkRegs, W.Cond, TII))
++        if (Ret != Copy)
++          Copy->addSuccessor(Ret);
++      addMasterLabel(*Copy, W.Sym, TII);
++      if (W.TwoExit)
++        ++NumSJ2MastersCopied;
++      else
++        ++NumSJMastersCopied;
++      // The master's own block can then become a fold of the copy.
++    }
++
++    if (!HaveExits) {
++      ++NumSJIneligible;
++      continue;
++    }
++    if (W.Site != SiteProblem::None) {
++      if (W.Site == SiteProblem::BadExit)
++        ++NumSJBadExit;
++      else if (W.Site == SiteProblem::LinkRegLive)
++        ++NumSJLinkRegLive;
++      else
++        ++NumSJ2SecondLinkRegLive;
++      continue;
++    }
++    if (!isReplaceable(MBB)) {
++      ++NumSJNotReplaceable;
++      continue;
++    }
++    emitSaveJumpFold(MBB, X.Exits, W.LinkRegs, W.Sym, TII);
++    if (W.TwoExit)
++      ++NumSJ2Folds;
++    else
++      ++NumSJFolds;
++  }
++  return true;
++}
++
++bool DeduBB::runOnMachineFunction(MachineFunction &MF) {
++  const DeduBBDirectives &Directives = DeduBBDirectives::get();
++  if (Directives.empty())
++    return false;
++
++  const TargetInstrInfo *TII = MF.getSubtarget().getInstrInfo();
++  if (!TII->supportsDeduBB())
++    return false;
++
++  // Collect the directives first: Save-and-Jump adds blocks to the function.
++  using Item = std::pair<MachineBasicBlock *, const DeduBBDirectives::Directive *>;
++  SmallVector<Item, 8> TailCallFolds, SaveJumps;
++  for (MachineBasicBlock &MBB : MF) {
++    std::optional<UniqueBBID> ID = MBB.getBBID();
++    // Only original (non-cloned) blocks carry directives.
++    if (!ID || ID->CloneID != 0)
++      continue;
++    const DeduBBDirectives::Directive *D =
++        Directives.lookup(MF.getFunction(), ID->BaseID);
++    if (!D || D->K == DeduBBDirectives::Master)
++      continue; // Tail-call masters are labelled by the AsmPrinter.
++    if (D->K == DeduBBDirectives::MasterCallReturn ||
++        D->K == DeduBBDirectives::FoldCallReturn)
++      continue; // Applied by the DeduBBCallReturn pass.
++    if (D->K == DeduBBDirectives::Fold)
++      TailCallFolds.push_back({&MBB, D});
++    else
++      SaveJumps.push_back({&MBB, D});
++  }
++
++  bool Changed = false;
++  for (auto [MBB, D] : TailCallFolds) {
++    // The fold's jump replaces every way out of the block, so it must have
++    // none but its return or tail call: no fall-through (a conditional tail
++    // call) and no landing pad.
++    if (!MBB->succ_empty()) {
++      ++NumTailCallSkipSuccessors;
++      continue;
++    }
++    // Step 1 groups blocks that run the same instructions to the same
++    // addresses, so the master, which runs its own calls and jumps, reaches
++    // what this block did. Only symbols that are the targets of direct calls
++    // and jumps, and that the directive names in order, can be checked
++    // against that; a block naming anything else (data, a constant pool, a
++    // jump table, a label) or anything unlisted is left as is.
++    SmallVector<std::string, 4> Callees;
++    bool Unlisted = false;
++    for (const MachineInstr &MI : *MBB) {
++      if (MI.isDebugInstr())
++        continue;
++      for (const MachineOperand &MO : MI.operands()) {
++        if (MO.isCPI() || MO.isJTI() || MO.isBlockAddress() ||
++            MO.isTargetIndex()) {
++          Unlisted = true;
++        } else if (MO.isGlobal() || MO.isSymbol() || MO.isMCSymbol()) {
++          if (!MI.isCall() || MO.getOffset() != 0)
++            Unlisted = true;
++          else
++            Callees.push_back(DeduBBDirectives::getCalleeName(MO));
++        }
++      }
++    }
++    if (Unlisted || !DeduBBDirectives::calleesMatch(D->Callees, Callees)) {
++      ++NumTailCallSkipSymbols;
++      continue;
++    }
++
++    // Replace the entire block with a single tail branch to the master copy.
++    std::string MasterSym = ("DeduBB.master." + Twine(D->MasterID)).str();
++    MBB->erase(MBB->begin(), MBB->end());
++    TII->insertDeduBBTailBranch(*MBB, MasterSym);
++    while (!MBB->succ_empty())
++      MBB->removeSuccessor(MBB->succ_begin());
++    ++NumTailCallFolds;
++    Changed = true;
++  }
++
++  Changed |= applySaveAndJump(MF, SaveJumps);
++  return Changed;
++}
++
++MachineFunctionPass *llvm::createDeduBBPass() { return new DeduBB(); }
+diff --git a/llvm/lib/CodeGen/DeduBBCallReturn.cpp b/llvm/lib/CodeGen/DeduBBCallReturn.cpp
+new file mode 100644
+--- /dev/null
++++ b/llvm/lib/CodeGen/DeduBBCallReturn.cpp
+@@ -0,0 +1,1413 @@
++//===- DeduBBCallReturn.cpp - DeduBB ranges and Call-Return folds ---------===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++//
++// This pass applies the DeduBB Call-Return directives (bbmcr/bbfcr, see
++// DeduBBDirectives.h). A group of byte-identical blocks shares one copy of
++// their body, everything before their branches, as a routine that returns.
++// Every block of the group, the master's own included, keeps its branches and
++// calls that routine instead of running its body:
++//
++//   block:  <body>               block:  callq DeduBB.master.cr.K
++//           <branches>    =>             <branches>
++//
++//   DeduBB.cr.masters:  ...
++//   DeduBB.master.cr.K: <body>
++//                       retq
++//
++// A body that makes calls is entered with 16 bytes pushed instead of 8, so
++// that its calls see the stack alignment they saw in the block:
++//
++//           pushq %rax                  (8 bytes of padding; %rax is only read)
++//           callq DeduBB.master.cr.K
++//           leaq  8(%rsp), %rsp         (drops the padding; EFLAGS untouched)
++//
++// The master is emitted from the bytes Step 1 compared, which the directive
++// carries, with its direct calls made again by name: it computes exactly what
++// every block of the group computed in the binary the directives were made
++// from. It does not depend on how the master's own block was compiled, which
++// may differ from its bytes: the linker rewrites some code, such as accesses
++// to thread-local variables.
++//
++// A block calls the master only if its own instructions are known to produce
++// those same bytes: they reference no symbol other than the targets of their
++// direct calls (anything else would be filled in by the linker, differently
++// in another place), they are as many as the directive says, and they call the
++// same functions. Then:
++//  * The body runs unchanged in the master. Step 1 made sure it does not read
++//    or write %rsp, %rip or the shadow-stack pointer other than through its
++//    calls, so it does not care where it runs or that %rsp is 8 or 16 bytes
++//    lower: its memory accesses go through other registers, and each call
++//    reaches the same function.
++//  * Registers and flags flow into the master and back unchanged: `call`,
++//    `ret`, `push` and `lea` write neither EFLAGS nor any register but %rsp,
++//    and the stub leaves %rsp as it found it.
++//  * The stub writes only below %rsp, which is free unless the function keeps
++//    data in the red zone; such functions are left alone.
++//  * The calls inside the master see the stack aligned as before. They must
++//    not take arguments on the stack, which are now 16 bytes further away, so
++//    functions that pass stack arguments are left alone.
++//  * Unwinding through a master uses the unwind info of the function holding
++//    the masters (CFA = %rsp + 8 throughout, since a body never moves %rsp),
++//    and then the block's own function at the stub's return address, where
++//    the stub's CFI accounts for the padding if the CFA is computed from %rsp.
++//    A block with an invoke has EH labels and is never replaced, so every call
++//    that reaches a master had no landing pad before either.
++//
++// The masters live in a function of their own per module (per set of target
++// attributes), `DeduBB.cr.masters`, not in an existing function, so that they
++// get unwind info of their own. The function is in a `.text.dedubb.` section,
++// which `ld.lld -z keep-text-section-prefix` keeps apart from `.text`. The
++// master's module emits it whether or not the master's own block can call it,
++// since blocks in other modules do.
++//
++// A directive with `at=` folds a range of a block rather than its body: the
++// instructions `at` to `at + insts`, counted among those that emit code, are
++// replaced by the stub, and the rest of the block stays in place. The same
++// checks apply to the range, plus these, for the index to name the
++// instructions Step 1 decoded:
++//  * Every instruction of the block emits exactly one machine instruction
++//    (TargetInstrInfo::isDeduBBSingleInstruction): no bundle, no inline asm,
++//    and no pseudo that is lowered into code of its own, such as a
++//    thread-local access or a check. The block holds as many as the
++//    directive's `block_insts=`.
++//  * The range holds no CFI, label or frame setup or teardown instruction, and
++//    starts after the block's last frame setup instruction: from there on the
++//    stack is the body's, as in any other block, so the entry block is fine
++//    past its prologue.
++// A block may have several ranges; they are folded last first, so that each
++// keeps the instructions it names.
++//
++// The pass also applies the other kinds of range (`at=` on the directives of
++// DeduBBDirectives.h), so that all the ranges of a block are checked against
++// it as Step 1 saw it, before any is folded:
++//
++//  * Save-and-Jump runs (bbmsj/bbfsj). Like a Call-Return run, but the stub
++//    jumps to the master and the master jumps back, through the link register
++//    (R11 on x86-64):
++//
++//      block:  <before>                          DeduBB.sj.masters:  ...
++//              leaq Tail(%rip), %r11             DeduBB.master.sj.K: <run>
++//              jmp  DeduBB.master.sj.K                               jmpq *%r11
++//      Tail:   <after>
++//
++//    The block is split after the run, and its successors move to the second
++//    half. Nothing is pushed, so the master runs in the block's own frame: it
++//    may read and write the block's stack slots, though not move %rsp, call
++//    (a call clobbers the link register) or touch the link register, which
++//    must be free where the run starts. The masters are emitted from Step 1's
++//    bytes in a function without unwind info: no rule of its own describes
++//    the frame a master runs in, and without calls nothing unwinds through it.
++//    With indirect branch tracking, the master's `jmp *%r11` would need an
++//    `endbr` at its target, so the folds are left alone there.
++//
++//  * Tail-call endings (bbm/bbf). A block that ends in a return or a tail
++//    call keeps its first instructions and replaces the last ones with a jump
++//    to a label in a master block that ends the same way:
++//
++//      fold:   <before>                    master:  <its own>
++//              jmp DeduBB.master.K         DeduBB.master.K:  <the ending>
++//                                                            ret
++//
++//    The jump keeps the fold's frame, so the ending runs as if it were the
++//    fold's own: it may restore registers and pop the frame. It holds no call
++//    but a final tail call: unwinding through a call would use the master
++//    function's rules for the fold's frame, which describe it only if both
++//    functions address it alike and both have unwind tables. The label is
++//    found by counting instructions back from the end of the block, so the
++//    ending's instructions must each be emitted as one, and must reference no
++//    symbol but the tail call's target, which the directive lists, and
++//    link-time constants such as thread-local offsets
++//    (TargetInstrInfo::isDeduBBLinkTimeConstant). A master that does not check
++//    out is an error: blocks in other modules jump to it.
++//
++//===----------------------------------------------------------------------===//
++
++#include "llvm/ADT/STLExtras.h"
++#include "llvm/ADT/SetVector.h"
++#include "llvm/ADT/SmallPtrSet.h"
++#include "llvm/ADT/SmallSet.h"
++#include "llvm/ADT/SmallVector.h"
++#include "llvm/ADT/Statistic.h"
++#include "llvm/ADT/StringRef.h"
++#include "llvm/ADT/Twine.h"
++#include "llvm/CodeGen/DeduBBDirectives.h"
++#include "llvm/CodeGen/LivePhysRegs.h"
++#include "llvm/CodeGen/MachineBasicBlock.h"
++#include "llvm/CodeGen/MachineFrameInfo.h"
++#include "llvm/CodeGen/MachineFunction.h"
++#include "llvm/CodeGen/MachineInstr.h"
++#include "llvm/CodeGen/MachineInstrBuilder.h"
++#include "llvm/CodeGen/MachineModuleInfo.h"
++#include "llvm/CodeGen/MachineOperand.h"
++#include "llvm/CodeGen/MachineRegisterInfo.h"
++#include "llvm/CodeGen/Passes.h"
++#include "llvm/CodeGen/TargetFrameLowering.h"
++#include "llvm/CodeGen/TargetInstrInfo.h"
++#include "llvm/CodeGen/TargetLowering.h"
++#include "llvm/CodeGen/TargetRegisterInfo.h"
++#include "llvm/CodeGen/TargetSubtargetInfo.h"
++#include "llvm/IR/Attributes.h"
++#include "llvm/IR/BasicBlock.h"
++#include "llvm/IR/DerivedTypes.h"
++#include "llvm/IR/Function.h"
++#include "llvm/IR/GlobalAlias.h"
++#include "llvm/IR/GlobalIFunc.h"
++#include "llvm/IR/InlineAsm.h"
++#include "llvm/IR/Instructions.h"
++#include "llvm/IR/Module.h"
++#include "llvm/InitializePasses.h"
++#include "llvm/MC/MCContext.h"
++#include "llvm/Pass.h"
++#include "llvm/Support/ErrorHandling.h"
++#include <algorithm>
++#include <limits>
++#include <map>
++#include <optional>
++#include <string>
++#include <tuple>
++
++using namespace llvm;
++
++// Reported next to the other DeduBB counters.
++#define DEBUG_TYPE "dedubb"
++
++ALWAYS_ENABLED_STATISTIC(NumCRMasters, "Number of Call-Return masters emitted");
++ALWAYS_ENABLED_STATISTIC(
++    NumCR0Folds,
++    "Number of blocks or ranges that call a Call-Return master without calls");
++ALWAYS_ENABLED_STATISTIC(
++    NumCR1Folds,
++    "Number of blocks or ranges that call a Call-Return master with calls");
++ALWAYS_ENABLED_STATISTIC(NumCRRangeFolds,
++                         "Number of ranges replaced by a Call-Return stub");
++ALWAYS_ENABLED_STATISTIC(
++    NumCRSkipIneligible,
++    "Number of Call-Return folds skipped: the body's instructions do not "
++    "qualify (a symbol, %rsp or %rip operand, inline asm, a special call)");
++ALWAYS_ENABLED_STATISTIC(
++    NumCRSkipMismatch,
++    "Number of Call-Return folds skipped: the body's instruction count "
++    "differs from the directive's");
++ALWAYS_ENABLED_STATISTIC(
++    NumCRSkipCalleeMismatch,
++    "Number of Call-Return folds skipped: the calls differ from the "
++    "directive's callees");
++ALWAYS_ENABLED_STATISTIC(
++    NumCRSkipABI, "Number of Call-Return folds skipped: calling convention, "
++                  "code model or hardening");
++ALWAYS_ENABLED_STATISTIC(
++    NumCRSkipRedZone,
++    "Number of Call-Return folds skipped: the function uses the red zone");
++ALWAYS_ENABLED_STATISTIC(
++    NumCRSkipReturnsTwice,
++    "Number of Call-Return folds skipped: the function calls setjmp or the "
++    "like");
++ALWAYS_ENABLED_STATISTIC(
++    NumCRSkipStackArgs,
++    "Number of Call-Return folds skipped: the function passes arguments on "
++    "the stack");
++ALWAYS_ENABLED_STATISTIC(
++    NumCRSkipNotReplaceable,
++    "Number of Call-Return folds skipped: CFI, labels, frame code or EH pad");
++ALWAYS_ENABLED_STATISTIC(
++    NumCRSkipBlockCount,
++    "Number of Call-Return range folds skipped: the block's instructions do "
++    "not match the directive's block_insts=, or one may not emit exactly one");
++ALWAYS_ENABLED_STATISTIC(
++    NumCRSkipConflict,
++    "Number of Call-Return folds skipped: ranges overlap, or the block has "
++    "another directive");
++ALWAYS_ENABLED_STATISTIC(
++    NumTCRangeMasters,
++    "Number of labels placed in tail-call masters for endings blocks share");
++ALWAYS_ENABLED_STATISTIC(
++    NumTCRangeFolds, "Number of tail-call endings replaced by a jump to a master");
++ALWAYS_ENABLED_STATISTIC(
++    NumTCRangeSkipMismatch,
++    "Number of tail-call ending folds skipped: the block does not end as its "
++    "directive says");
++ALWAYS_ENABLED_STATISTIC(
++    NumTCRangeSkipConflict,
++    "Number of tail-call ending folds skipped: the block is a master too");
++ALWAYS_ENABLED_STATISTIC(NumSJRangeMasters,
++                         "Number of Save-and-Jump range masters emitted");
++ALWAYS_ENABLED_STATISTIC(NumSJRangeFolds,
++                         "Number of Save-and-Jump ranges replaced by a stub");
++ALWAYS_ENABLED_STATISTIC(
++    NumSJRangeSkipBlockCount,
++    "Number of Save-and-Jump range folds skipped: the block's instructions do "
++    "not match the directive's block_insts=, or one may not emit exactly one");
++ALWAYS_ENABLED_STATISTIC(
++    NumSJRangeSkipConflict,
++    "Number of Save-and-Jump range folds skipped: ranges overlap");
++ALWAYS_ENABLED_STATISTIC(
++    NumSJRangeSkipNotReplaceable,
++    "Number of Save-and-Jump range folds skipped: CFI, labels or frame code");
++ALWAYS_ENABLED_STATISTIC(
++    NumSJRangeSkipSite,
++    "Number of Save-and-Jump range folds skipped: no link register, calling "
++    "convention, code model, hardening, branch tracking or landing pads");
++ALWAYS_ENABLED_STATISTIC(
++    NumSJRangeSkipIneligible,
++    "Number of Save-and-Jump range folds skipped: an instruction a master "
++    "cannot run");
++ALWAYS_ENABLED_STATISTIC(
++    NumSJRangeSkipLinkRegLive,
++    "Number of Save-and-Jump range folds skipped: the link register is live "
++    "where the range starts");
++
++//===----------------------------------------------------------------------===//
++// Checks on a block's body: do its instructions produce the directive's bytes?
++//===----------------------------------------------------------------------===//
++
++namespace {
++// What a block's body, everything before its terminators, does.
++struct BodyInfo {
++  enum Kind { OK, Ineligible, Mismatch, CalleeMismatch } Result = OK;
++  // Instructions that emit code.
++  unsigned NumInsts = 0;
++  // The body's calls in order: the callee's name for a direct call, "*" for a
++  // call through a register or memory.
++  SmallVector<std::string, 4> Callees;
++};
++} // namespace
++
++// A call to a function that returns twice would save the master's frame,
++// which is gone once the master returns. The names are the ones Step 1 refuses.
++static bool returnsTwice(const MachineOperand &Callee, StringRef Name) {
++  if (Callee.isGlobal())
++    if (const auto *F =
++            dyn_cast_or_null<Function>(Callee.getGlobal()->getAliaseeObject()))
++      if (F->hasFnAttribute(Attribute::ReturnsTwice))
++        return true;
++  static const StringRef Names[] = {
++      "setjmp",  "_setjmp", "__setjmp", "sigsetjmp",  "__sigsetjmp",
++      "savectx", "vfork",   "__vfork",  "getcontext", "__getcontext",
++      "qsetjmp"};
++  return is_contained(Names, Name);
++}
++
++// Decides whether a master can run \p MI, an instruction that emits code: it
++// emits one plain instruction, with no operand the linker fills in other than
++// the target of a direct call, and touches none of the forbidden registers
++// (%rsp, %rip and the shadow-stack pointer on x86-64) other than through a
++// call's own stack effects. Appends a call's callee to \p Callees: its name,
++// or "*" for a call through a register or memory.
++static bool isMovable(const MachineInstr &MI, const TargetInstrInfo &TII,
++                      const TargetRegisterInfo &TRI,
++                      SmallVectorImpl<std::string> &Callees) {
++  const ArrayRef<MCPhysReg> Forbidden = TII.getDeduBBCallReturnForbiddenRegs();
++  const auto IsForbidden = [&](Register Reg) {
++    return any_of(Forbidden, [&](MCPhysReg F) {
++      return TRI.regsOverlap(Reg, Register(F));
++    });
++  };
++  const auto IsForbiddenPhys = [&](MCPhysReg Reg) {
++    return IsForbidden(Register(Reg));
++  };
++  switch (MI.getOpcode()) {
++  // Inline asm may hold anything, including code the linker fills in; the
++  // others record the function's address or frame, or patch it.
++  case TargetOpcode::INLINEASM:
++  case TargetOpcode::INLINEASM_BR:
++  case TargetOpcode::ANNOTATION_LABEL:
++  case TargetOpcode::LOCAL_ESCAPE:
++  case TargetOpcode::STACKMAP:
++  case TargetOpcode::PATCHPOINT:
++  case TargetOpcode::STATEPOINT:
++  case TargetOpcode::FENTRY_CALL:
++  case TargetOpcode::PATCHABLE_OP:
++  case TargetOpcode::PATCHABLE_FUNCTION_ENTER:
++  case TargetOpcode::PATCHABLE_FUNCTION_EXIT:
++  case TargetOpcode::PATCHABLE_RET:
++  case TargetOpcode::PATCHABLE_TAIL_CALL:
++  case TargetOpcode::PATCHABLE_EVENT_CALL:
++  case TargetOpcode::PATCHABLE_TYPED_EVENT_CALL:
++  case TargetOpcode::ICALL_BRANCH_FUNNEL:
++  case TargetOpcode::FAULTING_OP:
++    return false;
++  default:
++    break;
++  }
++  if (MI.isBranch() || MI.isIndirectBranch() || MI.isReturn() ||
++      MI.getPreInstrSymbol() || MI.getPostInstrSymbol())
++    return false;
++  // Calls other than plain direct and indirect ones, and pseudos lowered into
++  // more than one instruction or into code that belongs to its place
++  // (thread-local accesses, checks, sleds).
++  const MachineOperand *Callee = nullptr;
++  if (!TII.isDeduBBCallReturnMovable(MI, Callee))
++    return false;
++  if (MI.isCall()) {
++    std::string Name = Callee ? DeduBBDirectives::getCalleeName(*Callee) : "*";
++    if (Callee && returnsTwice(*Callee, Name))
++      return false;
++    Callees.push_back(std::move(Name));
++  }
++  for (const MachineOperand &MO : MI.operands()) {
++    switch (MO.getType()) {
++    case MachineOperand::MO_Register:
++      if (!MO.getReg())
++        break;
++      if (!MO.getReg().isPhysical())
++        return false;
++      // A call's implicit operands are its own stack effects and its
++      // arguments and results; its address is an explicit operand.
++      if (MI.isCall() && MO.isImplicit())
++        break;
++      if (IsForbidden(MO.getReg()))
++        return false;
++      break;
++    case MachineOperand::MO_Immediate:
++    case MachineOperand::MO_CImmediate:
++    case MachineOperand::MO_FPImmediate:
++    case MachineOperand::MO_RegisterMask:
++      break;
++    default:
++      // The only symbol allowed is a direct call's target, which the master
++      // calls by name. Any other symbol, block, constant pool or jump table
++      // operand is filled in by the linker, and would not have the value the
++      // master's bytes hold.
++      if (&MO == Callee)
++        break;
++      return false;
++    }
++  }
++  // Instructions built without their implicit operands (see
++  // X86InstrInfo::getOutliningTypeImpl).
++  if (!MI.isCall()) {
++    const MCInstrDesc &Desc = MI.getDesc();
++    if (any_of(Desc.implicit_uses(), IsForbiddenPhys) ||
++        any_of(Desc.implicit_defs(), IsForbiddenPhys))
++      return false;
++  }
++  return true;
++}
++
++// Decides whether \p MBB's instructions produce the bytes of directive \p D's
++// body: every instruction emits one instruction with no operand the linker
++// fills in, other than the target of a direct call; there are as many as
++// Step 1 decoded; and they call the same functions. Only then does replacing
++// the body with a call to the master, which runs those bytes, change nothing.
++static BodyInfo checkBody(const MachineBasicBlock &MBB,
++                          const DeduBBDirectives::Directive &D,
++                          const TargetInstrInfo &TII,
++                          const TargetRegisterInfo &TRI) {
++  BodyInfo Info;
++  const auto Fail = [&Info](BodyInfo::Kind Result) {
++    Info.Result = Result;
++    return Info;
++  };
++  if (TII.getDeduBBCallReturnForbiddenRegs().empty())
++    return Fail(BodyInfo::Ineligible);
++  // The entry block holds the prologue and entry instrumentation.
++  if (MBB.isEntryBlock())
++    return Fail(BodyInfo::Ineligible);
++  // The block's branches stay where they are. They must be all that follows
++  // the body, so that the body here is the part Step 1 compared.
++  for (const MachineInstr &MI : MBB.terminators()) {
++    if (MI.isDebugInstr())
++      continue;
++    if (!MI.isBranch() || MI.isReturn() || MI.isCall() || MI.isInlineAsm() ||
++        MI.isBundle())
++      return Fail(BodyInfo::Mismatch);
++  }
++  for (const MachineInstr &MI :
++       make_range(MBB.begin(), MBB.getFirstTerminator())) {
++    if (MI.isBundle() || MI.isBundled())
++      return Fail(BodyInfo::Ineligible);
++    // Debug info and other instructions that emit no code. A block that holds
++    // CFI or labels keeps its body (checkSite).
++    if (MI.isMetaInstruction())
++      continue;
++    ++Info.NumInsts;
++    if (!isMovable(MI, TII, TRI, Info.Callees))
++      return Fail(BodyInfo::Ineligible);
++  }
++  if (Info.NumInsts != D.NumInsts)
++    return Fail(BodyInfo::Mismatch);
++  if (!DeduBBDirectives::calleesMatch(D.Callees, Info.Callees))
++    return Fail(BodyInfo::CalleeMismatch);
++  return Info;
++}
++
++//===----------------------------------------------------------------------===//
++// Checks on a block's place: can its function call a master there?
++//===----------------------------------------------------------------------===//
++
++namespace {
++enum class Site {
++  OK,
++  ABI,
++  RedZone,
++  ReturnsTwice,
++  NotReplaceable,
++  StackArgs,
++};
++} // namespace
++
++// Blocks holding CFI, labels, frame setup or teardown, or an EH pad keep their
++// body: erasing it would break the function's unwind info or EH tables.
++static bool isReplaceable(const MachineBasicBlock &MBB) {
++  if (MBB.isEHPad() || MBB.isEHScopeEntry() || MBB.isEHFuncletEntry())
++    return false;
++  for (const MachineInstr &MI : MBB)
++    if (MI.isCFIInstruction() || MI.isLabel() ||
++        MI.getFlag(MachineInstr::FrameSetup) ||
++        MI.getFlag(MachineInstr::FrameDestroy) ||
++        MI.getOpcode() == TargetOpcode::RELOC_NONE ||
++        MI.getOpcode() == TargetOpcode::JUMP_TABLE_DEBUG_INFO)
++      return false;
++  return true;
++}
++
++// The checks on \p MF that apply to every stub in it, before the block's own
++// (checkSite) or the range's (foldRanges).
++static Site checkFunction(const MachineFunction &MF,
++                          const TargetInstrInfo &TII) {
++  if (!TII.supportsDeduBBCallReturn(MF))
++    return Site::ABI;
++  // The stub's call writes its return address below %rsp.
++  if (TII.hasDeduBBRedZone(MF))
++    return Site::RedZone;
++  if (MF.exposesReturnsTwice())
++    return Site::ReturnsTwice;
++  return Site::OK;
++}
++
++// The checks on \p MF for a stub whose master makes calls, and whether such a
++// stub needs CFI (\p EmitCFI).
++static Site checkCalls(const MachineFunction &MF, bool WithCalls,
++                       bool &EmitCFI) {
++  EmitCFI = false;
++  if (!WithCalls)
++    return Site::OK; // %rsp is back where it was when the master returns.
++  const MachineFrameInfo &MFI = MF.getFrameInfo();
++  // Arguments stored at the bottom of the frame would be 16 bytes away from
++  // where the master's callee looks for them, and the stub's return address
++  // would sit on the first of them.
++  if (MFI.getMaxCallFrameSize() > 0)
++    return Site::StackArgs;
++  // Without a frame pointer the CFA is %rsp-based in every block, and CFI
++  // must describe the padding. With one it is %rbp-based wherever a call is
++  // made: the prologue, shrink-wrapped or not, comes before every call and
++  // the epilogues after, and a block holding either keeps its body
++  // (isReplaceable).
++  EmitCFI = MF.needsFrameMoves() &&
++            !MF.getSubtarget().getFrameLowering()->hasFP(MF);
++  return Site::OK;
++}
++
++// Decides whether \p MBB may call its master, and whether a stub for a body
++// with calls needs CFI (\p EmitCFI).
++static Site checkSite(const MachineBasicBlock &MBB, bool WithCalls,
++                      const TargetInstrInfo &TII, bool &EmitCFI) {
++  const MachineFunction &MF = *MBB.getParent();
++  EmitCFI = false;
++  if (Site S = checkFunction(MF, TII); S != Site::OK)
++    return S;
++  if (!isReplaceable(MBB))
++    return Site::NotReplaceable;
++  return checkCalls(MF, WithCalls, EmitCFI);
++}
++
++// Replaces the instructions from \p Begin up to \p End of \p MBB (a body or a
++// range) with a call to \p Sym, which goes before \p End. The call takes over
++// their register effects, so that liveness stays exact: implicit uses of the
++// registers they read before writing them, implicit defs of the ones they
++// write, and, if they make calls, the register mask those share.
++static void replaceWithStub(MachineBasicBlock &MBB,
++                            MachineBasicBlock::iterator Begin,
++                            MachineBasicBlock::iterator End, StringRef Sym,
++                            bool WithCalls, bool EmitCFI,
++                            const TargetInstrInfo &TII,
++                            const TargetRegisterInfo &TRI) {
++  MachineFunction &MF = *MBB.getParent();
++  const MachineRegisterInfo &MRI = MF.getRegInfo();
++  const auto Body = make_range(Begin, End);
++
++  // As the MachineOutliner does for an outlined call (MachineOutliner.cpp).
++  SmallSetVector<Register, 16> Uses, Defs;
++  for (const MachineInstr &MI : reverse(Body)) {
++    if (MI.isDebugInstr())
++      continue;
++    SmallSet<Register, 4> InstrUses;
++    for (const MachineOperand &MO : MI.operands()) {
++      if (!MO.isReg() || !MO.getReg() || MRI.isReserved(MO.getReg()))
++        continue;
++      if (MO.isDef()) {
++        Defs.insert(MO.getReg());
++        if (!InstrUses.count(MO.getReg()))
++          Uses.remove(MO.getReg());
++      } else if (!MO.isUndef()) {
++        Uses.insert(MO.getReg());
++        InstrUses.insert(MO.getReg());
++      }
++    }
++  }
++  uint32_t *Mask = nullptr;
++  const unsigned MaskSize = MachineOperand::getRegMaskSize(TRI.getNumRegs());
++  for (const MachineInstr &MI : Body)
++    for (const MachineOperand &MO : MI.operands())
++      if (MO.isRegMask()) {
++        if (!Mask) {
++          Mask = MF.allocateRegMask();
++          std::fill_n(Mask, MaskSize, ~0u);
++        }
++        for (unsigned I = 0; I != MaskSize; ++I)
++          Mask[I] &= MO.getRegMask()[I];
++      }
++
++  for (MachineInstr &MI : make_early_inc_range(Body)) {
++    if (MI.shouldUpdateAdditionalCallInfo())
++      MF.eraseAdditionalCallInfo(&MI);
++    MI.eraseFromParent();
++  }
++  MachineInstr *Call =
++      TII.insertDeduBBCallReturnStub(MBB, End, Sym, WithCalls, EmitCFI);
++  if (Mask)
++    Call->addOperand(MachineOperand::CreateRegMask(Mask));
++  for (Register Reg : Defs)
++    Call->addOperand(MachineOperand::CreateReg(Reg, /*isDef=*/true,
++                                               /*isImp=*/true));
++  for (Register Reg : Uses)
++    Call->addOperand(MachineOperand::CreateReg(Reg, /*isDef=*/false,
++                                               /*isImp=*/true));
++}
++
++static std::string getMasterSymbol(const DeduBBDirectives::Directive &D);
++
++//===----------------------------------------------------------------------===//
++// Ranges: directives with `at=`.
++//===----------------------------------------------------------------------===//
++
++// Collects the instructions of \p MBB that emit code, in order, which is how
++// `at=` and `block_insts=` count. Returns false if one of them may not emit
++// exactly one machine instruction (isDeduBBSingleInstruction), so that the
++// count could be off: a bundle, inline asm, or a pseudo that is lowered into
++// code of its own, such as a thread-local access or a check.
++static bool collectInstructions(MachineBasicBlock &MBB,
++                                SmallVectorImpl<MachineInstr *> &Insts,
++                                const TargetInstrInfo &TII) {
++  for (MachineInstr &MI : MBB) {
++    if (MI.isBundle() || MI.isBundled())
++      return false;
++    if (MI.isMetaInstruction())
++      continue;
++    if (MI.isInlineAsm() || !TII.isDeduBBSingleInstruction(MI))
++      return false;
++    Insts.push_back(&MI);
++  }
++  return true;
++}
++
++namespace {
++// A run that passed its checks.
++struct RunFold {
++  const DeduBBDirectives::Directive *D;
++  MachineInstr *First; // Its first and last instructions that emit code.
++  MachineInstr *Last;
++  bool SaveJump; // A Save-and-Jump run, else a Call-Return one.
++  bool WithCalls;
++  bool EmitCFI;
++};
++} // namespace
++
++static bool isSaveJump(const DeduBBDirectives::Directive &D) {
++  return D.K == DeduBBDirectives::MasterSaveJump ||
++         D.K == DeduBBDirectives::FoldSaveJump;
++}
++
++// Decides whether a Save-and-Jump master can run \p MI, an instruction that
++// emits code. The master runs it at another address but in the block's own
++// frame, between the stub's `lea 1f(%rip), Link; jmp` and its own
++// `jmp *Link`. So \p MI must be emitted as one plain instruction with no
++// operand the linker fills in, must not call or branch, and must not touch the
++// link register \p Link or a register of getDeduBBCallReturnForbiddenRegs,
++// except that it may read the stack pointer \p SP: the stack is where it was.
++static bool isSaveJumpMovable(const MachineInstr &MI,
++                              const TargetInstrInfo &TII,
++                              const TargetRegisterInfo &TRI, MCRegister Link,
++                              Register SP) {
++  if (MI.isCall() || MI.isBranch() || MI.isIndirectBranch() || MI.isReturn() ||
++      MI.isTerminator() || MI.isInlineAsm() || MI.getPreInstrSymbol() ||
++      MI.getPostInstrSymbol() || !TII.isDeduBBSingleInstruction(MI))
++    return false;
++  const ArrayRef<MCPhysReg> Forbidden = TII.getDeduBBCallReturnForbiddenRegs();
++  // Whether \p MI may not read (or with \p Def, write) \p Reg.
++  const auto Banned = [&](Register Reg, bool Def) {
++    if (TRI.regsOverlap(Reg, Link))
++      return true;
++    for (MCPhysReg F : Forbidden)
++      if (TRI.regsOverlap(Reg, F) && (Def || !TRI.regsOverlap(F, SP)))
++        return true;
++    return false;
++  };
++  for (const MachineOperand &MO : MI.operands()) {
++    switch (MO.getType()) {
++    case MachineOperand::MO_Register:
++      if (!MO.getReg())
++        break;
++      if (!MO.getReg().isPhysical() || Banned(MO.getReg(), MO.isDef()))
++        return false;
++      break;
++    case MachineOperand::MO_Immediate:
++    case MachineOperand::MO_CImmediate:
++    case MachineOperand::MO_FPImmediate:
++      break;
++    default:
++      // A symbol, block, constant pool, jump table or register mask.
++      return false;
++    }
++  }
++  // Instructions built without their implicit operands.
++  const MCInstrDesc &Desc = MI.getDesc();
++  return none_of(Desc.implicit_uses(),
++                 [&](MCPhysReg R) { return Banned(R, /*Def=*/false); }) &&
++         none_of(Desc.implicit_defs(),
++                 [&](MCPhysReg R) { return Banned(R, /*Def=*/true); });
++}
++
++// The checks on \p MF for Save-and-Jump ranges: a link register, the
++// conditions of a Call-Return stub's call (supportsDeduBBCallReturn), and no
++// indirect branch tracking, since the master returns with an indirect jump.
++static bool supportsSaveJumpRanges(const MachineFunction &MF,
++                                   const TargetInstrInfo &TII) {
++  return TII.getDeduBBLinkRegister().isValid() &&
++         TII.supportsDeduBBCallReturn(MF) &&
++         !DeduBBDirectives::hasIndirectBranchTracking(
++             *MF.getFunction().getParent());
++}
++
++// Finds the ending of \p MBB that tail-call range \p D covers, its last
++// `block_insts - at` instructions that emit code, and checks that they are
++// what Step 1 compared: each is emitted as one machine instruction, nothing
++// among them is a label or inline asm, none but the last is a call (unwinding
++// through a call in a shared ending would use the rules of the master's
++// function for the frame of the block that jumped there), and they reference
++// no symbol but the target of a final tail call, which \p D lists, and
++// link-time constants (isDeduBBLinkTimeConstant). The block must end there,
++// with no successor, and must not be an EH pad. If every instruction of the
++// block can be counted, there must be `block_insts` of them. Returns the
++// first instruction of the ending, or null and why in \p Why.
++static MachineInstr *findTailEnding(MachineBasicBlock &MBB,
++                                    const DeduBBDirectives::Directive &D,
++                                    const TargetInstrInfo &TII,
++                                    std::string *Why = nullptr) {
++  const auto Fail = [Why](const Twine &Reason) -> MachineInstr * {
++    if (Why)
++      *Why = Reason.str();
++    return nullptr;
++  };
++  if (MBB.isEHPad())
++    return Fail("it is an EH pad");
++  if (!MBB.succ_empty())
++    return Fail("it has successors");
++  const unsigned N = D.BlockInsts - D.At;
++  SmallVector<MachineInstr *, 8> Ending;
++  for (auto It = MBB.rbegin(); It != MBB.rend() && Ending.size() < N; ++It) {
++    MachineInstr &MI = *It;
++    if (MI.isBundle() || MI.isBundled() || MI.isInlineAsm() || MI.isLabel())
++      return Fail("they hold a label, a bundle or inline asm");
++    if (MI.isMetaInstruction())
++      continue;
++    if (!TII.isDeduBBSingleInstruction(MI))
++      return Fail("they hold " + TII.getName(MI.getOpcode()) +
++                  ", which is not one machine instruction");
++    Ending.push_back(&MI);
++  }
++  if (Ending.size() != N)
++    return Fail("it has only " + Twine(Ending.size()) + " instructions");
++  SmallVector<MachineInstr *, 32> Insts;
++  if (collectInstructions(MBB, Insts, TII) && Insts.size() != D.BlockInsts)
++    return Fail("it has " + Twine(Insts.size()) + " instructions, not " +
++                Twine(D.BlockInsts));
++  SmallVector<std::string, 4> Callees;
++  for (const MachineInstr *MI : reverse(Ending)) {
++    if (MI->isCall() && MI != Ending.front())
++      return Fail("they hold a call, " + TII.getName(MI->getOpcode()));
++    for (const MachineOperand &MO : MI->operands()) {
++      if (MO.isCPI() || MO.isJTI() || MO.isBlockAddress() ||
++          MO.isTargetIndex() || MO.isMBB())
++        return Fail(TII.getName(MI->getOpcode()) +
++                    " references a block, constant or jump table");
++      if (MO.isGlobal() || MO.isSymbol() || MO.isMCSymbol()) {
++        if (MI->isCall() && MO.getOffset() == 0)
++          Callees.push_back(DeduBBDirectives::getCalleeName(MO));
++        else if (MI->isCall() || !TII.isDeduBBLinkTimeConstant(MO))
++          return Fail(TII.getName(MI->getOpcode()) +
++                      " references a symbol that is not its callee");
++      }
++    }
++  }
++  if (!DeduBBDirectives::calleesMatch(D.Callees, Callees))
++    return Fail("they call other functions");
++  return Ending.back();
++}
++
++// Checks the runs \p Runs of \p MBB, its Call-Return and Save-and-Jump range
++// directives, and adds those that pass to \p Folds, in order. A run must end
++// before instruction \p End, where an ending that a tail-call directive keeps
++// or folds starts.
++static void checkRuns(MachineBasicBlock &MBB,
++                      SmallVectorImpl<const DeduBBDirectives::Directive *> &Runs,
++                      unsigned End, const TargetInstrInfo &TII,
++                      const TargetRegisterInfo &TRI,
++                      SmallVectorImpl<RunFold> &Folds) {
++  const MachineFunction &MF = *MBB.getParent();
++  if (MBB.isEHPad() || MBB.isEHScopeEntry() || MBB.isEHFuncletEntry() ||
++      TII.getDeduBBCallReturnForbiddenRegs().empty()) {
++    NumCRSkipNotReplaceable += Runs.size();
++    return;
++  }
++  SmallVector<MachineInstr *, 32> Insts;
++  if (!collectInstructions(MBB, Insts, TII)) {
++    NumCRSkipBlockCount += Runs.size();
++    return;
++  }
++  // The position of each instruction in the block, meta instructions included,
++  // and that of the last frame setup instruction: a run starts after it.
++  DenseMap<const MachineInstr *, unsigned> Position;
++  unsigned LastSetup = 0;
++  bool HasSetup = false;
++  for (const MachineInstr &MI : MBB) {
++    const unsigned P = Position.size();
++    Position[&MI] = P;
++    if (MI.getFlag(MachineInstr::FrameSetup)) {
++      LastSetup = P;
++      HasSetup = true;
++    }
++  }
++  // A Save-and-Jump run needs a function that allows them, a block whose
++  // successors can all move to the run's return point (no landing pad), and
++  // the link register free where the run starts.
++  const MCRegister Link = TII.getDeduBBLinkRegister();
++  const bool SaveJumpSite =
++      supportsSaveJumpRanges(MF, TII) &&
++      none_of(MBB.successors(),
++              [](const MachineBasicBlock *S) { return S->isEHPad(); });
++  SmallPtrSet<const MachineInstr *, 8> LinkLiveBefore;
++  if (SaveJumpSite && any_of(Runs, [](const DeduBBDirectives::Directive *D) {
++        return isSaveJump(*D);
++      })) {
++    LivePhysRegs Live(TRI);
++    Live.addLiveOuts(MBB);
++    for (const MachineInstr &MI : reverse(MBB)) {
++      if (MI.isDebugInstr())
++        continue;
++      Live.stepBackward(MI);
++      if (!Live.available(MF.getRegInfo(), Link))
++        LinkLiveBefore.insert(&MI);
++    }
++  }
++  const Register SP =
++      MF.getSubtarget().getTargetLowering()->getStackPointerRegisterToSaveRestore();
++
++  llvm::sort(Runs, [](const DeduBBDirectives::Directive *A,
++                      const DeduBBDirectives::Directive *B) {
++    return A->At < B->At;
++  });
++  unsigned FreeFrom = 0; // The first instruction after the last run kept.
++  for (const DeduBBDirectives::Directive *D : Runs) {
++    const bool SaveJump = isSaveJump(*D);
++    if (Insts.size() != D->BlockInsts) {
++      ++(SaveJump ? NumSJRangeSkipBlockCount : NumCRSkipBlockCount);
++      continue;
++    }
++    if (D->NumInsts == 0 || D->At < FreeFrom ||
++        uint64_t(D->At) + D->NumInsts > std::min<uint64_t>(End, Insts.size())) {
++      ++(SaveJump ? NumSJRangeSkipConflict : NumCRSkipConflict);
++      continue;
++    }
++    MachineInstr *First = Insts[D->At];
++    MachineInstr *Last = Insts[D->At + D->NumInsts - 1];
++    // Between the instructions a master runs, nothing whose place matters:
++    // CFI, labels, frame setup or teardown.
++    bool Replaceable = !(HasSetup && LastSetup >= Position[First]);
++    for (MachineInstr &MI :
++         make_range(First->getIterator(), std::next(Last->getIterator())))
++      if (MI.isCFIInstruction() || MI.isLabel() ||
++          MI.getFlag(MachineInstr::FrameSetup) ||
++          MI.getFlag(MachineInstr::FrameDestroy) ||
++          MI.getOpcode() == TargetOpcode::RELOC_NONE ||
++          MI.getOpcode() == TargetOpcode::JUMP_TABLE_DEBUG_INFO)
++        Replaceable = false;
++    if (!Replaceable) {
++      ++(SaveJump ? NumSJRangeSkipNotReplaceable : NumCRSkipNotReplaceable);
++      continue;
++    }
++
++    if (SaveJump) {
++      if (!SaveJumpSite) {
++        ++NumSJRangeSkipSite;
++        continue;
++      }
++      if (!all_of(make_range(First->getIterator(),
++                             std::next(Last->getIterator())),
++                  [&](const MachineInstr &MI) {
++                    return MI.isMetaInstruction() ||
++                           isSaveJumpMovable(MI, TII, TRI, Link, SP);
++                  })) {
++        ++NumSJRangeSkipIneligible;
++        continue;
++      }
++      if (LinkLiveBefore.contains(First)) {
++        ++NumSJRangeSkipLinkRegLive;
++        continue;
++      }
++      Folds.push_back({D, First, Last, /*SaveJump=*/true, false, false});
++      FreeFrom = D->At + D->NumInsts;
++      continue;
++    }
++
++    // The instructions a Call-Return master runs, as for a body (checkBody).
++    bool Movable = true;
++    SmallVector<std::string, 4> Callees;
++    for (MachineInstr &MI :
++         make_range(First->getIterator(), std::next(Last->getIterator()))) {
++      if (MI.isMetaInstruction())
++        continue;
++      if (!isMovable(MI, TII, TRI, Callees)) {
++        Movable = false;
++        break;
++      }
++    }
++    if (!Movable) {
++      ++NumCRSkipIneligible;
++      continue;
++    }
++    if (!DeduBBDirectives::calleesMatch(D->Callees, Callees)) {
++      ++NumCRSkipCalleeMismatch;
++      continue;
++    }
++    const bool WithCalls = !Callees.empty();
++    bool EmitCFI = false;
++    Site S = checkFunction(MF, TII);
++    if (S == Site::OK)
++      S = checkCalls(MF, WithCalls, EmitCFI);
++    switch (S) {
++    case Site::OK:
++      Folds.push_back({D, First, Last, /*SaveJump=*/false, WithCalls, EmitCFI});
++      FreeFrom = D->At + D->NumInsts;
++      break;
++    case Site::ABI:
++      ++NumCRSkipABI;
++      break;
++    case Site::RedZone:
++      ++NumCRSkipRedZone;
++      break;
++    case Site::ReturnsTwice:
++      ++NumCRSkipReturnsTwice;
++      break;
++    case Site::NotReplaceable:
++      ++NumCRSkipNotReplaceable;
++      break;
++    case Site::StackArgs:
++      ++NumCRSkipStackArgs;
++      break;
++    }
++  }
++}
++
++// Replaces Save-and-Jump run \p F of \p MBB with its stub. The block is split
++// after the run, and its successors move to the second half, which the stub
++// passes to the master as the return address:
++//
++//   MBB:  <before the run>        Tail:  <after the run>
++//         lea Tail(%rip), Link
++//         jmp DeduBB.master.sj.K
++static void applySaveJumpRun(MachineBasicBlock &MBB, const RunFold &F,
++                             const TargetInstrInfo &TII) {
++  MachineFunction &MF = *MBB.getParent();
++  MachineBasicBlock *Tail = MF.CreateMachineBasicBlock();
++  MF.insert(std::next(MBB.getIterator()), Tail);
++  Tail->splice(Tail->end(), &MBB, std::next(F.Last->getIterator()), MBB.end());
++  Tail->transferSuccessors(&MBB);
++  MBB.addSuccessor(Tail); // Reached again through the master.
++  MBB.erase(F.First->getIterator(), MBB.end());
++  TII.insertDeduBBLoadReturnAddress(MBB, *Tail, TII.getDeduBBLinkRegister());
++  TII.insertDeduBBTailBranch(MBB, getMasterSymbol(*F.D));
++  Tail->setLabelMustBeEmitted();
++  LivePhysRegs LiveRegs;
++  computeAndAddLiveIns(LiveRegs, *Tail);
++  ++NumSJRangeFolds;
++}
++
++// Applies the range directives \p Ds of \p MBB: the labels of the tail-call
++// endings it keeps for other blocks, the fold of its own ending, and its
++// runs, those that pass their checks. Blocks elsewhere jump into a master's
++// ending, so it must be found; anything else that does not check out is left
++// as is.
++static void applyRanges(MachineBasicBlock &MBB,
++                        ArrayRef<const DeduBBDirectives::Directive *> Ds,
++                        const TargetInstrInfo &TII,
++                        const TargetRegisterInfo &TRI) {
++  MachineFunction &MF = *MBB.getParent();
++  SmallVector<std::pair<MachineInstr *, const DeduBBDirectives::Directive *>,
++              2>
++      Labels;
++  const DeduBBDirectives::Directive *TailFold = nullptr;
++  SmallVector<const DeduBBDirectives::Directive *, 4> Runs;
++  unsigned End = std::numeric_limits<unsigned>::max();
++  for (const DeduBBDirectives::Directive *D : Ds) {
++    if (D->K == DeduBBDirectives::Master) {
++      std::string Why;
++      MachineInstr *First = findTailEnding(MBB, *D, TII, &Why);
++      if (!First)
++        report_fatal_error(
++            "DeduBB: block " + Twine(MBB.getBBID()->BaseID) + " of " +
++                MF.getName() + " does not end in the " +
++                Twine(D->BlockInsts - D->At) +
++                " instructions that tail-call master " + getMasterSymbol(*D) +
++                " shares (" + Why +
++                "); the directives must come from a build of the same "
++                "sources with the same compiler and flags",
++            /*gen_crash_diag=*/false);
++      Labels.push_back({First, D});
++      End = std::min(End, D->At);
++    } else if (D->K == DeduBBDirectives::Fold) {
++      if (TailFold)
++        ++NumTCRangeSkipConflict;
++      else
++        TailFold = D;
++    } else {
++      Runs.push_back(D);
++    }
++  }
++  MachineInstr *FoldFirst = nullptr;
++  if (TailFold) {
++    SmallVector<MachineInstr *, 32> Insts;
++    if (!Labels.empty()) {
++      ++NumTCRangeSkipConflict; // A master keeps its ending.
++    } else if (!collectInstructions(MBB, Insts, TII) ||
++               !(FoldFirst = findTailEnding(MBB, *TailFold, TII))) {
++      ++NumTCRangeSkipMismatch;
++    } else {
++      End = TailFold->At;
++    }
++  }
++  SmallVector<RunFold, 4> Folds;
++  if (!Runs.empty())
++    checkRuns(MBB, Runs, End, TII, TRI, Folds);
++
++  // The block's ending first, then its runs from the last: each change leaves
++  // the instructions before it where they are.
++  for (auto [First, D] : Labels) {
++    // The AsmPrinter makes `DeduBB.master.*` labels global and hidden.
++    BuildMI(MBB, First->getIterator(), DebugLoc(),
++            TII.get(TargetOpcode::ANNOTATION_LABEL))
++        .addSym(MF.getContext().getOrCreateSymbol(getMasterSymbol(*D)));
++    ++NumTCRangeMasters;
++  }
++  if (FoldFirst) {
++    for (MachineInstr &MI : make_early_inc_range(
++             make_range(MachineBasicBlock::iterator(FoldFirst), MBB.end()))) {
++      if (MI.shouldUpdateAdditionalCallInfo())
++        MF.eraseAdditionalCallInfo(&MI);
++      MI.eraseFromParent();
++    }
++    TII.insertDeduBBTailBranch(MBB, getMasterSymbol(*TailFold));
++    ++NumTCRangeFolds;
++  }
++  for (const RunFold &F : reverse(Folds)) {
++    if (F.SaveJump) {
++      applySaveJumpRun(MBB, F, TII);
++      continue;
++    }
++    replaceWithStub(MBB, F.First->getIterator(),
++                    std::next(F.Last->getIterator()), getMasterSymbol(*F.D),
++                    F.WithCalls, F.EmitCFI, TII, TRI);
++    ++NumCRRangeFolds;
++    if (F.WithCalls)
++      ++NumCR1Folds;
++    else
++      ++NumCR0Folds;
++  }
++}
++
++//===----------------------------------------------------------------------===//
++// The pass.
++//===----------------------------------------------------------------------===//
++
++namespace {
++class DeduBBCallReturn : public ModulePass {
++public:
++  static char ID;
++  DeduBBCallReturn() : ModulePass(ID) {
++    initializeDeduBBCallReturnPass(*PassRegistry::getPassRegistry());
++  }
++  StringRef getPassName() const override {
++    return "DeduBB ranges and Call-Return folds";
++  }
++  void getAnalysisUsage(AnalysisUsage &AU) const override {
++    AU.addRequired<MachineModuleInfoWrapperPass>();
++    AU.addPreserved<MachineModuleInfoWrapperPass>();
++    AU.setPreservesAll();
++    ModulePass::getAnalysisUsage(AU);
++  }
++  bool runOnModule(Module &M) override;
++
++private:
++  MachineFunction &getMasters(Module &M, const MachineFunction &Parent,
++                              bool SaveJump);
++  void emitMaster(Module &M, MachineFunction &Masters,
++                  const DeduBBDirectives::Directive &D);
++  void emitSaveJumpMaster(MachineFunction &Masters,
++                          const DeduBBDirectives::Directive &D);
++
++  // The functions holding the masters, by kind (Save-and-Jump or not) and
++  // target attributes.
++  std::map<std::tuple<bool, std::string, std::string, std::string, bool>,
++           MachineFunction *>
++      MastersByAttrs;
++};
++} // namespace
++
++char DeduBBCallReturn::ID = 0;
++INITIALIZE_PASS_BEGIN(DeduBBCallReturn, "dedubb-call-return",
++                      "DeduBB ranges and Call-Return folds", false, false)
++INITIALIZE_PASS_DEPENDENCY(MachineModuleInfoWrapperPass)
++INITIALIZE_PASS_END(DeduBBCallReturn, "dedubb-call-return",
++                    "DeduBB ranges and Call-Return folds", false, false)
++
++ModulePass *llvm::createDeduBBCallReturnPass() {
++  return new DeduBBCallReturn();
++}
++
++static std::string getMasterSymbol(const DeduBBDirectives::Directive &D) {
++  StringRef Prefix = "DeduBB.master.cr.";
++  if (D.K == DeduBBDirectives::Master || D.K == DeduBBDirectives::Fold)
++    Prefix = "DeduBB.master.";
++  else if (isSaveJump(D))
++    Prefix = "DeduBB.master.sj.";
++  return (Prefix + Twine(D.MasterID)).str();
++}
++
++// Returns the function that holds the masters taken from \p Parent, created
++// the way the MachineOutliner creates outlined functions. It takes \p Parent's
++// target attributes, so that it is compiled for the same subtarget.
++// Call-Return masters (`DeduBB.cr.masters`) get unwind info: exceptions thrown
++// by their calls unwind through them, with %rsp 8 bytes below the return
++// address as in any function. Save-and-Jump masters (`DeduBB.sj.masters`) run
++// in the frames of the blocks they were taken from, which no rule of their
++// own describes, and make no call, so they get none.
++MachineFunction &DeduBBCallReturn::getMasters(Module &M,
++                                              const MachineFunction &Parent,
++                                              bool SaveJump) {
++  const Function &PF = Parent.getFunction();
++  const TargetInstrInfo &TII = *Parent.getSubtarget().getInstrInfo();
++  const auto Attr = [&PF](StringRef Kind) {
++    return PF.getFnAttribute(Kind).getValueAsString().str();
++  };
++  const std::string CPU = Attr("target-cpu"), TuneCPU = Attr("tune-cpu");
++  const std::string Features = TII.getDeduBBCallReturnMasterFeatures(
++      PF.getFnAttribute("target-features").getValueAsString());
++  // X86ReturnThunks turns the Call-Return masters' returns into jumps to the
++  // thunk, like every other return of such a function.
++  const bool RetThunk =
++      !SaveJump && PF.hasFnAttribute(Attribute::FnRetThunkExtern);
++
++  MachineFunction *&MF = MastersByAttrs[std::make_tuple(
++      SaveJump, CPU, Features, TuneCPU, RetThunk)];
++  if (!MF) {
++    LLVMContext &C = M.getContext();
++    Function *F = Function::Create(
++        FunctionType::get(Type::getVoidTy(C), false),
++        GlobalValue::InternalLinkage,
++        SaveJump ? "DeduBB.sj.masters" : "DeduBB.cr.masters", M);
++    F->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
++    // In `.text.dedubb.`, which `ld.lld -z keep-text-section-prefix` gathers
++    // into an output section of its own, apart from the functions.
++    (void)F->setSectionPrefix("dedubb");
++    // No padding between the masters, or in front of them.
++    F->addFnAttr(Attribute::OptimizeForSize);
++    F->addFnAttr(Attribute::MinSize);
++    F->addFnAttr(Attribute::NoInline);
++    if (!CPU.empty())
++      F->addFnAttr("target-cpu", CPU);
++    if (!Features.empty())
++      F->addFnAttr("target-features", Features);
++    if (!TuneCPU.empty())
++      F->addFnAttr("tune-cpu", TuneCPU);
++    if (RetThunk)
++      F->addFnAttr(Attribute::FnRetThunkExtern);
++    // A Call-Return master unwinds as any function; it needs no personality.
++    if (SaveJump)
++      F->addFnAttr(Attribute::NoUnwind);
++    ReturnInst::Create(C, BasicBlock::Create(C, "entry", F));
++
++    MachineModuleInfo &MMI =
++        getAnalysis<MachineModuleInfoWrapperPass>().getMMI();
++    MF = &MMI.getOrCreateMachineFunction(*F);
++    MF->setAlignment(Align(1));
++    MF->getProperties().resetIsSSA();
++    MF->getProperties().setNoPHIs();
++    MF->getProperties().setNoVRegs();
++    MF->getProperties().setTracksLiveness();
++    MF->getRegInfo().freezeReservedRegs();
++  }
++  Function &F = MF->getFunction();
++  if (!SaveJump && PF.getUWTableKind() > F.getUWTableKind())
++    F.setUWTableKind(PF.getUWTableKind());
++  return *MF;
++}
++
++// Appends raw machine code, \p Hex, to \p MBB.
++static void emitBytes(MachineBasicBlock &MBB, StringRef Hex,
++                      const TargetInstrInfo &TII) {
++  std::string Asm = ".byte ";
++  for (size_t I = 0; I < Hex.size(); I += 2) {
++    if (I != 0)
++      Asm += ',';
++    Asm += "0x";
++    Asm += Hex.substr(I, 2);
++  }
++  MachineFunction &MF = *MBB.getParent();
++  BuildMI(MBB, MBB.end(), DebugLoc(), TII.get(TargetOpcode::INLINEASM))
++      .addExternalSymbol(MF.createExternalSymbolName(Asm))
++      .addImm(InlineAsm::Extra_HasSideEffects);
++}
++
++// Returns the function, alias or ifunc that \p M calls \p Name, or null.
++// With \p Local, only one of the module's own local ones; otherwise only one
++// with a name of its own in the program.
++static const GlobalValue *findCallee(const Module &M, StringRef Name,
++                                     bool Local) {
++  for (const std::string &IRName : {Name.str(), "\1" + Name.str()}) {
++    const GlobalValue *G = M.getNamedValue(IRName);
++    if (G && G->hasLocalLinkage() == Local &&
++        (isa<Function>(G) || isa<GlobalAlias>(G) || isa<GlobalIFunc>(G)))
++      return G;
++  }
++  return nullptr;
++}
++
++// Appends the master of \p D to \p Masters: its body's bytes, with a call to
++// each direct callee where the body has one, then a return. A callee is called
++// as the module's own calls reach it, by the first of its names that the
++// module knows: one that names it throughout the program if there is one,
++// since a local function of the module may only share the callee's name (Step
++// 1 refuses names that other symbols in the binary have, but cannot see the
++// functions the linker dropped); else one of the module's local functions. A
++// callee the module does not know (a runtime function the code generator
++// calls) is called by a name the module does not use.
++void DeduBBCallReturn::emitMaster(Module &M, MachineFunction &Masters,
++                                  const DeduBBDirectives::Directive &D) {
++  const TargetInstrInfo &TII = *Masters.getSubtarget().getInstrInfo();
++  MachineBasicBlock *MBB = Masters.CreateMachineBasicBlock();
++  Masters.push_back(MBB);
++  // The AsmPrinter makes `DeduBB.master.*` labels global and hidden.
++  BuildMI(*MBB, MBB->end(), DebugLoc(),
++          TII.get(TargetOpcode::ANNOTATION_LABEL))
++      .addSym(Masters.getContext().getOrCreateSymbol(getMasterSymbol(D)));
++
++  SmallVector<StringRef, 4> Calls, Pieces;
++  if (!D.Callees.empty())
++    StringRef(D.Callees).split(Calls, ',');
++  StringRef(D.Body).split(Pieces, '.');
++  const auto *Call = Calls.begin();
++  for (auto [I, Piece] : enumerate(Pieces)) {
++    if (!Piece.empty())
++      emitBytes(*MBB, Piece, TII);
++    if (I + 1 == Pieces.size())
++      break;
++    // The next direct call (the parser checked that there is one).
++    while (*Call == "*")
++      ++Call;
++    SmallVector<StringRef, 4> Names;
++    (Call++)->split(Names, '|');
++    const GlobalValue *GV = nullptr;
++    for (bool Local : {false, true}) {
++      for (StringRef Name : Names)
++        if ((GV = findCallee(M, Name, Local)))
++          break;
++      if (GV)
++        break;
++    }
++    StringRef Name = Names.front();
++    if (!GV) {
++      // By name: one the module gives nothing else, which would take the
++      // call.
++      const auto *Free = find_if(Names, [&M](StringRef N) {
++        return !M.getNamedValue(N) && !M.getNamedValue(("\1" + N).str());
++      });
++      if (Free == Names.end())
++        report_fatal_error("DeduBB: master " + Twine(getMasterSymbol(D)) +
++                               " cannot call '" + Names.front() +
++                               "': the module holds something else of that "
++                               "name",
++                           /*gen_crash_diag=*/false);
++      Name = *Free;
++    }
++    TII.insertDeduBBCallReturnMasterCall(*MBB, GV, Name);
++  }
++  TII.insertDeduBBCallReturnRet(*MBB);
++  if (!Calls.empty()) {
++    Masters.getFrameInfo().setHasCalls(true);
++    Masters.getFrameInfo().setAdjustsStack(true);
++  }
++  ++NumCRMasters;
++}
++
++// Appends the Save-and-Jump master of \p D to \p Masters: the run's bytes,
++// then a return through the link register.
++void DeduBBCallReturn::emitSaveJumpMaster(
++    MachineFunction &Masters, const DeduBBDirectives::Directive &D) {
++  const TargetInstrInfo &TII = *Masters.getSubtarget().getInstrInfo();
++  const MCRegister Link = TII.getDeduBBLinkRegister();
++  MachineBasicBlock *MBB = Masters.CreateMachineBasicBlock();
++  Masters.push_back(MBB);
++  BuildMI(*MBB, MBB->end(), DebugLoc(),
++          TII.get(TargetOpcode::ANNOTATION_LABEL))
++      .addSym(Masters.getContext().getOrCreateSymbol(getMasterSymbol(D)));
++  emitBytes(*MBB, D.Body, TII);
++  TII.insertDeduBBSaveAndJumpReturn(*MBB, Link);
++  MBB->addLiveIn(Link);
++  ++NumSJRangeMasters;
++}
++
++bool DeduBBCallReturn::runOnModule(Module &M) {
++  const DeduBBDirectives &Directives = DeduBBDirectives::get();
++  if (!Directives.hasRanges())
++    return false;
++  MachineModuleInfo &MMI = getAnalysis<MachineModuleInfoWrapperPass>().getMMI();
++  MastersByAttrs.clear();
++
++  // Collect the work first: the masters' functions are added to the module on
++  // the way.
++  struct Master {
++    MachineFunction *MF;
++    unsigned BBID;
++    const DeduBBDirectives::Directive *D;
++  };
++  struct Item {
++    MachineBasicBlock *MBB;
++    const SmallVector<DeduBBDirectives::Directive, 1> *Ds;
++  };
++  SmallVector<Master, 16> Masters;
++  SmallVector<Item, 16> Items;
++  for (Function &F : M) {
++    MachineFunction *MF = MMI.getMachineFunction(F);
++    if (!MF)
++      continue;
++    const DenseMap<unsigned, SmallVector<DeduBBDirectives::Directive, 1>> *FD =
++        Directives.getRanges(F);
++    if (!FD)
++      continue;
++    // A Call-Return or Save-and-Jump master is emitted wherever its function
++    // is, in block id order, then in range order. (A tail-call master stays
++    // in its block.)
++    size_t First = Masters.size();
++    for (const auto &[BBID, Ds] : *FD)
++      for (const DeduBBDirectives::Directive &D : Ds)
++        if (D.K == DeduBBDirectives::MasterCallReturn ||
++            (D.K == DeduBBDirectives::MasterSaveJump && D.IsRange))
++          Masters.push_back({MF, BBID, &D});
++    std::sort(Masters.begin() + First, Masters.end(),
++              [](const Master &A, const Master &B) {
++                return std::tie(A.BBID, A.D->At) < std::tie(B.BBID, B.D->At);
++              });
++    for (MachineBasicBlock &MBB : *MF) {
++      std::optional<UniqueBBID> ID = MBB.getBBID();
++      // Only original (non-cloned) blocks carry directives.
++      if (!ID || ID->CloneID != 0)
++        continue;
++      auto It = FD->find(ID->BaseID);
++      if (It != FD->end())
++        Items.push_back({&MBB, &It->second});
++    }
++  }
++
++  for (const Master &Mst : Masters) {
++    if (!isSaveJump(*Mst.D)) {
++      emitMaster(M, getMasters(M, *Mst.MF, /*SaveJump=*/false), *Mst.D);
++      continue;
++    }
++    // Emitted whenever the target can: the folds of other modules may need
++    // one that this module's own blocks cannot use.
++    if (Mst.MF->getSubtarget().getInstrInfo()->getDeduBBLinkRegister().isValid())
++      emitSaveJumpMaster(getMasters(M, *Mst.MF, /*SaveJump=*/true), *Mst.D);
++  }
++
++  for (const Item &I : Items) {
++    MachineBasicBlock &MBB = *I.MBB;
++    MachineFunction &MF = *MBB.getParent();
++    const TargetInstrInfo &TII = *MF.getSubtarget().getInstrInfo();
++    const TargetRegisterInfo &TRI = *MF.getSubtarget().getRegisterInfo();
++    const SmallVector<DeduBBDirectives::Directive, 1> &Ds = *I.Ds;
++    SmallVector<const DeduBBDirectives::Directive *, 4> Ranges, TailMasters;
++    for (const DeduBBDirectives::Directive &D : Ds) {
++      if (D.IsRange)
++        Ranges.push_back(&D);
++      if (D.K == DeduBBDirectives::Master)
++        TailMasters.push_back(&D);
++    }
++    // A block with a whole-block tail-call or Save-and-Jump directive keeps its
++    // code for that fold, and a block holds ranges or one Call-Return body,
++    // never both. Step 1 writes neither; a tail-call master's labels are still
++    // placed, since other blocks jump to them.
++    if (Directives.lookup(MF.getFunction(), MBB.getBBID()->BaseID) ||
++        (Ranges.size() != Ds.size() && !Ranges.empty())) {
++      NumCRSkipConflict += Ds.size() - TailMasters.size();
++      if (!TailMasters.empty())
++        applyRanges(MBB, TailMasters, TII, TRI);
++      continue;
++    }
++    if (!Ranges.empty()) {
++      applyRanges(MBB, Ranges, TII, TRI);
++      continue;
++    }
++    if (Ds.size() != 1) {
++      NumCRSkipConflict += Ds.size();
++      continue;
++    }
++    const DeduBBDirectives::Directive &D = Ds.front();
++    const BodyInfo Body = checkBody(MBB, D, TII, TRI);
++    switch (Body.Result) {
++    case BodyInfo::OK:
++      break;
++    case BodyInfo::Ineligible:
++      ++NumCRSkipIneligible;
++      continue;
++    case BodyInfo::Mismatch:
++      ++NumCRSkipMismatch;
++      continue;
++    case BodyInfo::CalleeMismatch:
++      ++NumCRSkipCalleeMismatch;
++      continue;
++    }
++    const bool WithCalls = !Body.Callees.empty();
++    bool EmitCFI = false;
++    switch (checkSite(MBB, WithCalls, TII, EmitCFI)) {
++    case Site::OK:
++      replaceWithStub(MBB, MBB.begin(), MBB.getFirstTerminator(),
++                      getMasterSymbol(D), WithCalls, EmitCFI, TII, TRI);
++      if (WithCalls)
++        ++NumCR1Folds;
++      else
++        ++NumCR0Folds;
++      break;
++    case Site::ABI:
++      ++NumCRSkipABI;
++      break;
++    case Site::RedZone:
++      ++NumCRSkipRedZone;
++      break;
++    case Site::ReturnsTwice:
++      ++NumCRSkipReturnsTwice;
++      break;
++    case Site::NotReplaceable:
++      ++NumCRSkipNotReplaceable;
++      break;
++    case Site::StackArgs:
++      ++NumCRSkipStackArgs;
++      break;
++    }
++  }
++  return !Masters.empty() || !Items.empty();
++}
+diff --git a/llvm/lib/CodeGen/MachineFunction.cpp b/llvm/lib/CodeGen/MachineFunction.cpp
+--- a/llvm/lib/CodeGen/MachineFunction.cpp
++++ b/llvm/lib/CodeGen/MachineFunction.cpp
+@@ -25,6 +25,7 @@
+ #include "llvm/Analysis/ConstantFolding.h"
+ #include "llvm/Analysis/ProfileSummaryInfo.h"
+ #include "llvm/CodeGen/MachineBasicBlock.h"
++#include "llvm/CodeGen/DeduBBDirectives.h"
+ #include "llvm/CodeGen/MachineConstantPool.h"
+ #include "llvm/CodeGen/MachineFrameInfo.h"
+ #include "llvm/CodeGen/MachineInstr.h"
+@@ -49,6 +50,7 @@
+ #include "llvm/IR/EHPersonalities.h"
+ #include "llvm/IR/Function.h"
+ #include "llvm/IR/GlobalValue.h"
++#include "llvm/IR/GlobalAlias.h"
+ #include "llvm/IR/Instruction.h"
+ #include "llvm/IR/Instructions.h"
+ #include "llvm/IR/Metadata.h"
+@@ -549,8 +551,31 @@
+   // Set BBID for `-basic-block-sections=list` and `-basic-block-address-map` to
+   // allow robust mapping of profiles to basic blocks.
+   if (Target.Options.BBAddrMap ||
+-      Target.getBBSectionsType() == BasicBlockSection::List)
+-    MBB->setBBID(BBID.has_value() ? *BBID : UniqueBBID{NextBBID++, 0});
++      Target.getBBSectionsType() == BasicBlockSection::List) {
++    UniqueBBID ID = BBID.has_value() ? *BBID : UniqueBBID{NextBBID++, 0};
++    MBB->setBBID(ID);
++
++    // Protect DeduBB master blocks from being deleted by optimizations.
++    if (const DeduBBDirectives &DD = DeduBBDirectives::get(); !DD.empty()) {
++      if (ID.CloneID == 0) {
++        const DeduBBDirectives::Directive *D = DD.lookup(getName(), ID.BaseID);
++        if (!D) {
++          if (const Function *F = &getFunction()) {
++            if (const Module *M = F->getParent()) {
++              for (const GlobalAlias &A : M->aliases()) {
++                if (A.getAliaseeObject() == F) {
++                  if ((D = DD.lookup(A.getName(), ID.BaseID)))
++                    break;
++                }
++              }
++            }
++          }
++        }
++        if (D && D->K == DeduBBDirectives::Master)
++          MBB->setMachineBlockAddressTaken();
++      }
++    }
++  }
+   return MBB;
+ }
+ 
+diff --git a/llvm/lib/CodeGen/TargetPassConfig.cpp b/llvm/lib/CodeGen/TargetPassConfig.cpp
+--- a/llvm/lib/CodeGen/TargetPassConfig.cpp
++++ b/llvm/lib/CodeGen/TargetPassConfig.cpp
+@@ -23,6 +23,7 @@
+ #include "llvm/CodeGen/BasicBlockSectionsProfileReader.h"
+ #include "llvm/CodeGen/CSEConfigBase.h"
+ #include "llvm/CodeGen/CodeGenTargetMachineImpl.h"
++#include "llvm/CodeGen/DeduBBDirectives.h"
+ #include "llvm/CodeGen/MachineFunctionPass.h"
+ #include "llvm/CodeGen/MachinePassRegistry.h"
+ #include "llvm/CodeGen/Passes.h"
+@@ -1249,6 +1250,16 @@
+       addPass(createMachineOutlinerPass(EnableMachineOutliner));
+   }
+ 
++  // Apply DeduBB tail-call deduplication directives. This runs at the same late
++  // stage as the MachineOutliner so the inserted tail branches are expanded by
++  // the same later passes. It is a no-op unless -dedubb-directives is set.
++  // Ranges and Call-Return directives need a module pass, which adds functions
++  // for their masters; like the outliner, it keeps every MachineFunction alive
++  // until it runs, so it is only added when there are such directives.
++  if (DeduBBDirectives::get().hasRanges())
++    addPass(createDeduBBCallReturnPass());
++  addPass(createDeduBBPass());
++
+   if (EnableGCEmptyBlocks)
+     addPass(llvm::createGCEmptyBasicBlocksLegacyPass());
+ 
+diff --git a/llvm/lib/CodeGen/UnreachableBlockElim.cpp b/llvm/lib/CodeGen/UnreachableBlockElim.cpp
+--- a/llvm/lib/CodeGen/UnreachableBlockElim.cpp
++++ b/llvm/lib/CodeGen/UnreachableBlockElim.cpp
+@@ -23,6 +23,7 @@
+ #include "llvm/ADT/DepthFirstIterator.h"
+ #include "llvm/ADT/SmallPtrSet.h"
+ #include "llvm/CodeGen/MachineBasicBlock.h"
++#include "llvm/CodeGen/DeduBBDirectives.h"
+ #include "llvm/CodeGen/MachineBlockFrequencyInfo.h"
+ #include "llvm/CodeGen/MachineDominators.h"
+ #include "llvm/CodeGen/MachineFunctionPass.h"
+@@ -161,7 +162,10 @@
+   std::vector<MachineBasicBlock*> DeadBlocks;
+   for (MachineBasicBlock &BB : F) {
+     // Test for deadness.
+-    if (!Reachable.count(&BB)) {
++    // DeduBB (elide-toolchain gate): keep address-taken unreachable blocks only when
++    // directives are loaded, so the compiler is unchanged without -dedubb-directives.
++    if (!Reachable.count(&BB) &&
++        !(BB.hasAddressTaken() && !DeduBBDirectives::get().empty())) {
+       DeadBlocks.push_back(&BB);
+ 
+       // Update dominator and loop info.
+diff --git a/llvm/lib/Target/AArch64/AArch64InstrInfo.cpp b/llvm/lib/Target/AArch64/AArch64InstrInfo.cpp
+--- a/llvm/lib/Target/AArch64/AArch64InstrInfo.cpp
++++ b/llvm/lib/Target/AArch64/AArch64InstrInfo.cpp
+@@ -11220,6 +11220,17 @@
+   fixupPostOutline(MBB);
+ }
+ 
++void AArch64InstrInfo::insertDeduBBTailBranch(MachineBasicBlock &MBB,
++                                              StringRef MasterSym) const {
++  // A tail branch to the master copy preserves the current frame, exactly like
++  // a tail-called outlined function (see insertOutlinedCall below). The linker
++  // inserts a range-extension thunk if the master is out of branch range.
++  const char *Sym = MBB.getParent()->createExternalSymbolName(MasterSym);
++  BuildMI(&MBB, DebugLoc(), get(AArch64::TCRETURNdi))
++      .addExternalSymbol(Sym)
++      .addImm(0);
++}
++
+ MachineBasicBlock::iterator AArch64InstrInfo::insertOutlinedCall(
+     Module &M, MachineBasicBlock &MBB, MachineBasicBlock::iterator &It,
+     MachineFunction &MF, outliner::Candidate &C) const {
+diff --git a/llvm/lib/Target/AArch64/AArch64InstrInfo.h b/llvm/lib/Target/AArch64/AArch64InstrInfo.h
+--- a/llvm/lib/Target/AArch64/AArch64InstrInfo.h
++++ b/llvm/lib/Target/AArch64/AArch64InstrInfo.h
+@@ -521,6 +521,10 @@
+                      outliner::Candidate &C) const override;
+   bool shouldOutlineFromFunctionByDefault(MachineFunction &MF) const override;
+ 
++  bool supportsDeduBB() const override { return true; }
++  void insertDeduBBTailBranch(MachineBasicBlock &MBB,
++                              StringRef MasterSym) const override;
++
+   void buildClearRegister(Register Reg, MachineBasicBlock &MBB,
+                           MachineBasicBlock::iterator Iter, DebugLoc &DL,
+                           bool AllowSideEffects = true) const override;
+diff --git a/llvm/lib/Target/X86/X86InstrInfo.cpp b/llvm/lib/Target/X86/X86InstrInfo.cpp
+--- a/llvm/lib/Target/X86/X86InstrInfo.cpp
++++ b/llvm/lib/Target/X86/X86InstrInfo.cpp
+@@ -10730,6 +10730,231 @@
+   return It;
+ }
+ 
++void X86InstrInfo::insertDeduBBTailBranch(MachineBasicBlock &MBB,
++                                          StringRef MasterSym) const {
++  // A tail jump to the master copy preserves the current frame, exactly like a
++  // tail-called outlined function (see insertOutlinedCall above).
++  const char *Sym = MBB.getParent()->createExternalSymbolName(MasterSym);
++  BuildMI(&MBB, DebugLoc(), get(X86::TAILJMPd64)).addExternalSymbol(Sym);
++}
++
++MCRegister X86InstrInfo::getDeduBBLinkRegister() const {
++  // R11 is caller-saved, is never an argument register, and is the
++  // conventional scratch register for PLT stubs and veneers.
++  return Subtarget.is64Bit() ? MCRegister(X86::R11) : MCRegister();
++}
++
++MCRegister X86InstrInfo::getDeduBBSecondLinkRegister() const {
++  // R10 is caller-saved and carries an argument only for the static chain
++  // (`nest`); the DeduBB pass checks that it is dead wherever it is written.
++  return Subtarget.is64Bit() ? MCRegister(X86::R10) : MCRegister();
++}
++
++void X86InstrInfo::insertDeduBBLoadReturnAddress(MachineBasicBlock &MBB,
++                                                 MachineBasicBlock &Target,
++                                                 MCRegister Reg) const {
++  // leaq Target(%rip), Reg
++  BuildMI(&MBB, DebugLoc(), get(X86::LEA64r), Reg)
++      .addReg(X86::RIP).addImm(1).addReg(0).addMBB(&Target).addReg(0);
++}
++
++void X86InstrInfo::insertDeduBBSaveAndJumpReturn(MachineBasicBlock &MBB,
++                                                 MCRegister Reg) const {
++  // jmpq *Reg
++  BuildMI(&MBB, DebugLoc(), get(X86::JMP64r)).addReg(Reg, RegState::Kill);
++}
++
++bool X86InstrInfo::isDeduBBSingleInstruction(const MachineInstr &MI) const {
++  switch (MI.getOpcode()) {
++  // Lowered into one `jmp` or `jcc`.
++  case X86::TAILJMPd64:
++  case X86::TAILJMPd64_CC:
++  case X86::TAILJMPr64:
++  case X86::TAILJMPr64_REX:
++  case X86::TAILJMPm64:
++  case X86::TAILJMPm64_REX:
++    return true;
++  default:
++    // The AsmPrinter lowers the other pseudos left at this point into no code
++    // or into several instructions (thread-local accesses, checks), including
++    // those the instruction tables do not mark as pseudos.
++    return !MI.getDesc().isPseudo() &&
++           (MI.getDesc().TSFlags & X86II::FormMask) != X86II::Pseudo;
++  }
++}
++
++bool X86InstrInfo::isDeduBBLinkTimeConstant(const MachineOperand &MO) const {
++  if (!MO.isGlobal() && !MO.isSymbol() && !MO.isMCSymbol())
++    return false;
++  switch (MO.getTargetFlags()) {
++  // Offsets of thread-local variables from the thread pointer or from their
++  // module's block, and the GOT entry of an initial-exec access, which the
++  // linker rewrites into such an offset in an executable. Where it does not,
++  // the access is %rip-relative, and Step 1 shares no code that holds one.
++  case X86II::MO_TPOFF:
++  case X86II::MO_DTPOFF:
++  case X86II::MO_GOTTPOFF:
++    return true;
++  default:
++    return false;
++  }
++}
++
++ArrayRef<MCPhysReg> X86InstrInfo::getDeduBBCallReturnForbiddenRegs() const {
++  // A master runs with %rsp 8 or 16 bytes lower than the block it replaces,
++  // at another address, and with one more return address on the shadow stack.
++  static const MCPhysReg Regs[] = {X86::RSP, X86::RIP, X86::SSP};
++  return Subtarget.is64Bit() ? ArrayRef<MCPhysReg>(Regs)
++                             : ArrayRef<MCPhysReg>();
++}
++
++bool X86InstrInfo::isDeduBBCallReturnMovable(
++    const MachineInstr &MI, const MachineOperand *&Callee) const {
++  Callee = nullptr;
++  switch (MI.getOpcode()) {
++  case X86::CALL64pcrel32: {
++    // A direct call to a named function. Its rel32 is resolved wherever the
++    // call is emitted.
++    const MachineOperand &MO = MI.getOperand(0);
++    if (!(MO.isGlobal() || MO.isSymbol() || MO.isMCSymbol()) ||
++        MO.getOffset() != 0)
++      return false;
++    Callee = &MO;
++    return true;
++  }
++  case X86::CALL64r:
++  case X86::CALL64r_NT:
++  case X86::CALL64m:
++  case X86::CALL64m_NT:
++    // Through a register or memory; the caller checks that the address does
++    // not use %rsp or %rip.
++    return true;
++  // Lowered by the AsmPrinter into code that belongs to its function or
++  // place, or that the linker rewrites (thread-local accesses).
++  case X86::ENDBR32:
++  case X86::ENDBR64:
++  case X86::KCFI_CHECK:
++  case X86::ASAN_CHECK_MEMACCESS:
++  case X86::MORESTACK_RET:
++  case X86::MORESTACK_RET_RESTORE_R10:
++  case X86::MOVPC32r:
++  case X86::TLS_addr32:
++  case X86::TLS_addr64:
++  case X86::TLS_addrX32:
++  case X86::TLS_base_addr32:
++  case X86::TLS_base_addr64:
++  case X86::TLS_base_addrX32:
++  case X86::TLS_desc32:
++  case X86::TLS_desc64:
++  case X86::UBSAN_UD1:
++    return false;
++  default:
++    // Any other call: far calls, and calls that are lowered with extra code.
++    return !MI.isCall();
++  }
++}
++
++bool X86InstrInfo::supportsDeduBBCallReturn(const MachineFunction &MF) const {
++  const Function &F = MF.getFunction();
++  // x86-64 System V: a call reaches the masters through a rel32, and every
++  // block of the function starts with the same stack alignment.
++  if (!Subtarget.is64Bit() || Subtarget.isTargetWin64() ||
++      Subtarget.isCallingConvWin64(F.getCallingConv()) ||
++      MF.getTarget().getCodeModel() == CodeModel::Large)
++    return false;
++  // Naked functions and interrupt handlers have no ordinary stack frame.
++  if (F.hasFnAttribute(Attribute::Naked) ||
++      F.getCallingConv() == CallingConv::X86_INTR)
++    return false;
++  // LVI hardening rewrites returns into code that writes EFLAGS, which may
++  // carry a result out of a body.
++  return !Subtarget.useLVIControlFlowIntegrity();
++}
++
++bool X86InstrInfo::hasDeduBBRedZone(const MachineFunction &MF) const {
++  // The same test as isFunctionSafeToOutlineFrom.
++  if (!Subtarget.getFrameLowering()->has128ByteRedZone(MF))
++    return false;
++  const X86MachineFunctionInfo *X86FI = MF.getInfo<X86MachineFunctionInfo>();
++  return !X86FI || X86FI->getUsesRedZone();
++}
++
++MachineInstr *X86InstrInfo::insertDeduBBCallReturnStub(
++    MachineBasicBlock &MBB, MachineBasicBlock::iterator InsertPt,
++    StringRef MasterSym, bool WithCalls, bool EmitCFI) const {
++  MachineFunction &MF = *MBB.getParent();
++  const X86FrameLowering &TFL = *Subtarget.getFrameLowering();
++  const DebugLoc DL;
++  // A master that makes calls is entered with 16 bytes pushed instead of 8,
++  // so that its calls see the stack alignment they saw in the block:
++  //   pushq %rax; callq Master; leaq 8(%rsp), %rsp
++  // `push` only reads %rax, and neither `push`, `call` nor `lea` writes
++  // EFLAGS, so no register or flag the block uses is disturbed. (`subq`/`addq`
++  // would write EFLAGS.)
++  if (WithCalls) {
++    BuildMI(MBB, InsertPt, DL, get(X86::PUSH64r))
++        .addReg(X86::RAX, RegState::Undef);
++    if (EmitCFI)
++      TFL.BuildCFI(MBB, InsertPt, DL,
++                   MCCFIInstruction::createAdjustCfaOffset(nullptr, 8));
++  }
++  MachineInstr *Call =
++      BuildMI(MBB, InsertPt, DL, get(X86::CALL64pcrel32))
++          .addExternalSymbol(MF.createExternalSymbolName(MasterSym));
++  if (WithCalls) {
++    BuildMI(MBB, InsertPt, DL, get(X86::LEA64r), X86::RSP)
++        .addReg(X86::RSP)
++        .addImm(1)
++        .addReg(0)
++        .addImm(8)
++        .addReg(0);
++    if (EmitCFI)
++      TFL.BuildCFI(MBB, InsertPt, DL,
++                   MCCFIInstruction::createAdjustCfaOffset(nullptr, -8));
++  }
++  return Call;
++}
++
++void X86InstrInfo::insertDeduBBCallReturnRet(MachineBasicBlock &MBB) const {
++  BuildMI(&MBB, DebugLoc(), get(X86::RET64));
++}
++
++void X86InstrInfo::insertDeduBBCallReturnMasterCall(MachineBasicBlock &MBB,
++                                                    const GlobalValue *GV,
++                                                    StringRef Name) const {
++  MachineFunction &MF = *MBB.getParent();
++  // callq GV, with the flags a call of this module would carry. The block
++  // the master was taken from made a `call rel32`, so a call through the GOT
++  // (-fno-plt) is made through the PLT instead: it reaches the same function.
++  unsigned char Flags = Subtarget.classifyGlobalFunctionReference(
++      GV, *MF.getFunction().getParent());
++  if (Flags != X86II::MO_NO_FLAG && Flags != X86II::MO_PLT)
++    Flags = X86II::MO_PLT;
++  MachineInstrBuilder MIB = BuildMI(&MBB, DebugLoc(), get(X86::CALL64pcrel32));
++  if (GV)
++    MIB.addGlobalAddress(GV, 0, Flags);
++  else
++    MIB.addExternalSymbol(MF.createExternalSymbolName(Name), Flags);
++}
++
++std::string
++X86InstrInfo::getDeduBBCallReturnMasterFeatures(StringRef Features) const {
++  // LVI hardening would put code that writes EFLAGS in front of every master's
++  // `ret`. Blocks of hardened functions are never folded
++  // (supportsDeduBBCallReturn), so the masters do not need it.
++  SmallVector<StringRef, 16> Parts;
++  Features.split(Parts, ',', /*MaxSplit=*/-1, /*KeepEmpty=*/false);
++  std::string Result;
++  for (StringRef Part : Parts) {
++    if (Part == "+lvi-cfi")
++      continue;
++    if (!Result.empty())
++      Result += ',';
++    Result += Part;
++  }
++  return Result;
++}
++
+ void X86InstrInfo::buildClearRegister(Register Reg, MachineBasicBlock &MBB,
+                                       MachineBasicBlock::iterator Iter,
+                                       DebugLoc &DL,
+diff --git a/llvm/lib/Target/X86/X86InstrInfo.h b/llvm/lib/Target/X86/X86InstrInfo.h
+--- a/llvm/lib/Target/X86/X86InstrInfo.h
++++ b/llvm/lib/Target/X86/X86InstrInfo.h
+@@ -650,6 +650,34 @@
+                      MachineBasicBlock::iterator &It, MachineFunction &MF,
+                      outliner::Candidate &C) const override;
+ 
++  bool supportsDeduBB() const override { return true; }
++  void insertDeduBBTailBranch(MachineBasicBlock &MBB,
++                              StringRef MasterSym) const override;
++  MCRegister getDeduBBLinkRegister() const override;
++  MCRegister getDeduBBSecondLinkRegister() const override;
++  void insertDeduBBLoadReturnAddress(MachineBasicBlock &MBB,
++                                     MachineBasicBlock &Target,
++                                     MCRegister Reg) const override;
++  bool isDeduBBSingleInstruction(const MachineInstr &MI) const override;
++  bool isDeduBBLinkTimeConstant(const MachineOperand &MO) const override;
++  ArrayRef<MCPhysReg> getDeduBBCallReturnForbiddenRegs() const override;
++  bool isDeduBBCallReturnMovable(const MachineInstr &MI,
++                                 const MachineOperand *&Callee) const override;
++  bool supportsDeduBBCallReturn(const MachineFunction &MF) const override;
++  bool hasDeduBBRedZone(const MachineFunction &MF) const override;
++  MachineInstr *insertDeduBBCallReturnStub(MachineBasicBlock &MBB,
++                                           MachineBasicBlock::iterator InsertPt,
++                                           StringRef MasterSym, bool WithCalls,
++                                           bool EmitCFI) const override;
++  void insertDeduBBCallReturnRet(MachineBasicBlock &MBB) const override;
++  void insertDeduBBCallReturnMasterCall(MachineBasicBlock &MBB,
++                                        const GlobalValue *GV,
++                                        StringRef Name) const override;
++  std::string
++  getDeduBBCallReturnMasterFeatures(StringRef Features) const override;
++  void insertDeduBBSaveAndJumpReturn(MachineBasicBlock &MBB,
++                                     MCRegister Reg) const override;
++
+   void buildClearRegister(Register Reg, MachineBasicBlock &MBB,
+                           MachineBasicBlock::iterator Iter, DebugLoc &DL,
+                           bool AllowSideEffects = true) const override;
+diff --git a/llvm/test/CodeGen/AArch64/dedubb.ll b/llvm/test/CodeGen/AArch64/dedubb.ll
+new file mode 100644
+--- /dev/null
++++ b/llvm/test/CodeGen/AArch64/dedubb.ll
+@@ -0,0 +1,27 @@
++; AArch64 version of the DeduBB tail-call deduplication test. The fold is
++; realized as a TCRETURNdi (tail branch), which the assembler emits as `b`.
++;
++; NOTE: exact assembly spelling may vary; checks are intentionally loose around
++; the symbol reference.
++
++; RUN: printf 'm test.c\nf master_fn\nbbm 0 (DeduBB.master.7)\nf fold_fn\nbbf 0 (DeduBB.master.7)\n' > %t.dir
++; RUN: llc -mtriple=aarch64-unknown-linux-gnu -basic-block-address-map \
++; RUN:     -dedubb-directives=%t.dir < %s | FileCheck %s
++
++define i32 @master_fn() {
++entry:
++  ret i32 42
++}
++
++; CHECK-LABEL: master_fn:
++; CHECK: .globl DeduBB.master.7
++; CHECK: DeduBB.master.7:
++
++define i32 @fold_fn() {
++entry:
++  ret i32 42
++}
++
++; CHECK-LABEL: fold_fn:
++; CHECK: b DeduBB.master.7
++; CHECK-NOT: ret
+diff --git a/llvm/test/CodeGen/X86/dedubb-call-return-ranges.ll b/llvm/test/CodeGen/X86/dedubb-call-return-ranges.ll
+new file mode 100644
+--- /dev/null
++++ b/llvm/test/CodeGen/X86/dedubb-call-return-ranges.ll
+@@ -0,0 +1,264 @@
++; Tests Call-Return folds of ranges (`at=`, `block_insts=`): a run of
++; instructions inside a block, not its whole body, becomes a call to a master
++; emitted from the directive's bytes, and the rest of the block stays in place.
++
++; RUN: rm -rf %t && split-file %s %t
++; RUN: llc -mtriple=x86_64-unknown-linux-gnu -O2 -relocation-model=pic \
++; RUN:   -basic-block-address-map -verify-machineinstrs \
++; RUN:   -dedubb-directives=%t/d.txt %t/a.ll -o - | FileCheck %s
++
++; A master calls a callee by a name that means it in every module if its
++; module knows one, else by one of the module's local functions, else by a
++; name the module does not use; one the module uses for something else is an
++; error.
++; RUN: llc -mtriple=x86_64-unknown-linux-gnu -O2 -relocation-model=pic \
++; RUN:   -basic-block-address-map -verify-machineinstrs \
++; RUN:   -dedubb-directives=%t/names.txt %t/names.ll -o - \
++; RUN:   | FileCheck %s --check-prefix=NAMES
++; RUN: not llc -mtriple=x86_64-unknown-linux-gnu -O2 -relocation-model=pic \
++; RUN:   -basic-block-address-map -dedubb-directives=%t/var.txt \
++; RUN:   %t/names.ll -o /dev/null 2>&1 | FileCheck %s --check-prefix=VAR
++
++; The master's own copy is replaced too.
++; CHECK-LABEL: m_mid:
++; CHECK:       # %bb.0:
++; CHECK-NEXT:  callq DeduBB.master.cr.1
++; CHECK-NEXT:  {{^\.LBB[0-9]+_0_CS0}}:
++; CHECK-NEXT:  movq %rax, (%rsi)
++; CHECK-NEXT:  retq
++
++; A range after an instruction of the block's own.
++; CHECK-LABEL: f_mid:
++; CHECK:       # %bb.0:
++; CHECK-NEXT:  movq $7, (%rsi)
++; CHECK-NEXT:  callq DeduBB.master.cr.1
++; CHECK-NEXT:  {{^\.LBB[0-9]+_0_CS0}}:
++; CHECK-NEXT:  movq %rax, (%rsi)
++; CHECK-NEXT:  retq
++
++; Two ranges in one block, one of them a master's.
++; CHECK-LABEL: f_two:
++; CHECK:       # %bb.0:
++; CHECK-NEXT:  callq DeduBB.master.cr.1
++; CHECK-NEXT:  {{^\.LBB[0-9]+_0_CS0}}:
++; CHECK-NEXT:  movq %rax, (%rsi)
++; CHECK-NEXT:  callq DeduBB.master.cr.2
++; CHECK-NEXT:  {{^\.LBB[0-9]+_0_CS1}}:
++; CHECK-NEXT:  movq %rcx, (%rdi)
++; CHECK-NEXT:  retq
++
++; A range with a call in the entry block, after the prologue: the stub keeps
++; the stack aligned for the call, and its CFI accounts for that.
++; CHECK-LABEL: c_call:
++; CHECK:       # %bb.0:
++; CHECK-NEXT:  pushq %rax
++; CHECK-NEXT:  .cfi_def_cfa_offset 16
++; CHECK-NEXT:  pushq %rax
++; CHECK-NEXT:  .cfi_adjust_cfa_offset 8
++; CHECK-NEXT:  callq DeduBB.master.cr.3
++; CHECK-NEXT:  {{^\.LBB[0-9]+_0_CS0}}:
++; CHECK-NEXT:  leaq 8(%rsp), %rsp
++; CHECK-NEXT:  .cfi_adjust_cfa_offset -8
++; CHECK-NEXT:  popq %rcx
++; CHECK-NEXT:  .cfi_def_cfa_offset 8
++; CHECK-NEXT:  retq
++
++; The block holds 6 instructions, not the directive's 7: left as is.
++; CHECK-LABEL: f_count:
++; CHECK:       # %bb.0:
++; CHECK-NEXT:  movq $7, (%rsi)
++; CHECK-NEXT:  movabsq $-7046029254386353131, %rax
++; CHECK-NEXT:  imulq (%rdi), %rax
++; CHECK-NEXT:  xorq $12345, %rax
++
++; A range that holds the prologue's push: left as is.
++; CHECK-LABEL: c_prologue:
++; CHECK:       # %bb.0:
++; CHECK-NEXT:  pushq %rax
++; CHECK-NEXT:  .cfi_def_cfa_offset 16
++; CHECK-NEXT:  leaq (%rdi,%rdi,2), %rdi
++; CHECK-NEXT:  callq work@PLT
++
++; A range whose call is not the directive's callee: left as is.
++; CHECK-LABEL: c_callee:
++; CHECK:       # %bb.0:
++; CHECK-NEXT:  pushq %rax
++; CHECK-NEXT:  .cfi_def_cfa_offset 16
++; CHECK-NEXT:  leaq (%rdi,%rdi,2), %rdi
++; CHECK-NEXT:  callq work@PLT
++
++; Of two overlapping ranges, only the first is folded.
++; CHECK-LABEL: f_overlap:
++; CHECK:       # %bb.0:
++; CHECK-NEXT:  movq $7, (%rsi)
++; CHECK-NEXT:  callq DeduBB.master.cr.1
++; CHECK-NEXT:  {{^\.LBB[0-9]+_0_CS0}}:
++; CHECK-NEXT:  movq %rax, (%rsi)
++; CHECK-NEXT:  retq
++
++; The masters, from the directives' bytes, with their calls made by name.
++; CHECK-LABEL: DeduBB.cr.masters:
++; CHECK:       DeduBB.master.cr.1:
++; CHECK-NEXT:  #APP
++; CHECK-NEXT:  .byte 72
++; CHECK-NEXT:  .byte 184
++; CHECK-COUNT-18: .byte
++; CHECK-NEXT:  #NO_APP
++; CHECK-NEXT:  retq
++; CHECK:       DeduBB.master.cr.2:
++; CHECK-NEXT:  #APP
++; CHECK-COUNT-27: .byte
++; CHECK-NEXT:  #NO_APP
++; CHECK-NEXT:  retq
++; CHECK:       DeduBB.master.cr.3:
++; CHECK-NEXT:  #APP
++; CHECK-COUNT-4: .byte
++; CHECK-NEXT:  #NO_APP
++; CHECK-NEXT:  callq work@PLT
++; CHECK-NEXT:  {{^\.LBB[0-9]+_2_CS0}}:
++; CHECK-NEXT:  #APP
++; CHECK-COUNT-4: .byte
++; CHECK-NEXT:  #NO_APP
++; CHECK-NEXT:  retq
++
++; `shadow` is a local function of this module, so it may be another function
++; than the callee named `shadow` elsewhere: `ext` is called.
++; NAMES-LABEL: DeduBB.cr.masters:
++; NAMES:       DeduBB.master.cr.1:
++; NAMES-NEXT:  callq ext@PLT
++; NAMES:       DeduBB.master.cr.2:
++; NAMES-NEXT:  callq mine{{$}}
++; NAMES:       DeduBB.master.cr.3:
++; NAMES-NEXT:  callq runtime_helper@PLT
++; NAMES:       DeduBB.master.cr.4:
++; NAMES-NEXT:  callq other_name@PLT
++
++; VAR: LLVM ERROR: DeduBB: master DeduBB.master.cr.5 cannot call 'table': the module holds something else of that name
++
++;--- d.txt
++m test.c
++f m_mid
++bbmcr 0 (DeduBB.master.cr.1) callees= insts=3 at=0 block_insts=5 body=48b8157c4a7fb979379e480faf07483539300000
++f f_mid
++bbfcr 0 (DeduBB.master.cr.1) callees= insts=3 at=1 block_insts=6
++f f_two
++bbfcr 0 (DeduBB.master.cr.1) callees= insts=3 at=0 block_insts=10
++bbmcr 0 (DeduBB.master.cr.2) callees= insts=4 at=4 block_insts=10 body=48b82d7f954c2df45158480faf0648b94f8167f77e7b05144801c1
++f c_call
++bbmcr 0 (DeduBB.master.cr.3) callees=work insts=3 at=1 block_insts=6 body=488d3c7f.4883c005
++f f_count
++bbfcr 0 (DeduBB.master.cr.1) callees= insts=3 at=1 block_insts=7
++f c_prologue
++bbfcr 0 (DeduBB.master.cr.3) callees=work insts=3 at=0 block_insts=6
++f c_callee
++bbfcr 0 (DeduBB.master.cr.3) callees=other insts=3 at=1 block_insts=6
++f f_overlap
++bbfcr 0 (DeduBB.master.cr.1) callees= insts=3 at=1 block_insts=6
++bbfcr 0 (DeduBB.master.cr.2) callees= insts=2 at=2 block_insts=6
++;--- names.txt
++f holder
++bbmcr 0 (DeduBB.master.cr.1) callees=shadow|ext insts=1 at=0 block_insts=9 body=.
++bbmcr 0 (DeduBB.master.cr.2) callees=mine insts=1 at=1 block_insts=9 body=.
++bbmcr 0 (DeduBB.master.cr.3) callees=runtime_helper insts=1 at=2 block_insts=9 body=.
++bbmcr 0 (DeduBB.master.cr.4) callees=table|other_name insts=1 at=3 block_insts=9 body=.
++;--- var.txt
++f holder
++bbmcr 0 (DeduBB.master.cr.5) callees=table insts=1 at=0 block_insts=9 body=.
++;--- names.ll
++@table = global i32 0
++declare void @ext()
++
++define internal void @shadow() {
++  store volatile i32 1, ptr @table
++  ret void
++}
++
++define internal void @mine() {
++  store volatile i32 2, ptr @table
++  ret void
++}
++
++define void @holder() {
++  call void @shadow()
++  call void @mine()
++  call void @ext()
++  ret void
++}
++;--- a.ll
++declare i64 @work(i64)
++
++; The first run's master: the load-multiply-mix at the start of the block.
++define void @m_mid(ptr %p, ptr %q) {
++  %v = load volatile i64, ptr %p
++  %w = mul i64 %v, -7046029254386353131
++  %z = xor i64 %w, 12345
++  store volatile i64 %z, ptr %q
++  ret void
++}
++
++; The same run after a store of its own.
++define void @f_mid(ptr %p, ptr %q) {
++  store volatile i64 7, ptr %q
++  %v = load volatile i64, ptr %p
++  %w = mul i64 %v, -7046029254386353131
++  %z = xor i64 %w, 12345
++  store volatile i64 %z, ptr %q
++  ret void
++}
++
++; Two runs in one block: the first run, and the master of a second one.
++define void @f_two(ptr %p, ptr %q) {
++  %v = load volatile i64, ptr %p
++  %w = mul i64 %v, -7046029254386353131
++  %z = xor i64 %w, 12345
++  store volatile i64 %z, ptr %q
++  %v2 = load volatile i64, ptr %q
++  %w2 = mul i64 %v2, 6364136223846793005
++  %z2 = add i64 %w2, 1442695040888963407
++  store volatile i64 %z2, ptr %p
++  ret void
++}
++
++; A run with a call, after the prologue of the entry block.
++define i64 @c_call(i64 %x) {
++  %a = mul i64 %x, 3
++  %r = call i64 @work(i64 %a)
++  %s = add i64 %r, 5
++  ret i64 %s
++}
++
++; The directive counts 7 instructions in this block, which has 6.
++define void @f_count(ptr %p, ptr %q) {
++  store volatile i64 7, ptr %q
++  %v = load volatile i64, ptr %p
++  %w = mul i64 %v, -7046029254386353131
++  %z = xor i64 %w, 12345
++  store volatile i64 %z, ptr %q
++  ret void
++}
++
++; The directive's range starts with the prologue's push.
++define i64 @c_prologue(i64 %x) {
++  %a = mul i64 %x, 3
++  %r = call i64 @work(i64 %a)
++  %s = add i64 %r, 5
++  ret i64 %s
++}
++
++; The directive names another callee.
++define i64 @c_callee(i64 %x) {
++  %a = mul i64 %x, 3
++  %r = call i64 @work(i64 %a)
++  %s = add i64 %r, 5
++  ret i64 %s
++}
++
++; Two directives whose ranges overlap: the first is folded, the second not.
++define void @f_overlap(ptr %p, ptr %q) {
++  store volatile i64 7, ptr %q
++  %v = load volatile i64, ptr %p
++  %w = mul i64 %v, -7046029254386353131
++  %z = xor i64 %w, 12345
++  store volatile i64 %z, ptr %q
++  ret void
++}
+diff --git a/llvm/test/CodeGen/X86/dedubb-call-return.ll b/llvm/test/CodeGen/X86/dedubb-call-return.ll
+new file mode 100644
+--- /dev/null
++++ b/llvm/test/CodeGen/X86/dedubb-call-return.ll
+@@ -0,0 +1,571 @@
++; DeduBB Call-Return folds (bbmcr/bbfcr). Every block of a group calls one
++; master, which is emitted from the directive's bytes into DeduBB.cr.masters.
++; A block keeps its body unless its instructions match the directive (the
++; instruction count and the callees) and its function can take the stub.
++; RUN: rm -rf %t && split-file %s %t
++; RUN: llc -mtriple=x86_64-unknown-linux-gnu -O2 -relocation-model=pic \
++; RUN:   -basic-block-address-map -enable-shrink-wrap=false \
++; RUN:   -verify-machineinstrs -dedubb-directives=%t/d.txt %t/a.ll -o - \
++; RUN:   | FileCheck %s
++;
++; A directive file with a malformed Call-Return line drops them all, so that
++; no block calls a master that is not emitted.
++; RUN: llc -mtriple=x86_64-unknown-linux-gnu -O2 -relocation-model=pic \
++; RUN:   -basic-block-address-map -verify-machineinstrs \
++; RUN:   -dedubb-directives=%t/bad.txt %t/a.ll -o - 2>%t/bad.err \
++; RUN:   | FileCheck %s --check-prefix=BAD
++; RUN: FileCheck %s --check-prefix=BADERR < %t/bad.err
++;
++; With a frame pointer the CFA is %rbp-based wherever a call is made, even
++; when shrink-wrapping sinks the prologue (here into `work`): a body with calls
++; calls its master without CFI.
++; RUN: llc -mtriple=x86_64-unknown-linux-gnu -O2 -relocation-model=pic \
++; RUN:   -basic-block-address-map -verify-machineinstrs \
++; RUN:   -dedubb-directives=%t/sw.txt %t/sw.ll -o - | FileCheck %s --check-prefix=SW
++
++; A body without calls: both blocks call the master.
++; CHECK-LABEL: cr0_master:
++; CHECK:       {{^\.LBB[0-9]+_1}}:
++; CHECK-NEXT:  callq DeduBB.master.cr.7
++; CHECK-LABEL: cr0_fold:
++; CHECK:       {{^\.LBB[0-9]+_1}}:
++; CHECK-NEXT:  callq DeduBB.master.cr.7
++; The directive counts another number of instructions: the body stays.
++; CHECK-LABEL: cr0_count:
++; CHECK:       {{^\.LBB[0-9]+_1}}:
++; CHECK-NEXT:  movl %eax, %ecx
++; CHECK-NEXT:  imull %esi, %ecx
++; The function keeps data in the red zone, where the call would write.
++; CHECK-LABEL: rz_fold:
++; CHECK:       {{^\.LBB[0-9]+_1}}:
++; CHECK-NEXT:  movl %eax, %ecx
++; CHECK-NEXT:  imull %esi, %ecx
++
++; A body with a call is entered with 16 bytes pushed; without a frame pointer
++; the CFA is %rsp-based, so CFI describes the padding.
++; CHECK-LABEL: cr1_master:
++; CHECK:       {{^\.LBB[0-9]+_1}}:
++; CHECK-NEXT:  pushq %rax
++; CHECK-NEXT:  .cfi_adjust_cfa_offset 8
++; CHECK-NEXT:  callq DeduBB.master.cr.8
++; CHECK-NEXT:  {{^\.LBB[0-9]+_1_CS0}}:
++; CHECK-NEXT:  leaq 8(%rsp), %rsp
++; CHECK-NEXT:  .cfi_adjust_cfa_offset -8
++; CHECK-LABEL: cr1_fold:
++; CHECK:       {{^\.LBB[0-9]+_1}}:
++; CHECK-NEXT:  pushq %rax
++; CHECK-NEXT:  .cfi_adjust_cfa_offset 8
++; CHECK-NEXT:  callq DeduBB.master.cr.8
++; With a frame pointer the CFA is %rbp-based: no CFI.
++; CHECK-LABEL: cr1_fp:
++; CHECK:       {{^\.LBB[0-9]+_1}}:
++; CHECK-NEXT:  pushq %rax
++; CHECK-NEXT:  callq DeduBB.master.cr.8
++; CHECK-NEXT:  {{^\.LBB[0-9]+_1_CS0}}:
++; CHECK-NEXT:  leaq 8(%rsp), %rsp
++; CHECK-NEXT:  {{^\.LBB_END[0-9]+_1}}:
++
++; The function passes arguments on the stack, which the master's call would
++; not find.
++; CHECK-LABEL: stackargs_fold:
++; CHECK:       {{^\.LBB[0-9]+_1}}:
++; CHECK-NEXT:  leal (%r14,%r14,2), %edi
++; CHECK-NEXT:  movl %edi, (%rbx)
++; CHECK-NEXT:  callq g@PLT
++; The function calls setjmp.
++; CHECK-LABEL: setjmp_fold:
++; CHECK:       {{^\.LBB[0-9]+_1}}:
++; CHECK-NOT:   DeduBB
++; CHECK:       callq g@PLT
++; The body calls another function than the directive says.
++; CHECK-LABEL: mismatch_fold:
++; CHECK:       {{^\.LBB[0-9]+_1}}:
++; CHECK-NEXT:  leal (%r14,%r14,2), %edi
++; CHECK-NEXT:  movl %edi, (%rbx)
++; CHECK-NEXT:  callq h@PLT
++
++; A block that ends in a conditional branch keeps it; the flags the master
++; sets reach it unchanged.
++; CHECK-LABEL: two_exit_master:
++; CHECK:       {{^\.LBB[0-9]+_1}}:
++; CHECK-NEXT:  callq DeduBB.master.cr.10
++; CHECK-NEXT:  {{^\.LBB[0-9]+_1_CS0}}:
++; CHECK-NEXT:  jne
++; CHECK-LABEL: two_exit_fold:
++; CHECK:       {{^\.LBB[0-9]+_1}}:
++; CHECK-NEXT:  callq DeduBB.master.cr.10
++; CHECK-NEXT:  {{^\.LBB[0-9]+_1_CS0}}:
++; CHECK-NEXT:  jne
++
++; An invoke has EH labels: neither block is replaced, but the master is still
++; emitted for blocks elsewhere.
++; CHECK-LABEL: invoke_master:
++; CHECK:       {{^\.LBB[0-9]+_1}}:
++; CHECK-NEXT:  leal (%r14,%r14,2), %edi
++; CHECK-NEXT:  movl %edi, (%rbx)
++; CHECK-NEXT:  .Ltmp{{[0-9]+}}: # EH_LABEL
++; CHECK-NEXT:  callq g@PLT
++; CHECK-LABEL: invoke_fold:
++; CHECK:       {{^\.LBB[0-9]+_1}}:
++; CHECK-NEXT:  leal (%r14,%r14,2), %edi
++; A body that reads the stack through %rsp.
++; CHECK-LABEL: rsp_fold:
++; CHECK:       {{^\.LBB[0-9]+_1}}:
++; CHECK-NEXT:  movl 8(%rsp), %edi
++
++; The masters: global, hidden labels in one function with its own unwind
++; info, in `.text.dedubb.`, each the directive's bytes, its calls, and a
++; return.
++; CHECK:       .section .text.dedubb.,"ax",@progbits
++; CHECK-NEXT:  .type DeduBB.cr.masters,@function
++; CHECK-LABEL: DeduBB.cr.masters:
++; CHECK-NEXT:  .Lfunc_begin{{[0-9]+}}:
++; CHECK-NEXT:  .cfi_startproc
++; CHECK-NEXT:  # %bb.0:
++; CHECK-NEXT:  .globl DeduBB.master.cr.7
++; CHECK-NEXT:  .hidden DeduBB.master.cr.7
++; CHECK-NEXT:  DeduBB.master.cr.7:
++; CHECK-NEXT:  #APP
++; CHECK-NEXT:  .byte 137
++; CHECK-NEXT:  .byte 193
++; CHECK-COUNT-13: .byte
++; CHECK-NEXT:  #NO_APP
++; CHECK-NEXT:  retq
++; CHECK:       .globl DeduBB.master.cr.8
++; CHECK-NEXT:  .hidden DeduBB.master.cr.8
++; CHECK-NEXT:  DeduBB.master.cr.8:
++; CHECK-NEXT:  #APP
++; CHECK-COUNT-6: .byte
++; CHECK-NEXT:  #NO_APP
++; CHECK-NEXT:  callq g@PLT
++; CHECK-NEXT:  {{^\.LBB[0-9]+_1_CS0}}:
++; CHECK-NEXT:  #APP
++; CHECK-NEXT:  .byte 255
++; CHECK-NEXT:  .byte 3
++; CHECK-NEXT:  #NO_APP
++; CHECK-NEXT:  retq
++; CHECK:       DeduBB.master.cr.10:
++; CHECK-NEXT:  #APP
++; CHECK-COUNT-8: .byte
++; CHECK-NEXT:  #NO_APP
++; CHECK-NEXT:  retq
++; CHECK:       DeduBB.master.cr.11:
++; CHECK-NEXT:  #APP
++; CHECK-COUNT-6: .byte
++; CHECK-NEXT:  #NO_APP
++; CHECK-NEXT:  callq g@PLT
++; CHECK-NEXT:  {{^\.LBB[0-9]+_3_CS0}}:
++; CHECK-NEXT:  retq
++; CHECK:       .cfi_endproc
++
++; SW-LABEL: sw_fp:
++; SW:       {{^\.LBB0_1}}: # %work
++; SW-NEXT:  pushq %rbp
++; SW:       .cfi_def_cfa_register %rbp
++; SW:       {{^\.LBB0_2}}: # %body
++; SW-NEXT:  pushq %rax
++; SW-NEXT:  callq DeduBB.master.cr.8
++; SW-NEXT:  {{^\.LBB0_2_CS0}}:
++; SW-NEXT:  leaq 8(%rsp), %rsp
++; SW-NEXT:  {{^\.LBB_END0_2}}:
++
++; BAD-NOT: DeduBB
++; BADERR: dedubb: malformed Call-Return directive: 'bbmcr 1 (DeduBB.master.cr.7) callees='
++; BADERR: dedubb: 1 malformed range or Call-Return directive(s): ignoring every one of them
++
++;--- d.txt
++m a
++f cr0_master
++bbmcr 1 (DeduBB.master.cr.7) callees= insts=6 body=89c10fafce83c107890a31f1894a04
++f cr0_fold
++bbfcr 1 (DeduBB.master.cr.7) callees= insts=6
++f cr0_count
++bbfcr 1 (DeduBB.master.cr.7) callees= insts=5
++f rz_fold
++bbfcr 1 (DeduBB.master.cr.7) callees= insts=6
++f cr1_master
++bbmcr 1 (DeduBB.master.cr.8) callees=g insts=4 body=438d3c76893b.ff03
++f cr1_fold
++bbfcr 1 (DeduBB.master.cr.8) callees=g insts=4
++f cr1_fp
++bbfcr 1 (DeduBB.master.cr.8) callees=g insts=4
++f stackargs_fold
++bbfcr 1 (DeduBB.master.cr.8) callees=g insts=4
++f mismatch_fold
++bbfcr 1 (DeduBB.master.cr.8) callees=g insts=4
++f setjmp_fold
++bbfcr 1 (DeduBB.master.cr.9) callees=g insts=5
++f two_exit_master
++bbmcr 1 (DeduBB.master.cr.10) callees= insts=3 body=0faff0893283fe2a
++f two_exit_fold
++bbfcr 1 (DeduBB.master.cr.10) callees= insts=3
++f invoke_master
++bbmcr 1 (DeduBB.master.cr.11) callees=g insts=3 body=438d3c76893b.
++f invoke_fold
++bbfcr 1 (DeduBB.master.cr.11) callees=g insts=3
++f rsp_fold
++bbfcr 1 (DeduBB.master.cr.12) callees=g insts=3
++;--- bad.txt
++m a
++f cr0_master
++bbmcr 1 (DeduBB.master.cr.7) callees=
++f cr0_fold
++bbfcr 1 (DeduBB.master.cr.7) callees= insts=6
++;--- sw.txt
++m sw
++f sw_fp
++bbfcr 2 (DeduBB.master.cr.8) callees=g insts=4
++;--- sw.ll
++target triple = "x86_64-unknown-linux-gnu"
++
++declare void @g(i32)
++
++define void @sw_fp(i32 %a, ptr %p) "frame-pointer"="all" {
++entry:
++  %c = icmp sgt i32 %a, 0
++  br i1 %c, label %work, label %exit
++work:
++  call void @g(i32 %a)
++  %c2 = icmp sgt i32 %a, 5
++  br i1 %c2, label %body, label %exit
++body:
++  %x = mul i32 %a, 3
++  store i32 %x, ptr %p
++  call void @g(i32 %x)
++  %y = load i32, ptr %p
++  %z = add i32 %y, 1
++  store i32 %z, ptr %p
++  br label %exit
++exit:
++  ret void
++}
++;--- a.ll
++target triple = "x86_64-unknown-linux-gnu"
++
++declare void @g(i32)
++declare void @h(i32)
++declare void @many(i32, i32, i32, i32, i32, i32, i32, i32)
++declare void @use(ptr)
++declare i32 @setjmp(ptr) returns_twice
++declare i32 @__gxx_personality_v0(...)
++define i32 @cr0_master(i32 %a, i32 %b, ptr %p) {
++entry:
++  %c = icmp sgt i32 %a, 0
++  br i1 %c, label %body, label %join
++body:
++  %x = mul i32 %a, %b
++  %y = add i32 %x, 7
++  store i32 %y, ptr %p
++  %z = xor i32 %y, %b
++  %q = getelementptr i32, ptr %p, i64 1
++  store i32 %z, ptr %q
++  br label %join
++join:
++  %j1 = getelementptr i32, ptr %p, i64 2
++  store volatile i32 %a, ptr %j1
++  %j2 = getelementptr i32, ptr %p, i64 3
++  store volatile i32 %a, ptr %j2
++  %j3 = getelementptr i32, ptr %p, i64 4
++  store volatile i32 %a, ptr %j3
++  ret i32 %a
++}
++define i32 @cr0_fold(i32 %a, i32 %b, ptr %p) {
++entry:
++  %c = icmp sgt i32 %a, 0
++  br i1 %c, label %body, label %join
++body:
++  %x = mul i32 %a, %b
++  %y = add i32 %x, 7
++  store i32 %y, ptr %p
++  %z = xor i32 %y, %b
++  %q = getelementptr i32, ptr %p, i64 1
++  store i32 %z, ptr %q
++  br label %join
++join:
++  %j1 = getelementptr i32, ptr %p, i64 2
++  store volatile i32 %a, ptr %j1
++  %j2 = getelementptr i32, ptr %p, i64 3
++  store volatile i32 %a, ptr %j2
++  %j3 = getelementptr i32, ptr %p, i64 4
++  store volatile i32 %a, ptr %j3
++  ret i32 %a
++}
++define i32 @cr0_count(i32 %a, i32 %b, ptr %p) {
++entry:
++  %c = icmp sgt i32 %a, 0
++  br i1 %c, label %body, label %join
++body:
++  %x = mul i32 %a, %b
++  %y = add i32 %x, 7
++  store i32 %y, ptr %p
++  %z = xor i32 %y, %b
++  %q = getelementptr i32, ptr %p, i64 1
++  store i32 %z, ptr %q
++  br label %join
++join:
++  %j1 = getelementptr i32, ptr %p, i64 2
++  store volatile i32 %a, ptr %j1
++  %j2 = getelementptr i32, ptr %p, i64 3
++  store volatile i32 %a, ptr %j2
++  %j3 = getelementptr i32, ptr %p, i64 4
++  store volatile i32 %a, ptr %j3
++  ret i32 %a
++}
++define i32 @rz_fold(i32 %a, i32 %b, ptr %p) {
++entry:
++  %buf = alloca [4 x i32]
++  store volatile i32 %a, ptr %buf
++  %rzv = load volatile i32, ptr %buf
++  %c = icmp sgt i32 %a, 0
++  br i1 %c, label %body, label %join
++body:
++  %x = mul i32 %a, %b
++  %y = add i32 %x, 7
++  store i32 %y, ptr %p
++  %z = xor i32 %y, %b
++  %q = getelementptr i32, ptr %p, i64 1
++  store i32 %z, ptr %q
++  br label %join
++join:
++  %j1 = getelementptr i32, ptr %p, i64 2
++  store volatile i32 %a, ptr %j1
++  %j2 = getelementptr i32, ptr %p, i64 3
++  store volatile i32 %a, ptr %j2
++  %j3 = getelementptr i32, ptr %p, i64 4
++  store volatile i32 %a, ptr %j3
++  ret i32 %a
++}
++define void @cr1_master(i32 %a, ptr %p, ptr %jb) {
++entry:
++  %c = icmp sgt i32 %a, 0
++  br i1 %c, label %body, label %join
++body:
++  %x = mul i32 %a, 3
++  store i32 %x, ptr %p
++  call void @g(i32 %x)
++  %y = load i32, ptr %p
++  %z = add i32 %y, 1
++  store i32 %z, ptr %p
++  br label %join
++join:
++  %j1 = getelementptr i32, ptr %p, i64 2
++  store volatile i32 %a, ptr %j1
++  %j2 = getelementptr i32, ptr %p, i64 3
++  store volatile i32 %a, ptr %j2
++  %j3 = getelementptr i32, ptr %p, i64 4
++  store volatile i32 %a, ptr %j3
++  ret void
++}
++define void @cr1_fold(i32 %a, ptr %p, ptr %jb) {
++entry:
++  %c = icmp sgt i32 %a, 0
++  br i1 %c, label %body, label %join
++body:
++  %x = mul i32 %a, 3
++  store i32 %x, ptr %p
++  call void @g(i32 %x)
++  %y = load i32, ptr %p
++  %z = add i32 %y, 1
++  store i32 %z, ptr %p
++  br label %join
++join:
++  %j1 = getelementptr i32, ptr %p, i64 2
++  store volatile i32 %a, ptr %j1
++  %j2 = getelementptr i32, ptr %p, i64 3
++  store volatile i32 %a, ptr %j2
++  %j3 = getelementptr i32, ptr %p, i64 4
++  store volatile i32 %a, ptr %j3
++  ret void
++}
++define void @cr1_fp(i32 %a, ptr %p, ptr %jb) "frame-pointer"="all" {
++entry:
++  %c = icmp sgt i32 %a, 0
++  br i1 %c, label %body, label %join
++body:
++  %x = mul i32 %a, 3
++  store i32 %x, ptr %p
++  call void @g(i32 %x)
++  %y = load i32, ptr %p
++  %z = add i32 %y, 1
++  store i32 %z, ptr %p
++  br label %join
++join:
++  %j1 = getelementptr i32, ptr %p, i64 2
++  store volatile i32 %a, ptr %j1
++  %j2 = getelementptr i32, ptr %p, i64 3
++  store volatile i32 %a, ptr %j2
++  %j3 = getelementptr i32, ptr %p, i64 4
++  store volatile i32 %a, ptr %j3
++  ret void
++}
++define void @stackargs_fold(i32 %a, ptr %p, ptr %jb) {
++entry:
++  call void @many(i32 1, i32 2, i32 3, i32 4, i32 5, i32 6, i32 7, i32 8)
++  %c = icmp sgt i32 %a, 0
++  br i1 %c, label %body, label %join
++body:
++  %x = mul i32 %a, 3
++  store i32 %x, ptr %p
++  call void @g(i32 %x)
++  %y = load i32, ptr %p
++  %z = add i32 %y, 1
++  store i32 %z, ptr %p
++  br label %join
++join:
++  %j1 = getelementptr i32, ptr %p, i64 2
++  store volatile i32 %a, ptr %j1
++  %j2 = getelementptr i32, ptr %p, i64 3
++  store volatile i32 %a, ptr %j2
++  %j3 = getelementptr i32, ptr %p, i64 4
++  store volatile i32 %a, ptr %j3
++  ret void
++}
++define void @setjmp_fold(i32 %a, ptr %p, ptr %jb) {
++entry:
++  %s = call i32 @setjmp(ptr %jb)
++  %c = icmp sgt i32 %a, %s
++  br i1 %c, label %body, label %join
++body:
++  %x = mul i32 %a, 3
++  store i32 %x, ptr %p
++  call void @g(i32 %x)
++  %y = load i32, ptr %p
++  %z = add i32 %y, 1
++  store i32 %z, ptr %p
++  br label %join
++join:
++  %j1 = getelementptr i32, ptr %p, i64 2
++  store volatile i32 %a, ptr %j1
++  %j2 = getelementptr i32, ptr %p, i64 3
++  store volatile i32 %a, ptr %j2
++  %j3 = getelementptr i32, ptr %p, i64 4
++  store volatile i32 %a, ptr %j3
++  ret void
++}
++define void @mismatch_fold(i32 %a, ptr %p, ptr %jb) {
++entry:
++  %c = icmp sgt i32 %a, 0
++  br i1 %c, label %body, label %join
++body:
++  %x = mul i32 %a, 3
++  store i32 %x, ptr %p
++  call void @h(i32 %x)
++  %y = load i32, ptr %p
++  %z = add i32 %y, 1
++  store i32 %z, ptr %p
++  br label %join
++join:
++  %j1 = getelementptr i32, ptr %p, i64 2
++  store volatile i32 %a, ptr %j1
++  %j2 = getelementptr i32, ptr %p, i64 3
++  store volatile i32 %a, ptr %j2
++  %j3 = getelementptr i32, ptr %p, i64 4
++  store volatile i32 %a, ptr %j3
++  ret void
++}
++define i32 @two_exit_master(i32 %a, i32 %b, ptr %p) {
++entry:
++  %c = icmp sgt i32 %a, 0
++  br i1 %c, label %body, label %join
++body:
++  %x = mul i32 %a, %b
++  store i32 %x, ptr %p
++  %c2 = icmp eq i32 %x, 42
++  br i1 %c2, label %t, label %join
++t:
++  %t1 = getelementptr i32, ptr %p, i64 5
++  store volatile i32 0, ptr %t1
++  br label %join
++join:
++  %j1 = getelementptr i32, ptr %p, i64 2
++  store volatile i32 %a, ptr %j1
++  %j2 = getelementptr i32, ptr %p, i64 3
++  store volatile i32 %a, ptr %j2
++  %j3 = getelementptr i32, ptr %p, i64 4
++  store volatile i32 %a, ptr %j3
++  ret i32 %a
++}
++define i32 @two_exit_fold(i32 %a, i32 %b, ptr %p) {
++entry:
++  %c = icmp sgt i32 %a, 0
++  br i1 %c, label %body, label %join
++body:
++  %x = mul i32 %a, %b
++  store i32 %x, ptr %p
++  %c2 = icmp eq i32 %x, 42
++  br i1 %c2, label %t, label %join
++t:
++  %t1 = getelementptr i32, ptr %p, i64 5
++  store volatile i32 0, ptr %t1
++  br label %join
++join:
++  %j1 = getelementptr i32, ptr %p, i64 2
++  store volatile i32 %a, ptr %j1
++  %j2 = getelementptr i32, ptr %p, i64 3
++  store volatile i32 %a, ptr %j2
++  %j3 = getelementptr i32, ptr %p, i64 4
++  store volatile i32 %a, ptr %j3
++  ret i32 %a
++}
++define void @invoke_master(i32 %a, ptr %p) personality ptr @__gxx_personality_v0 {
++entry:
++  %c = icmp sgt i32 %a, 0
++  br i1 %c, label %body, label %join
++body:
++  %x = mul i32 %a, 3
++  store i32 %x, ptr %p
++  invoke void @g(i32 %x) to label %join unwind label %lpad
++lpad:
++  %l = landingpad { ptr, i32 } cleanup
++  store i32 0, ptr %p
++  resume { ptr, i32 } %l
++join:
++  %j1 = getelementptr i32, ptr %p, i64 2
++  store volatile i32 %a, ptr %j1
++  %j2 = getelementptr i32, ptr %p, i64 3
++  store volatile i32 %a, ptr %j2
++  %j3 = getelementptr i32, ptr %p, i64 4
++  store volatile i32 %a, ptr %j3
++  ret void
++}
++define void @invoke_fold(i32 %a, ptr %p) personality ptr @__gxx_personality_v0 {
++entry:
++  %c = icmp sgt i32 %a, 0
++  br i1 %c, label %body, label %join
++body:
++  %x = mul i32 %a, 3
++  store i32 %x, ptr %p
++  invoke void @g(i32 %x) to label %join unwind label %lpad
++lpad:
++  %l = landingpad { ptr, i32 } cleanup
++  store i32 0, ptr %p
++  resume { ptr, i32 } %l
++join:
++  %j1 = getelementptr i32, ptr %p, i64 2
++  store volatile i32 %a, ptr %j1
++  %j2 = getelementptr i32, ptr %p, i64 3
++  store volatile i32 %a, ptr %j2
++  %j3 = getelementptr i32, ptr %p, i64 4
++  store volatile i32 %a, ptr %j3
++  ret void
++}
++define void @rsp_fold(i32 %a, ptr %p) {
++entry:
++  %buf = alloca [4 x i32]
++  call void @use(ptr %buf)
++  %c = icmp sgt i32 %a, 0
++  br i1 %c, label %body, label %join
++body:
++  %v = load i32, ptr %buf
++  %x = mul i32 %v, %a
++  call void @g(i32 %x)
++  br label %join
++join:
++  %j1 = getelementptr i32, ptr %p, i64 2
++  store volatile i32 %a, ptr %j1
++  %j2 = getelementptr i32, ptr %p, i64 3
++  store volatile i32 %a, ptr %j2
++  %j3 = getelementptr i32, ptr %p, i64 4
++  store volatile i32 %a, ptr %j3
++  ret void
++}
+diff --git a/llvm/test/CodeGen/X86/dedubb-ranges.ll b/llvm/test/CodeGen/X86/dedubb-ranges.ll
+new file mode 100644
+--- /dev/null
++++ b/llvm/test/CodeGen/X86/dedubb-ranges.ll
+@@ -0,0 +1,367 @@
++; Tests the tail-call and Save-and-Jump ranges of DeduBB (`at=`,
++; `block_insts=`): a tail-call ending shared in place, and a Save-and-Jump run
++; inside a block.
++
++; RUN: rm -rf %t && split-file %s %t
++; RUN: llc -mtriple=x86_64-unknown-linux-gnu -O2 -relocation-model=pic \
++; RUN:   -basic-block-address-map -verify-machineinstrs \
++; RUN:   -dedubb-directives=%t/d.txt %t/a.ll -o - | FileCheck %s
++
++; With indirect branch tracking, a Save-and-Jump master's indirect jump would
++; need an `endbr` at its target: the fold is left alone, but the master is
++; still emitted, for folds in modules without it.
++; RUN: llc -mtriple=x86_64-unknown-linux-gnu -O2 -relocation-model=pic \
++; RUN:   -basic-block-address-map -verify-machineinstrs \
++; RUN:   -dedubb-directives=%t/ibt.txt %t/ibt.ll -o - \
++; RUN:   | FileCheck %s --check-prefix=IBT
++
++; A tail-call master whose ending does not match its directive is an error:
++; blocks elsewhere jump into it. So is one whose ending holds a call, or an
++; absolute address, which may change once DeduBB has shrunk the code.
++; RUN: not llc -mtriple=x86_64-unknown-linux-gnu -O2 -relocation-model=pic \
++; RUN:   -basic-block-address-map -dedubb-directives=%t/tcerr.txt %t/a.ll \
++; RUN:   -o /dev/null 2>&1 | FileCheck %s --check-prefix=TCERR
++; RUN: not llc -mtriple=x86_64-unknown-linux-gnu -O2 -relocation-model=pic \
++; RUN:   -basic-block-address-map -dedubb-directives=%t/callerr.txt %t/a.ll \
++; RUN:   -o /dev/null 2>&1 | FileCheck %s --check-prefix=CALLERR
++; RUN: not llc -mtriple=x86_64-unknown-linux-gnu -O2 -relocation-model=static \
++; RUN:   -basic-block-address-map -dedubb-directives=%t/abs.txt %t/abs.ll \
++; RUN:   -o /dev/null 2>&1 | FileCheck %s --check-prefix=ABSERR
++
++; A master keeps its code, with a label for each ending other blocks share.
++; CHECK-LABEL: tc_m:
++; CHECK:       # %bb.0:
++; CHECK-NEXT:  leaq (%rdi,%rdi,2), %rax
++; CHECK-NEXT:  .globl DeduBB.master.11
++; CHECK-NEXT:  .hidden DeduBB.master.11
++; CHECK-NEXT:  DeduBB.master.11:
++; CHECK-NEXT:  movq %rax, (%rsi)
++; CHECK-NEXT:  .globl DeduBB.master.12
++; CHECK-NEXT:  .hidden DeduBB.master.12
++; CHECK-NEXT:  DeduBB.master.12:
++; CHECK-NEXT:  jmp tail@PLT
++
++; A fold keeps its first instructions and jumps to the master's ending.
++; CHECK-LABEL: tc_f:
++; CHECK:       # %bb.0:
++; CHECK-NEXT:  leaq (%rdi,%rdi,4), %rax
++; CHECK-NEXT:  jmp DeduBB.master.11
++
++; The ending may be the whole block.
++; CHECK-LABEL: tc_g:
++; CHECK:       # %bb.0:
++; CHECK-NEXT:  jmp DeduBB.master.12
++
++; An ending with the epilogue: the master pops the frame of the block that
++; jumps there.
++; CHECK-LABEL: ep_m:
++; CHECK:       callq work@PLT
++; CHECK:       callq work@PLT
++; CHECK-NEXT:  {{^\.LBB[0-9]+_0_CS1}}:
++; CHECK-NEXT:  .globl DeduBB.master.13
++; CHECK-NEXT:  .hidden DeduBB.master.13
++; CHECK-NEXT:  DeduBB.master.13:
++; CHECK-NEXT:  addq %rbx, %rax
++; CHECK-NEXT:  popq %rbx
++; CHECK-NEXT:  .cfi_def_cfa_offset 8
++; CHECK-NEXT:  retq
++; CHECK-LABEL: ep_f:
++; CHECK:       pushq %rbx
++; CHECK:       callq work2@PLT
++; CHECK:       callq work@PLT
++; CHECK-NEXT:  {{^\.LBB[0-9]+_0_CS1}}:
++; CHECK-NEXT:  jmp DeduBB.master.13
++; CHECK-NOT:   popq
++; CHECK:       .cfi_endproc
++
++; An ending with a call is not shared: unwinding through the call would use
++; the master function's rules for the frame of the block that jumped there.
++; CHECK-LABEL: ep_g:
++; CHECK:       callq work2@PLT
++; CHECK:       callq work@PLT
++; CHECK-NEXT:  {{^\.LBB[0-9]+_0_CS1}}:
++; CHECK-NEXT:  addq %rbx, %rax
++; CHECK-NEXT:  popq %rbx
++
++; The ending tail-calls another function than the directive's: left as is.
++; CHECK-LABEL: tc_callee:
++; CHECK:       movq %rax, (%rsi)
++; CHECK-NEXT:  jmp work@PLT
++
++; A Save-and-Jump run: the block is split after it, and the stub passes the
++; second half to the master, the master's own copy included.
++; CHECK-LABEL: sj_f:
++; CHECK:       # %bb.0:
++; CHECK-NEXT:  movq $7, (%rsi)
++; CHECK-NEXT:  leaq [[RET:\.LBB[0-9]+_1]](%rip), %r11
++; CHECK-NEXT:  jmp DeduBB.master.sj.21
++; CHECK:       [[RET]]:
++; CHECK-NEXT:  movq %rax, (%rsi)
++; CHECK-NEXT:  retq
++
++; A run and a tail-call ending in one block.
++; CHECK-LABEL: mix:
++; CHECK:       # %bb.0:
++; CHECK-NEXT:  movq $7, (%rsi)
++; CHECK-NEXT:  leaq [[RET2:\.LBB[0-9]+_1]](%rip), %r11
++; CHECK-NEXT:  jmp DeduBB.master.sj.21
++; CHECK:       [[RET2]]:
++; CHECK-NEXT:  movq %rax, (%rsi)
++; CHECK-NEXT:  movq %rdx, %rdi
++; CHECK-NEXT:  jmp DeduBB.master.12
++
++; A `lock` prefix is part of its instruction, which counts as one.
++; CHECK-LABEL: lk_m:
++; CHECK:       # %bb.0:
++; CHECK-NEXT:  lock incl (%rdi)
++; CHECK-NEXT:  .globl DeduBB.master.14
++; CHECK-NEXT:  .hidden DeduBB.master.14
++; CHECK-NEXT:  DeduBB.master.14:
++; CHECK-NEXT:  movq %rsi, (%rdx)
++; CHECK-LABEL: lk_f:
++; CHECK:       # %bb.0:
++; CHECK-NEXT:  lock decl (%rdi)
++; CHECK-NEXT:  jmp DeduBB.master.14
++
++; A thread-local access is one pseudo here and two instructions in the binary:
++; a master's ending is still found from the end, but a fold, which needs the
++; whole block counted, is left as is.
++; CHECK-LABEL: tls_m:
++; CHECK:       callq __tls_get_addr@PLT
++; CHECK-NEXT:  movq (%rax), %rax
++; CHECK-NEXT:  movq %rax, (%rbx)
++; CHECK-NEXT:  .globl DeduBB.master.15
++; CHECK-NEXT:  .hidden DeduBB.master.15
++; CHECK-NEXT:  DeduBB.master.15:
++; CHECK-NEXT:  movq %r14, %rdi
++; CHECK-LABEL: tls_f:
++; CHECK:       movq %rax, (%rbx)
++; CHECK-NEXT:  movq %r14, %rdi
++; CHECK-NEXT:  addq $8, %rsp
++; CHECK:       jmp tail@PLT
++
++; An ending may hold a thread-local variable's offset, which the linker fills
++; in alike in every block.
++; CHECK-LABEL: ld_m:
++; CHECK:       movq %rcx, (%r14)
++; CHECK-NEXT:  .globl DeduBB.master.16
++; CHECK-NEXT:  .hidden DeduBB.master.16
++; CHECK-NEXT:  DeduBB.master.16:
++; CHECK-NEXT:  movq %rbx, tlh@DTPOFF(%rax)
++
++; The Save-and-Jump masters, from the directives' bytes, without unwind info,
++; in `.text.dedubb.`.
++; CHECK:       .section .text.dedubb.,"ax",@progbits
++; CHECK-NEXT:  .type DeduBB.sj.masters,@function
++; CHECK-LABEL: DeduBB.sj.masters:
++; CHECK-NOT:   .cfi_startproc
++; CHECK:       DeduBB.master.sj.21:
++; CHECK-NEXT:  #APP
++; CHECK-NEXT:  .byte 72
++; CHECK-NEXT:  .byte 184
++; CHECK-COUNT-18: .byte
++; CHECK-NEXT:  #NO_APP
++; CHECK-NEXT:  jmpq *%r11
++; CHECK-NOT:   .cfi_endproc
++; CHECK:       -- End function
++
++; IBT-LABEL: sj_f:
++; IBT:         endbr64
++; IBT-NEXT:    movq $7, (%rsi)
++; IBT-NEXT:    movabsq
++; IBT-NEXT:    imulq (%rdi), %rax
++; IBT-LABEL: DeduBB.sj.masters:
++; IBT:         DeduBB.master.sj.21:
++
++; TCERR: LLVM ERROR: DeduBB: block 0 of tc_m does not end in the 2 instructions that tail-call master DeduBB.master.30 shares (they call other functions)
++
++; CALLERR: LLVM ERROR: DeduBB: block 0 of ep_m does not end in the 5 instructions that tail-call master DeduBB.master.32 shares (they hold a call, CALL64pcrel32)
++
++; ABSERR: LLVM ERROR: DeduBB: block 0 of abs_m does not end in the 2 instructions that tail-call master DeduBB.master.31 shares (MOV32ri references a symbol that is not its callee)
++
++;--- d.txt
++m test.c
++f tc_m
++bbm 0 (DeduBB.master.11) callees=tail at=1 block_insts=3
++bbm 0 (DeduBB.master.12) callees=tail at=2 block_insts=3
++f tc_f
++bbf 0 (DeduBB.master.11) callees=tail at=1 block_insts=3
++f tc_g
++bbf 0 (DeduBB.master.12) callees=tail at=0 block_insts=1
++f ep_m
++bbm 0 (DeduBB.master.13) at=5 block_insts=8
++f ep_f
++bbf 0 (DeduBB.master.13) at=5 block_insts=8
++f ep_g
++bbf 0 (DeduBB.master.13) callees=work at=3 block_insts=8
++f tc_callee
++bbf 0 (DeduBB.master.12) callees=other at=3 block_insts=4
++f sj_f
++bbmsj 0 (DeduBB.master.sj.21) insts=3 at=1 block_insts=6 body=48b8157c4a7fb979379e480faf07483539300000
++f mix
++bbfsj 0 (DeduBB.master.sj.21) insts=3 at=1 block_insts=7
++bbf 0 (DeduBB.master.12) callees=tail at=6 block_insts=7
++f lk_m
++bbm 0 (DeduBB.master.14) callees=tail at=1 block_insts=4
++f lk_f
++bbf 0 (DeduBB.master.14) callees=tail at=1 block_insts=4
++f tls_m
++bbm 0 (DeduBB.master.15) callees=tail at=9 block_insts=14
++f tls_f
++bbf 0 (DeduBB.master.15) callees=tail at=9 block_insts=14
++f ld_m
++bbm 0 (DeduBB.master.16) at=8 block_insts=13
++;--- ibt.txt
++f sj_f
++bbmsj 0 (DeduBB.master.sj.21) insts=3 at=2 block_insts=7 body=48b8157c4a7fb979379e480faf07483539300000
++;--- tcerr.txt
++f tc_m
++bbm 0 (DeduBB.master.30) callees=other at=1 block_insts=3
++;--- callerr.txt
++f ep_m
++bbm 0 (DeduBB.master.32) callees=work at=3 block_insts=8
++;--- abs.txt
++f abs_m
++bbm 0 (DeduBB.master.31) callees=tail at=0 block_insts=2
++;--- abs.ll
++declare i64 @tail(i64)
++@g = dso_local global i64 0
++
++; `movl $g, %edi`, without position independence.
++define i64 @abs_m(i64 %x) {
++  %r = tail call i64 @tail(i64 ptrtoint (ptr @g to i64))
++  ret i64 %r
++}
++;--- ibt.ll
++define void @sj_f(ptr %p, ptr %q) {
++  store volatile i64 7, ptr %q
++  %v = load volatile i64, ptr %p
++  %w = mul i64 %v, -7046029254386353131
++  %z = xor i64 %w, 12345
++  store volatile i64 %z, ptr %q
++  ret void
++}
++
++!llvm.module.flags = !{!0}
++!0 = !{i32 8, !"cf-protection-branch", i32 1}
++;--- a.ll
++declare i64 @tail(i64)
++declare i64 @work(i64)
++declare i64 @work2(i64)
++
++; The same last instructions after different first ones.
++define i64 @tc_m(i64 %x, ptr %p) {
++  %a = mul i64 %x, 3
++  store volatile i64 %a, ptr %p
++  %r = tail call i64 @tail(i64 %x)
++  ret i64 %r
++}
++
++define i64 @tc_f(i64 %x, ptr %p) {
++  %a = mul i64 %x, 5
++  store volatile i64 %a, ptr %p
++  %r = tail call i64 @tail(i64 %x)
++  ret i64 %r
++}
++
++; A shorter ending of the same master.
++define i64 @tc_g(i64 %x, ptr %p) {
++  %r = tail call i64 @tail(i64 %x)
++  ret i64 %r
++}
++
++; An ending with a call and the epilogue.
++define i64 @ep_m(i64 %x) {
++  %a = call i64 @work(i64 %x)
++  %b = call i64 @work(i64 %a)
++  %c = add i64 %b, %x
++  ret i64 %c
++}
++
++define i64 @ep_f(i64 %x) {
++  %a = call i64 @work2(i64 %x)
++  %b = call i64 @work(i64 %a)
++  %c = add i64 %b, %x
++  ret i64 %c
++}
++
++; Its directive covers the call.
++define i64 @ep_g(i64 %x) {
++  %a = call i64 @work2(i64 %x)
++  %b = call i64 @work(i64 %a)
++  %c = add i64 %b, %x
++  ret i64 %c
++}
++
++; Its directive names another callee.
++define i64 @tc_callee(i64 %x, ptr %p) {
++  %a = mul i64 %x, 7
++  store volatile i64 %a, ptr %p
++  %r = tail call i64 @work(i64 %x)
++  ret i64 %r
++}
++
++; A Save-and-Jump run: the load-multiply-mix after the first store.
++define void @sj_f(ptr %p, ptr %q) {
++  store volatile i64 7, ptr %q
++  %v = load volatile i64, ptr %p
++  %w = mul i64 %v, -7046029254386353131
++  %z = xor i64 %w, 12345
++  store volatile i64 %z, ptr %q
++  ret void
++}
++
++; The same run, and the tail call's ending.
++define i64 @mix(ptr %p, ptr %q, i64 %x) {
++  store volatile i64 7, ptr %q
++  %v = load volatile i64, ptr %p
++  %w = mul i64 %v, -7046029254386353131
++  %z = xor i64 %w, 12345
++  store volatile i64 %z, ptr %q
++  %r = tail call i64 @tail(i64 %x)
++  ret i64 %r
++}
++
++; `lock incl` and `lock decl`, before the same ending.
++define i64 @lk_m(ptr %c, i64 %x, ptr %p) {
++  %old = atomicrmw add ptr %c, i32 1 seq_cst
++  store volatile i64 %x, ptr %p
++  %r = tail call i64 @tail(i64 %x)
++  ret i64 %r
++}
++
++define i64 @lk_f(ptr %c, i64 %x, ptr %p) {
++  %old = atomicrmw sub ptr %c, i32 1 seq_cst
++  store volatile i64 %x, ptr %p
++  %r = tail call i64 @tail(i64 %x)
++  ret i64 %r
++}
++
++@tlv = thread_local global i64 0
++
++; A general-dynamic thread-local access before an ending with the epilogue.
++define i64 @tls_m(i64 %x, ptr %p) {
++  %v = load i64, ptr @tlv
++  store volatile i64 %v, ptr %p
++  %r = tail call i64 @tail(i64 %x)
++  ret i64 %r
++}
++
++define i64 @tls_f(i64 %x, ptr %p) {
++  %v = load i64, ptr @tlv
++  store volatile i64 %v, ptr %p
++  %r = tail call i64 @tail(i64 %x)
++  ret i64 %r
++}
++
++@tlh = internal thread_local global i64 0
++
++; A local-dynamic access: the store's offset is in the ending. The linker
++; rewrites the call that finds the module's block into one instruction, which
++; Step 1 counts as one.
++define void @ld_m(ptr %p, i64 %x) {
++  %a = load i64, ptr @tlh
++  store volatile i64 %a, ptr %p
++  store i64 %x, ptr @tlh
++  ret void
++}
+diff --git a/llvm/test/CodeGen/X86/dedubb-tail-call-callees.ll b/llvm/test/CodeGen/X86/dedubb-tail-call-callees.ll
+new file mode 100644
+--- /dev/null
++++ b/llvm/test/CodeGen/X86/dedubb-tail-call-callees.ll
+@@ -0,0 +1,84 @@
++; Tests `callees=` on tail-call directives: a bbf block that calls or jumps to
++; a function is folded only if the directive names exactly its targets, and a
++; block with a successor or another symbol is never folded.
++
++; RUN: printf 'm test.c\nf m_call\nbbm 0 (DeduBB.master.1) callees=callee\nf f_call\nbbf 0 (DeduBB.master.1) callees=other|callee\nf f_wrong\nbbf 0 (DeduBB.master.1) callees=other\nf f_nolist\nbbf 0 (DeduBB.master.1)\nf m_data\nbbm 0 (DeduBB.master.2)\nf f_data\nbbf 0 (DeduBB.master.2) callees=\nf f_succ\nbbf 0 (DeduBB.master.2)\n' > %t.dir
++; RUN: llc -mtriple=x86_64-unknown-linux-gnu -basic-block-address-map \
++; RUN:     -dedubb-directives=%t.dir < %s | FileCheck %s
++
++declare i32 @callee(i32)
++
++@g = global i32 0
++
++; CHECK-LABEL: m_call:
++; CHECK:       DeduBB.master.1:
++; CHECK:       jmp callee
++define i32 @m_call(i32 %x) {
++  %a = add i32 %x, 7
++  %r = tail call i32 @callee(i32 %a)
++  ret i32 %r
++}
++
++; The directive names the tail call's target (as one of its names): folded.
++; CHECK-LABEL: f_call:
++; CHECK:       # %bb.0:
++; CHECK-NEXT:  jmp DeduBB.master.1
++; CHECK-NOT:   callee
++; CHECK:       .Lfunc_end
++define i32 @f_call(i32 %x) {
++  %a = add i32 %x, 7
++  %r = tail call i32 @callee(i32 %a)
++  ret i32 %r
++}
++
++; The directive names another function: left as is.
++; CHECK-LABEL: f_wrong:
++; CHECK-NOT:   DeduBB.master
++; CHECK:       jmp callee
++define i32 @f_wrong(i32 %x) {
++  %a = add i32 %x, 7
++  %r = tail call i32 @callee(i32 %a)
++  ret i32 %r
++}
++
++; No `callees=` (a directive from an older Step 1): left as is.
++; CHECK-LABEL: f_nolist:
++; CHECK-NOT:   DeduBB.master
++; CHECK:       jmp callee
++define i32 @f_nolist(i32 %x) {
++  %a = add i32 %x, 7
++  %r = tail call i32 @callee(i32 %a)
++  ret i32 %r
++}
++
++; CHECK-LABEL: m_data:
++; CHECK:       DeduBB.master.2:
++define i32 @m_data(i32 %x) {
++  %v = load i32, ptr @g
++  %s = add i32 %v, %x
++  ret i32 %s
++}
++
++; A symbol that is not a call target cannot be checked: left as is.
++; CHECK-LABEL: f_data:
++; CHECK-NOT:   DeduBB.master
++; CHECK:       {{g(@GOTPCREL)?}}(%rip)
++define i32 @f_data(i32 %x) {
++  %v = load i32, ptr @g
++  %s = add i32 %v, %x
++  ret i32 %s
++}
++
++; A block with successors: its fold would lose them, so it is left as is.
++; CHECK-LABEL: f_succ:
++; CHECK-NOT:   DeduBB.master
++; CHECK:       .Lfunc_end
++define i32 @f_succ(i32 %x) {
++entry:
++  %c = icmp eq i32 %x, 0
++  br i1 %c, label %a, label %b
++a:
++  ret i32 1
++b:
++  ret i32 2
++}
+diff --git a/llvm/test/CodeGen/X86/dedubb.ll b/llvm/test/CodeGen/X86/dedubb.ll
+new file mode 100644
+--- /dev/null
++++ b/llvm/test/CodeGen/X86/dedubb.ll
+@@ -0,0 +1,34 @@
++; Tests the DeduBB tail-call deduplication pass applying bbm/bbf directives.
++;   bbm <id> (DeduBB.master.K) -> emit a global `DeduBB.master.K` label at the
++;                                 start of the master block.
++;   bbf <id> (DeduBB.master.K) -> replace the block with a jump to the master.
++; Both functions are single-block (entry block has bb_id 0), so the directives
++; are deterministic.
++;
++; NOTE: exact assembly spelling (e.g. an @PLT suffix under PIC) may vary; the
++; checks below are intentionally loose around the symbol reference.
++
++; RUN: printf 'm test.c\nf master_fn\nbbm 0 (DeduBB.master.7)\nf fold_fn\nbbf 0 (DeduBB.master.7)\n' > %t.dir
++; RUN: llc -mtriple=x86_64-unknown-linux-gnu -basic-block-address-map \
++; RUN:     -dedubb-directives=%t.dir < %s | FileCheck %s
++
++define i32 @master_fn() {
++entry:
++  ret i32 42
++}
++
++; The master block gets a global symbol so other modules can branch to it.
++; CHECK-LABEL: master_fn:
++; CHECK: .globl DeduBB.master.7
++; CHECK: DeduBB.master.7:
++
++define i32 @fold_fn() {
++entry:
++  ret i32 42
++}
++
++; The folded block is replaced by a single jump to the master copy; its original
++; `ret` is gone.
++; CHECK-LABEL: fold_fn:
++; CHECK: jmp DeduBB.master.7
++; CHECK-NOT: retq
