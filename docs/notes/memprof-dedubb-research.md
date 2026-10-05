@@ -291,6 +291,13 @@ the bundle's LLVM 23.1.2, read-only against `out/` (E22–E24).
   WSL2 host has no LBR (`perf record -j any,u`: "PMU Hardware or event type doesn't support
   branch stack sampling"). Also not exercised: the DeduBB fold step, which needs a patched clang/lld.
 
+### 2.6 CI branch-sampling capability (infra finding, 2026-10-05)
+
+GCE runners: c4d (AMD Turin, amd64) has no guest PMU; c4a (Axion, arm64) offers PMU
+STANDARD only via delete+recreate (local SSDs), and SPE is unconfirmed. The runners will not
+change. A possible future option is the self-hosted `sandbox-ci-x86` (`linux-amd64-bench`,
+`cloud-latitude`, likely bare-metal AMD with LBRv2/BRS), not yet probed.
+
 ## 3. Pipeline facts relevant to both
 
 - lld adds `-mllvm` strings (e.g. `-dedubb-directives=<path>`) to the ThinLTO cache key,
@@ -328,4 +335,6 @@ the bundle's LLVM 23.1.2, read-only against `out/` (E22–E24).
 | E22 | llvm-propeller `ddfb8b7` against stage-2 LLVM 23.1.2 (find_package, stage-1 gnu cfg compiler) | all TUs compile; link needs libelf (host `libelf.a` + `__isoc23_strtol` shim); binary runs, `GLIBC_2.34` floor |
 | E23 | DeduBB Propeller patch onto `ddfb8b7` | 2 rejected hunks + 1 hunk to drop (MCContext pointer API); fixed by hand; builds |
 | E24 | spike `generate_propeller_profiles --dedubb_profile` on fixtures | correct `bbm`/`bbf` directives (2-function fixture; 25 for DeduBB examples) |
+| E25 | spike tool on upstream `sample_with_bb_hash.{bin,perfdata}` | cc/ld profiles equal upstream golden except the optional `h` hash lines; no PMU needed |
+| E26 | spike tool on upstream `bimodal_sample_v2.{bin,perfdata.1,.2}`, relink `bimodal_sample_v2.c` with the bundle clang (non-LTO + ThinLTO) | symbol order `main, compute, foo, bar` = ld profile; `.text.hot` + `.text.split`; `main.cold` in `.text.split`; runs |
 | E20 | scratch `libclang_rt.memprof.so` (gnu) | needs only `libc.so.6`, `libm.so.6`; highest symbol version `GLIBC_2.34` (passes the floor check) |

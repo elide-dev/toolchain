@@ -85,7 +85,16 @@ and fetches abseil, protobuf, googletest and quipper at configure time. Our old
 - Link: everything resolves except `libelf` (host `libelf.a` + `__isoc23_strtol` shim in the
   spike). The binary is 36 MB, max `GLIBC_2.34`, and runs.
 - The DeduBB-extended build generates correct directives (§4.2).
-- Not exercised: LBR-based layout profiles. This WSL2 host has no LBR. CI runner LBR support is open question 3.
+- Layout path **without hardware sampling** (E25, E26): on upstream's checked-in fixtures
+  (`llvm-propeller/propeller/testdata/sample_with_bb_hash.{bin,perfdata}`), the spike tool's
+  cc/ld profiles match upstream's golden `sample_with_bb_hash_cc_directives.golden.txt`, apart
+  from the optional `h` (BB hash) lines that golden mode adds. With
+  `bimodal_sample_v2.{c,bin,perfdata.1,perfdata.2}`, the generated profiles relinked
+  `bimodal_sample_v2.c` **with our clang** (non-LTO via `-fbasic-block-sections=list=` and
+  ThinLTO via `--lto-basic-block-sections=`). Evidence: symbol order `main, compute, foo, bar`
+  equals the ld profile, `.text.hot` and `.text.split` sections exist, and `main.cold` is in
+  `.text.split`.
+- Live LBR/SPE recording was not possible here (WSL2), and the CI runners can't do it either (§3.6).
 
 ### 3.3 Build (stage 45, Linux)
 
@@ -105,6 +114,45 @@ stage 45: apply_patches llvm-propeller "$ROOT_DIR/llvm-propeller"
 The target is the gnu triple, so the tool runs on the bundle's own host floor. The same binary
 serves both libcs: it reads ELF binaries and perf data, not target libraries. Propeller's unit
 tests (`BUILD_TESTING=ON`) run in the stage-45 check, not in packaging.
+
+### 3.3a Verification without branch sampling in CI
+
+The GCE CI runners cannot do branch sampling. c4d (AMD Turin) exposes no PMU to the guest.
+c4a (Axion, arm64) allows only PMU STANDARD, only via delete+recreate (local SSDs), and SPE is
+unconfirmed. **We are not changing the runners.** So building, shipping and verifying
+Propeller must not need LBR or SPE:
+
+1. **Golden fixture (tool correctness).** `generate_propeller_profiles` on
+   `sample_with_bb_hash.{bin,perfdata}` from the pinned `llvm-propeller` submodule's
+   `propeller/testdata/`. Expected: cc/ld profiles equal upstream's goldens after dropping `h`
+   lines. The fixtures ship with the submodule, so the repo checks nothing new in. Upstream
+   regenerates them with the tool, so a propeller bump keeps them consistent.
+2. **Round-trip fixture (profile → tool → relink → layout evidence).**
+   `bimodal_sample_v2.{bin,perfdata.1,perfdata.2}` → cc/ld profiles → compile and relink
+   `bimodal_sample_v2.c` with the **bundle's** clang/lld, non-LTO and ThinLTO. Assert: lld's
+   symbol order follows the ld profile, `.text.hot` and `.text.split` exist under
+   `-z keep-text-section-prefix`, `<fn>.cold` symbols sit in `.text.split`, and the program
+   runs. This works because the cc profile names functions and BB IDs, and our clang assigns
+   the same IDs to this small source as upstream's compiler did (E26).
+   *If an LLVM bump changes BB numbering* (the evidence assertions fail), fall back to our
+   own fixture: `tests/fixtures/propeller/` with a source, the labelled binary built by the
+   bundle, and a short `perf.data`, recorded **once** on an LBR-capable host using the
+   procedure in `docs/notes/propeller-fixtures.md` (perf `-c 100003`, a few seconds, ≤ 2 MB).
+3. **Live check (capability-probed, optional).** `check_propeller_live` first probes: x86_64
+   `perf record -b -e cycles:u -o <tmp> -- true`; arm64 `perf record -e arm_spe// -o <tmp> -- true`;
+   and reports `/proc/sys/kernel/perf_event_paranoid`. If capable, it records the fixture,
+   generates profiles, relinks, and checks the same evidence. Otherwise it prints
+   `warn "propeller live <triple>: skipped (no LBR/SPE; paranoid=N)"`. **`REQUIRE_LBR=yes`**
+   (vars.sh, default `no`) turns the skip into a failure.
+4. **Future option (documented, not planned):** the self-hosted runner `sandbox-ci-x86`
+   (labels `linux-amd64-bench`, `cloud-latitude`; likely bare-metal Latitude.sh, AMD) may
+   support AMD LBRv2/BRS. Once SSH access exists, probe it with item 3's commands. If capable,
+   a `REQUIRE_LBR=yes` job there would cover live collection.
+
+**Consumer note:** profile collection (`perf record` with LBR/SPE) is a **consumer-side
+step** on the consumer's own perf-capable hosts (bare metal or PMU-passthrough VMs), with
+their real workloads. The bundle ships the tool and compiler support. It never collects
+profiles itself, and CI does not need to.
 
 ### 3.4 What ships
 
@@ -158,6 +206,17 @@ The spike needed (E23):
 3. **dropping** the hunk that changes `MCContext(...)` to pointer arguments (DeduBB's older
    LLVM); 23.1.2 takes references.
 Result: builds, and `--dedubb_profile` emits correct directives on fixtures (E24).
+
+### 4.2a DeduBB needs no runtime profile
+
+DeduBB is **static**. `generate_propeller_profiles --binary=<bin> --dedubb_profile=<out>` reads
+only the linked binary: its code bytes plus the `.llvm_bb_addr_map` section from
+`-fbasic-block-address-map`. It finds identical blocks and runs and writes directives. No
+perf data is involved (E24: directives from `--binary` alone). The only profile-dependent
+option is the optional `--dedubb_cold_only` (fold only blocks the profile shows never ran),
+which takes `--profile`. CI therefore verifies DeduBB **fully** without hardware sampling:
+labelled build → directives → relink with `-dedubb-directives` → fold evidence (fold site
+branches to `DeduBB.master.N`, master in `.text.dedubb*`) → the program runs correctly.
 
 ### 4.3 Downstream workflow
 
@@ -416,7 +475,9 @@ not stack BOLT on a DeduBB binary. Save-and-Jump masters have no CFI and end in 
 |---|---|---|
 | `tests/stages/45-propeller.check.sh` | Linux | binary exists; `--help` lists `--dedubb_profile`; glibc floor ≤ 2.34; no `libelf`/`libstdc++` in `NEEDED`; propeller unit tests pass (build tree) |
 | `check_propeller_tool` | Linux | DeduBB fixture built with Propeller step-1 flags → `--dedubb_profile` yields `bbm` and `bbf` for `master_fn`/`fold_fn` |
-| `check_propeller_layout` | x86_64 Linux, **if** `perf record -j any,u` works on the runner, else skipped with a warning | perf on the fixture → `--cc_profile/--ld_profile` non-empty → relink with them runs |
+| `check_propeller_golden` | Linux | upstream `sample_with_bb_hash` fixture → cc/ld profiles equal goldens (without `h` lines); no PMU needed |
+| `check_propeller_relink` | Linux (x86_64 host fixtures; the relink compiles for each triple) | upstream `bimodal_sample_v2` perf data → profiles → relink with bundle clang (non-LTO + ThinLTO) → symbol order follows the ld profile, `.text.hot`/`.text.split` present, `main.cold` in `.text.split`, runs |
+| `check_propeller_live` | Linux | probe LBR (`perf record -b`) / SPE (`arm_spe//`) + `perf_event_paranoid`; if capable, live record → profiles → relink → same evidence; else warn-skip; `REQUIRE_LBR=yes` makes the skip a failure |
 | `check_dedubb_codegen` | Linux (4 triples) | generate directives with the shipped tool, relink with `-dedubb-directives` → `fold_fn` branches to `DeduBB.master.0`; output correct |
 | `check_dedubb_inert` | x86_64 gnu | two builds without directives are byte-identical and contain no `DeduBB.` symbols |
 | `check_elidealloc_shim` | all | `elidealloc-shim-test` passes (forward-mode expectations on darwin and for musl without mimalloc) |
@@ -442,20 +503,19 @@ helper `flags` modes; manifest `features` block.
 5. **Hot heap cost**: first-class-heap allocation goes through a heap lookup that plain
    `malloc` skips. Routing hot objects may cost cycles on the hottest path. Measure with
    `ELIDEALLOC_DISABLE=1` A/B. If it's a loss, set `ELIDEALLOC_HOT_MIN=256` (disables hot).
-6. **No LBR on dev/CI hosts** would leave Propeller layout untested in CI (DeduBB needs no profile).
+6. **No LBR/SPE on CI** (confirmed for the GCE runners): live collection stays untested in CI. Mitigated by fixture-based round trips (§3.3a). DeduBB is static and fully tested.
 7. **Bundle growth**: memprof runtime ~5 MB (gnu x86_64), propeller tool ~36 MB unstripped
    (*stripped size unmeasured*).
 
 ## 10. Open questions for the user
 
-1. Do the `linux-amd64-cipool` / `linux-arm64-cipool` runners expose LBR / ARM SPE to perf?
-   That decides whether `check_propeller_layout` runs in CI.
-2. For token classes (v2): what isolation goal comes first: security (pointerful vs
+1. For token classes (v2): what isolation goal comes first: security (pointerful vs
    pointer-free, `N=2`) or locality (more classes)?
-3. Which GraalVM version does Elide pin? It bounds what native-image can participate in.
+2. Which GraalVM version does Elide pin? It bounds what native-image can participate in.
 
 Resolved 2026-10-05: shim name `libelidealloc-shim` (allocator-agnostic); ambiguous hint 222
-stays in the default heap (D10); backports accepted and tracked in elide-dev/toolchain#4.
+stays in the default heap (D10); backports accepted and tracked in elide-dev/toolchain#4; CI runners
+cannot branch-sample and won't be changed, so Propeller CI verification uses fixtures (§3.3a).
 
 ## 11. Out of scope
 

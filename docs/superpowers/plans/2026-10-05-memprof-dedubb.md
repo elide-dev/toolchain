@@ -306,61 +306,20 @@ assert_eq "$(glibc_floor_violations "$g")" "" "glibc floor"
 
 ---
 
-### Task 6: Propeller verification and downstream workflow
+### Task 6: Propeller verification without branch sampling (fixtures + probed live check)
 
-**Files:** Create `tests/fixtures/dedubb/a.c`, `tests/fixtures/dedubb/b.c`; modify `scripts/verify/checks.sh`
+**Files:** Create `tests/fixtures/dedubb/a.c`, `tests/fixtures/dedubb/b.c`, `docs/notes/propeller-fixtures.md`; modify `scripts/verify/checks.sh`, `vars.sh` (`REQUIRE_LBR=${REQUIRE_LBR:-no}`)
 
-Fixtures (also used by DeduBB; validated in E24, where the tool emits `bbm`/`bbf` for BB 0 of both functions):
+CI runners cannot branch-sample (spec §3.3a), so the round trip uses upstream's checked-in perf data from the pinned submodule (`$ROOT_DIR/llvm-propeller/propeller/testdata/`, `TD` below). E25/E26 validated both fixtures.
 
-`tests/fixtures/dedubb/a.c`
-```c
-__attribute__((noinline)) long master_fn(const long *p) { return p[0] * 3 + p[1] * 5 + p[2]; }
-```
-`tests/fixtures/dedubb/b.c`
-```c
-#include <stdio.h>
-long master_fn(const long *p);
-__attribute__((noinline)) long fold_fn(const long *p) { return p[0] * 3 + p[1] * 5 + p[2]; }
-int main(void) { long v[3] = {1, 2, 3}; printf("%ld\n", master_fn(v) + fold_fn(v)); return 0; }
-```
+DeduBB fixtures (also used in Task 9; E24): `a.c` defines `master_fn`, and `b.c` defines `fold_fn` with the identical body `p[0]*3 + p[1]*5 + p[2]`, plus a `main` that prints `master_fn(v)+fold_fn(v)` for `v={1,2,3}` (expected `32`).
 
-- [ ] **Step 1: Checks**
-
-```bash
-# Propeller step-1 ("labelled") build of the fixture; extra args are appended.
-labelled_build() { # ROOT TRIPLE OUT [extra...]
-  local root="$1" t="$2" out="$3"; shift 3
-  "$root/bin/$t-clang" -O2 -flto=thin -funique-internal-linkage-names -fbasic-block-address-map \
-    -fuse-ld=lld -Wl,--lto-basic-block-address-map -Wl,-z,keep-text-section-prefix \
-    "$ROOT_DIR/tests/fixtures/dedubb/a.c" "$ROOT_DIR/tests/fixtures/dedubb/b.c" -o "$out" "$@"
-}
-
-check_propeller_layout() {
-  local root="$1" t="$2" tmp
-  case "$t" in x86_64-unknown-linux-*) ;; *) return 0 ;; esac
-  [ -x "$root/bin/generate_propeller_profiles" ] || return 0
-  tmp="$(mktemp -d)"
-  labelled_build "$root" "$t" "$tmp/app" $( [ "$(triple_libc "$t")" = musl ] && echo -static )
-  if ! perf record -q -o "$tmp/perf.data" -e cycles:u -j any,u -- "$tmp/app" >/dev/null 2>&1; then
-    warn "perf LBR unavailable; skipping propeller layout $t"; rm -rf "$tmp"; return
-  fi
-  if ! "$root/bin/generate_propeller_profiles" --binary="$tmp/app" --profile="$tmp/perf.data" \
-       --cc_profile="$tmp/cc.txt" --ld_profile="$tmp/ld.txt" >"$tmp/log" 2>&1; then
-    fail "propeller layout $t" "$(tail -3 "$tmp/log")"; rm -rf "$tmp"; return
-  fi
-  "$root/bin/$t-clang" -O2 -flto=thin -funique-internal-linkage-names -fuse-ld=lld \
-    -Wl,--lto-basic-block-sections="$tmp/cc.txt" -Wl,--symbol-ordering-file="$tmp/ld.txt" \
-    -Wl,--no-warn-symbol-ordering -Wl,-z,keep-text-section-prefix \
-    "$ROOT_DIR/tests/fixtures/dedubb/a.c" "$ROOT_DIR/tests/fixtures/dedubb/b.c" -o "$tmp/app.opt" \
-    $( [ "$(triple_libc "$t")" = musl ] && echo -static )
-  [ "$("$tmp/app.opt")" = 32 ] && pass "propeller layout $t" || fail "propeller layout $t" "relinked binary wrong"
-  rm -rf "$tmp"
-}
-```
-`check_propeller_tool` lands with DeduBB in Task 9, because it needs the DeduBB flags. Wire `check_propeller_layout` into the triple loop.
-
-- [ ] **Step 2:** Stage 95 on linux-amd64 CI. Expected: `ok propeller layout …`, or a skip warning on runners without LBR (spec open question 3). Record which in `docs/notes/build-timings.md`.
-- [ ] **Step 3: Commit** `git commit -m "verify: Propeller layout profile round trip (LBR hosts)"`
+- [ ] **Step 1: `check_propeller_golden`** (Linux): profiles from `TD/sample_with_bb_hash.{bin,perfdata}`; the cc profile equals `TD/sample_with_bb_hash_cc_directives.golden.txt` after dropping `^h ` lines on both sides; the ld profile lists `main`.
+- [ ] **Step 2: `check_propeller_relink ROOT TRIPLE`** (Linux triples): profiles from `TD/bimodal_sample_v2.bin` + `perfdata.1,perfdata.2`; compile `TD/bimodal_sample_v2.c` with the bundle's `<t>-clang -O2 -fbasic-block-sections=list=cc.txt -fuse-ld=lld -Wl,--symbol-ordering-file=ld.txt -Wl,--no-warn-symbol-ordering -Wl,-z,keep-text-section-prefix` (musl `-static`), and again as ThinLTO (`-flto=thin -Wl,--lto-basic-block-sections=cc.txt`). Evidence: `.text.hot` and `.text.split` sections; `llvm-nm -n` order of `main compute foo bar` matches `ld.txt`; `main.cold` within `.text.split`; runs (host arch only). The failure message points to `docs/notes/propeller-fixtures.md`.
+- [ ] **Step 3: `check_propeller_live`**: probe first. `perf_branch_capable TRIPLE`: x86_64 runs `perf record -q -b -e cycles:u -o $tmp -- true`; aarch64 runs `perf record -q -e arm_spe// -o $tmp -- true`. Read `/proc/sys/kernel/perf_event_paranoid`. Not capable → `warn "propeller live $t: skipped (no LBR/SPE; paranoid=N)"`, or `fail` when `REQUIRE_LBR=yes`. Capable → record the DeduBB fixture's labelled build (`-j any,u` / `arm_spe//`), generate cc/ld, relink, same evidence as Step 2. Runs only for the host's own arch.
+- [ ] **Step 4: `docs/notes/propeller-fixtures.md`**: the one-time recording procedure for our own fixture on an LBR-capable bare-metal x86 host (`perf record -e cycles:u -j any,u -c 100003`, a few seconds, `perf.data` ≤ 2 MB, check in source + labelled binary + perf.data + bundle version), to use if an LLVM bump breaks Step 2. Also: the future `sandbox-ci-x86` (`linux-amd64-bench`, `cloud-latitude`) probe, and that profile collection is a consumer-side step on consumers' own perf-capable hosts.
+- [ ] **Step 5:** stage 95 → `ok propeller golden`, `ok propeller relink …`, and a `WARN … skipped` line for live on CI.
+- [ ] **Step 6: Commit** (message: "verify: Propeller round trip from fixtures; capability-probed live check").
 
 ---
 
