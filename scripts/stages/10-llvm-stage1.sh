@@ -49,6 +49,7 @@ llvm_stage1_prebuilt() {
   mkdir -p "$STAGE1_DIR"
   log "extracting $(basename "$tarball") into $STAGE1_DIR"
   xz -T0 -dc "$tarball" | tar -C "$STAGE1_DIR" --strip-components=1 -xf -
+  provide_prebuilt_icu
   check_stage1_tools
   prune_prebuilt_runtimes
   "$STAGE1_DIR/bin/clang" --version >/dev/null 2>&1 \
@@ -58,6 +59,25 @@ llvm_stage1_prebuilt() {
     || die "prebuilt clang's default rtlib/stdlib/linker are '$t', not the upstream 'libgcc libstdc++ ld' stage 30 expects; use STAGE1_SOURCE=build"
   mkdir -p "$BUNDLE_DIR/sysroot"
   ln -sfn "$BUNDLE_DIR/sysroot" "$STAGE1_DIR/sysroot"
+}
+
+# provide_prebuilt_icu — when the prebuilt lld cannot find its ICU libraries on this host, unpack
+# them from the pinned package into stage1/lib (on lld's RUNPATH). No-op where nothing is missing.
+provide_prebuilt_icu() {
+  local url sha deb tmp missing
+  missing="$(ldd "$STAGE1_DIR/bin/lld" 2>/dev/null | awk '/libicu.*not found/ { print $1 }' | xargs)"
+  [ -n "$missing" ] || return 0
+  url="$(llvm_prebuilt_pin linux "$HOST_ARCH" icu_url)"
+  sha="$(llvm_prebuilt_pin linux "$HOST_ARCH" icu_sha256)"
+  if [ -z "$url" ] || [ -z "$sha" ]; then die "prebuilt lld needs $missing and no ICU package is pinned for linux-$HOST_ARCH; use STAGE1_SOURCE=build"; fi
+  deb="$CACHE_DIR/llvm-prebuilt/${url##*/}"
+  fetch_pinned "$url" "$sha" "$deb"
+  log "unpacking $(basename "$deb") for the prebuilt lld ($missing)"
+  tmp="$(mktemp -d)"
+  if command -v dpkg-deb >/dev/null 2>&1; then dpkg-deb -x "$deb" "$tmp"
+  else (cd "$tmp" && ar x "$deb" data.tar.zst && zstd -dcq data.tar.zst | tar -xf -); fi
+  cp -P "$tmp"/usr/lib/*-linux-gnu/libicu*.so.* "$STAGE1_DIR/lib/"
+  rm -rf "$tmp"
 }
 
 # prune_prebuilt_runtimes — the release ships compiler-rt, libc++ and friends built for the host
@@ -85,7 +105,7 @@ check_stage1_tools() {
     *"clang version $LLVM_VERSION"*) ;;
     *) die "stage-1 clang is not $LLVM_VERSION: ${v%%$'\n'*}" ;;
   esac
-  "$STAGE1_DIR/bin/ld.lld" --version >/dev/null 2>&1 || die "stage-1 ld.lld does not run on this host"
+  v="$("$STAGE1_DIR/bin/ld.lld" --version 2>&1)" || die "stage-1 ld.lld does not run on this host: $v"
 }
 
 # clang_default_runtimes — "RTLIB STDLIB LINKER" stage-1 clang uses for a gnu target without a cfg
