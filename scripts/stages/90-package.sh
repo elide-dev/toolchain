@@ -9,7 +9,8 @@ stage_main() {
   mkdir -p "$meta"
   printf '%s\n' "$TOOLCHAIN_VERSION" > "$meta/VERSION"
   for t in $ALL_TARGETS; do relocate_prefix "$t"; done
-  ENABLED_COMPONENTS="$(enabled_components | xargs)" BUILD_PROPELLER="${BUILD_PROPELLER:-yes}" \
+  SANITIZER_MANIFEST="$(sanitizer_manifest_json)" ENABLED_COMPONENTS="$(enabled_components | xargs)" \
+    BUILD_PROPELLER="${BUILD_PROPELLER:-yes}" \
     LLVM_DEDUBB="${LLVM_DEDUBB:-yes}" MUSL_USE_MIMALLOC="${MUSL_USE_MIMALLOC:-yes}" \
     python3 "$ROOT_DIR/scripts/gen-manifest.py" manifest > "$meta/manifest.json"
   ENABLED_COMPONENTS="$(enabled_components | xargs)" python3 "$ROOT_DIR/scripts/gen-manifest.py" sbom > "$meta/sbom.cdx.json"
@@ -24,11 +25,14 @@ stage_main() {
   # darwin, so both OSes produce the same kind of archive.
   local tar_flags=()
   if [ "$HOST_OS" = darwin ]; then tar_flags=(--no-xattrs --no-mac-metadata); fi
+  # Sanitizer add-on paths go into their own archives (scripts/lib/sanitizers.sh), never the main one.
+  mapfile -t -O "${#tar_flags[@]}" tar_flags < <(addon_excludes)
   COPYFILE_DISABLE=1 tar -C "$OUT_DIR" "${tar_flags[@]}" -cf - "$TOOLCHAIN_NAME" | xz -T0 -9 > "$archive.tmp"
   mv "$archive.tmp" "$archive"
   printf '%s  %s\n' "$(sha256_of "$archive")" "$name.tar.xz" > "$archive.sha256"
   cp "$meta/sbom.cdx.json" "$DIST_DIR/$name.sbom.cdx.json"
   log "wrote $archive"
+  package_sanitizer_addons
 }
 
 # relocate_prefix TRIPLE — make a sysroot's metadata location-independent: .pc files use

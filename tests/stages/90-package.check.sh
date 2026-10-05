@@ -24,4 +24,15 @@ for t in $ALL_TARGETS; do
   assert_eq "$leaks" "" "no build paths in $t .pc/.cmake files"
   assert_eq "$(find "$(sysroot_of "$t")" -name '*.la' | head -1)" "" "no libtool archives"
 done
+# Sanitizer add-ons (BUILD_SANITIZER_VARIANTS=yes): one archive per variant, single root, disjoint
+# from the main archive; the main archive carries none of their paths.
+for s in $(all_variants); do
+  ad="$DIST_DIR/$(addon_asset_name "$s")"
+  assert_file "$ad"
+  assert_eq "$(awk '{print $1}' "$ad.sha256")" "$(sha256_of "$ad")" "$s add-on checksum matches"
+  al="$(tar -tJf "$ad")"
+  assert_eq "$(printf '%s\n' "$al" | cut -d/ -f1 | sort -u)" "$TOOLCHAIN_NAME" "$s add-on: single top-level dir"
+  assert_contains "$al" "$TOOLCHAIN_NAME/$(addon_json_rel "$s")"
+  assert_eq "$(comm -12 <(printf '%s\n' "$listing" | sed 's#/$##' | sort -u) <(printf '%s\n' "$al" | sed 's#/$##' | sort -u) | head -3)" "" "$s add-on disjoint from the main archive"
+done
 finish
