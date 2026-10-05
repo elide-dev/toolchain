@@ -91,6 +91,8 @@ eval "$(elide-toolchain env --target x86_64-unknown-linux-gnu)"
 
 **Doctor.** `elide-toolchain doctor` compiles, links and runs a C and C++ hello world for every triple in the bundle. Other subcommands: `home`, `targets`, `version`.
 
+**Link rules.** Component archives are pure ThinLTO bitcode by design, so link them with LLVM at least the bundle's major: the bundle's clang/lld, or rust-lld from a rustc whose LLVM major is <= the bundle's. A non-LLVM linker (GNU ld, Apple ld64) fails loudly; it does not silently skip LTO. On macOS, link through the bundle's `<triple>-clang` (its cfg sets `-fuse-ld=lld`), not Apple's `ld64`. musl `libc.a` and libc++ are fat objects: lld uses their native code unless the link passes `-flto=thin -ffat-lto-objects` (clang forwards `--fat-lto-objects`); pass it to get cross-module LTO into libc and libc++.
+
 C++ implies libc++ on every target; there is no libstdc++ in the bundle, so drop any `-lstdc++`.
 
 ## Layout

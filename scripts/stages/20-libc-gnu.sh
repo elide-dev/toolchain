@@ -5,15 +5,17 @@
 stage_applies() { [ "$HOST_OS" = linux ]; }
 
 stage_main() {
-  local t sysroot build cpu
+  local t sysroot build cpu staging
   t="$(bundle_triple_for_libc gnu)"
   sysroot="$(sysroot_of "$t")"
   cpu="$(triple_cpu "$t")"
   build="$BUILD_DIR/glibc"
+  staging="$BUILD_DIR/glibc-staging"
   [ -f "$sysroot/usr/include/linux/version.h" ] || die "kernel headers missing in $sysroot; run 00-sources"
 
   apply_patches glibc "$ROOT_DIR/glibc"
   fresh_dir "$build"
+  fresh_dir "$staging"
   (
     cd "$build" || exit 1
     unset CFLAGS CXXFLAGS LDFLAGS CPPFLAGS CC CXX
@@ -28,11 +30,14 @@ stage_main() {
       --enable-stack-protector=strong --enable-bind-now \
       --disable-werror --disable-profile --without-selinux
     make -j"$JOBS"
-    make install DESTDIR="$sysroot"
+    make install DESTDIR="$staging"
   )
   (cd "$ROOT_DIR/glibc" && git checkout -q .)   # leave the submodule pristine; patches live in src/patches
+  # The list comes from glibc's own staging install, never the live sysroot: a rerun on a built
+  # tree would otherwise list component archives and exempt them from the bitcode/floor checks.
+  (cd "$staging" && find . \( -type f -o -type l \) | sed 's#^\./##' | sort) > "$OUT_DIR/glibc-files.txt"
+  cp -a "$staging"/. "$sysroot"/
   ensure_loader_link "$sysroot" "$cpu"
-  (cd "$sysroot" && find . -type f -o -type l | sed 's#^\./##' | sort) > "$OUT_DIR/glibc-files.txt"
   # After the snapshot, so it is checked as ours, not exempted as a glibc file: rustc's gnu std
   # always passes -lgcc_s; there is no libgcc in this toolchain, so redirect it to libunwind.
   printf 'INPUT(-lunwind)\n' > "$sysroot/usr/lib/libgcc_s.so"
