@@ -90,7 +90,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -qq -y --no-install-recommends build-essential bison gawk python3 ninja-build \
-            cmake rsync xz-utils curl clang lld llvm
+            cmake rsync xz-utils curl clang lld llvm ccache
       - name: "Setup: Packages (macOS)"
         if: matrix.os == 'darwin'
         # GNU rsync: stage_source needs --from0/--files-from, which macOS's openrsync lacks. The
@@ -101,13 +101,26 @@ jobs:
           HOMEBREW_NO_INSTALL_CLEANUP: "1"
         run: |
           brew="$(command -v brew || echo /opt/homebrew/bin/brew)"
-          "$brew" install --quiet bash ninja cmake rsync xz
+          "$brew" install --quiet bash ninja cmake rsync xz ccache
           hb="$("$brew" --prefix)/bin"
           export PATH="$hb:$PATH"
           echo "$hb" >> "$GITHUB_PATH"
           v="$(rsync --version 2>&1 || true)"
           echo "rsync: $(command -v rsync): ${v%%$'\n'*}"
           case "$v" in *"rsync  version"*) ;; *) echo "::error::GNU rsync is not first on PATH"; exit 1 ;; esac
+      - name: "Setup: Build caches"
+        # Persistent caches live outside the workspace: actions/checkout cleans ignored files, so
+        # out/cache would not survive between jobs on these self-hosted runners. Downloads (kernel
+        # headers, Propeller deps, the prebuilt stage-1 LLVM) are checksummed by fetch_pinned.
+        run: |
+          c="$HOME/.cache/elide-toolchain"
+          mkdir -p "$c/downloads" "$c/ccache"
+          {
+            echo "ELIDE_CACHE_DIR=$c/downloads"
+            echo "CCACHE_DIR=$c/ccache"
+          } >> "$GITHUB_ENV"
+          CCACHE_DIR="$c/ccache" ccache --zero-stats
+          CCACHE_DIR="$c/ccache" ccache --version | head -n 1
       - name: "Setup: Version"
         id: version
         run: |
@@ -125,6 +138,10 @@ jobs:
         env:
           TOOLCHAIN_VERSION: ${{ steps.version.outputs.version }}
         run: ./build.sh
+      - name: "Report: ccache"
+        if: always()
+        run: |
+          if command -v ccache >/dev/null 2>&1; then ccache --show-stats; else echo "ccache not installed"; fi
       - name: "Artifact: Bundle"
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
