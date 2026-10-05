@@ -304,7 +304,8 @@ check_addon_mimalloc() {
 # check_addon_elidealloc ROOT TRIPLE SAN — the add-on's libelidealloc-shim (forward backend, see
 # stage 60) links with the pkg-config libs through the wrapper and passes its behaviour test clean.
 # The test expects nothrow new of SIZE_MAX/2 to return null; sanitizer allocators abort on it
-# unless allocator_may_return_null=1.
+# unless allocator_may_return_null=1, and then still log "<San> failed to allocate", which is the
+# expected outcome, not a report.
 check_addon_elidealloc() {
   local root="$1" t="$2" s="$3" tmp name="sanitizer add-on $3 elidealloc-shim $2"
   [ -f "$root/sysroot/$t+$s/usr/lib/libelidealloc-shim.a" ] || return 0
@@ -313,7 +314,7 @@ check_addon_elidealloc() {
        -Wl,-u,_Znwm12__hot_cold_t -lelidealloc-shim -lmimalloc -o "$tmp/t" 2>"$tmp/err" \
      && ASAN_OPTIONS=allocator_may_return_null=1 TSAN_OPTIONS=allocator_may_return_null=1 \
         MSAN_OPTIONS=allocator_may_return_null=1 "$tmp/t" >"$tmp/log" 2>&1 \
-     && ! grep -qE 'Sanitizer|runtime error' "$tmp/log"; then
+     && ! grep -v 'Sanitizer failed to allocate 0x' "$tmp/log" | grep -cE 'Sanitizer|runtime error' >/dev/null; then
     pass "$name"
   else
     fail "$name" "$(cat "$tmp/err" "$tmp/log" 2>/dev/null | grep -m3 -E 'error|FAIL|Sanitizer|undefined')"
