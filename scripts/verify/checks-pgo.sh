@@ -18,7 +18,8 @@ labelled_build() { # ROOT TRIPLE OUT [extra...]
 }
 
 # sym_addr BIN NAME — hex address of NAME (no 0x), empty if absent.
-sym_addr() { "$ROOT/bin/llvm-nm" "$1" 2>/dev/null | awk -v n="$2" '$3 == n { print $1; exit }'; }
+# awk reads to EOF: an early exit SIGPIPEs llvm-nm, which pipefail turns into a stage abort.
+sym_addr() { "$ROOT/bin/llvm-nm" "$1" 2>/dev/null | awk -v n="$2" '$3 == n && !a { a = $1 } END { if (a) print a }'; }
 
 # layout_evidence ROOT BIN LDPROFILE — functions laid out in ld-profile order; hot/split
 # sections present; every *.cold symbol inside .text.split. Prints a reason on failure.
@@ -163,14 +164,19 @@ check_dedubb_codegen() {
   [ "$(triple_os "$t")" = linux ] && is_yes "${LLVM_DEDUBB:-yes}" && [ -x "$g" ] || return 0
   tmp="$(mktemp -d)"
   labelled_build "$root" "$t" "$tmp/app" || { fail "dedubb codegen $t" "labelled build"; rm -rf "$tmp"; return; }
-  "$g" --binary="$tmp/app" --dedubb_profile="$tmp/d.txt" >/dev/null 2>&1
+  if ! "$g" --binary="$tmp/app" --dedubb_profile="$tmp/d.txt" >"$tmp/gen" 2>&1; then
+    fail "dedubb codegen $t" "generator: $(tail -3 "$tmp/gen")"; rm -rf "$tmp"; return
+  fi
   if ! labelled_build "$root" "$t" "$tmp/app.dd" "-Wl,-mllvm,-dedubb-directives=$tmp/d.txt" 2>"$tmp/err"; then
     fail "dedubb codegen $t" "$(head -3 "$tmp/err")"; rm -rf "$tmp"; return
   fi
   ROOT="$root"; m="$(sym_addr "$tmp/app.dd" DeduBB.master.0)"
   [ -n "$m" ] || { fail "dedubb codegen $t" "no DeduBB.master.0 symbol"; rm -rf "$tmp"; return; }
   f="$(awk '/^f /{fn=$2} /^bbf 0 \(DeduBB\.master\.0\)/{print fn; exit}' "$tmp/d.txt")"
-  dis="$("$root/bin/llvm-objdump" -d --no-show-raw-insn --disassemble-symbols="$f" "$tmp/app.dd")"
+  [ -n "$f" ] || { fail "dedubb codegen $t" "no bbf entry for DeduBB.master.0 in directives"; rm -rf "$tmp"; return; }
+  if ! dis="$("$root/bin/llvm-objdump" -d --no-show-raw-insn --disassemble-symbols="$f" "$tmp/app.dd" 2>&1)"; then
+    fail "dedubb codegen $t" "llvm-objdump: $(head -3 <<< "$dis")"; rm -rf "$tmp"; return
+  fi
   if ! grep -Eiq "(jmp|b)[[:space:]]+(0x)?0*${m#"${m%%[!0]*}"}" <<< "$dis"; then
     fail "dedubb codegen $t" "$f does not branch to DeduBB.master.0 ($m)"; rm -rf "$tmp"; return
   fi
@@ -191,7 +197,7 @@ check_dedubb_inert() {
     fail "dedubb inert $t" "labelled build"; rm -rf "$tmp"; return
   fi
   if ! cmp -s "$tmp/a1" "$tmp/a2"; then fail "dedubb inert $t" "non-deterministic output"
-  elif "$root/bin/llvm-nm" "$tmp/a1" | grep -q 'DeduBB\.'; then fail "dedubb inert $t" "DeduBB symbols without directives"
+  elif "$root/bin/llvm-nm" "$tmp/a1" | grep -c 'DeduBB\.' >/dev/null; then fail "dedubb inert $t" "DeduBB symbols without directives"
   else pass "dedubb inert $t"; fi
   rm -rf "$tmp"
 }
@@ -269,8 +275,8 @@ check_memprof_use() {
   if ! "$root/bin/$t-clang++" -O2 "${st[@]}" "$tmp/c.o" -o "$tmp/c" "${l[@]}" $libs 2>"$tmp/err"; then
     fail "memprof use $t" "link: $(head -3 "$tmp/err")"; rm -rf "$tmp"; return
   fi
-  if ! "$root/bin/llvm-nm" "$tmp/c" | grep -q '_Z5allocm\.memprof\.1'; then fail "memprof use $t" "no context clone"; rm -rf "$tmp"; return; fi
-  if ! "$root/bin/llvm-nm" "$tmp/c" | grep -q '_Znam12__hot_cold_t'; then fail "memprof use $t" "no hot/cold operator new"; rm -rf "$tmp"; return; fi
+  if ! "$root/bin/llvm-nm" "$tmp/c" | grep -c '_Z5allocm\.memprof\.1' >/dev/null; then fail "memprof use $t" "no context clone"; rm -rf "$tmp"; return; fi
+  if ! "$root/bin/llvm-nm" "$tmp/c" | grep -c '_Znam12__hot_cold_t' >/dev/null; then fail "memprof use $t" "no hot/cold operator new"; rm -rf "$tmp"; return; fi
   if can_run "$t" && ! "$tmp/c"; then fail "memprof use $t" "cold context not in the COLD partition"; rm -rf "$tmp"; return; fi
   pass "memprof use $t"
   rm -rf "$tmp"
@@ -287,7 +293,7 @@ check_memprof_strip() {
        -fmemory-profile-use="$tmp/p.memprofdata" "$ROOT_DIR/tests/fixtures/memprof-ctx.cc" -o "$tmp/c" $libs 2>"$tmp/err"; then
     fail "memprof strip $t" "$(head -3 "$tmp/err")"; rm -rf "$tmp"; return
   fi
-  if "$root/bin/llvm-nm" "$tmp/c" | grep -q '_Znam12__hot_cold_t\|memprof\.1'; then
+  if "$root/bin/llvm-nm" "$tmp/c" | grep -c '_Znam12__hot_cold_t\|memprof\.1' >/dev/null; then
     fail "memprof strip $t" "hints or clones without -supports-hot-cold-new"
   else pass "memprof strip $t"; fi
   rm -rf "$tmp"

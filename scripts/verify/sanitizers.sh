@@ -35,7 +35,7 @@ check_sanitizer_runtimes() {
   if [ "$(triple_libc "$t")" = gnu ]; then
     for r in asan tsan ubsan_standalone; do [ -f "$rd/libclang_rt.$r.so" ] || missing="$missing $r.so"; done
   fi
-  if [ "$(triple_libc "$t")" = musl ] && find "$rd" -name 'libclang_rt.*' | grep -qE 'libclang_rt\.(asan|tsan|msan|lsan|hwasan)'; then
+  if [ "$(triple_libc "$t")" = musl ] && find "$rd" -name 'libclang_rt.*' | grep -cE 'libclang_rt\.(asan|tsan|msan|lsan|hwasan)' >/dev/null; then
     missing="$missing (dynamic-only sanitizer runtime present for musl)"
   fi
   if [ -z "$missing" ]; then pass "$name"; else fail "$name" "missing:$missing"; fi
@@ -211,10 +211,10 @@ check_addon_layout() {
   [ ! -e "$d/libunwind.a" ] || bad="${bad}instrumented libunwind.a shipped; "
   for f in "$d"/libc++.a "$d"/libc++abi.a; do
     [ -f "$f" ] || { bad="${bad}missing ${f##*/}; "; continue; }
-    "$root/bin/llvm-nm" "$f" 2>/dev/null | grep -q "$sym" || bad="${bad}${f##*/} not instrumented; "
+    "$root/bin/llvm-nm" "$f" 2>/dev/null | grep -c "$sym" >/dev/null || bad="${bad}${f##*/} not instrumented; "
   done
   while IFS= read -r f; do
-    "$root/bin/llvm-nm" "$f" 2>/dev/null | grep -q "$sym" || bad="${bad}${f#"$farm"/} not instrumented; "
+    "$root/bin/llvm-nm" "$f" 2>/dev/null | grep -c "$sym" >/dev/null || bad="${bad}${f#"$farm"/} not instrumented; "
     if [ -e "${f%.a}.so" ] || [ -L "${f%.a}.so" ]; then bad="${bad}${f#"$farm"/}: .so beside replaced .a; "; fi
   done < <(find "$farm/usr/lib" -maxdepth 1 -name '*.a' -type f)
   if [ -n "$(find -L "$farm" -maxdepth 3 -type l 2>/dev/null | head -1)" ]; then bad="${bad}dangling farm symlinks; "; fi
@@ -335,7 +335,7 @@ check_addon_env() {
 check_rust_sanitizer() {
   local root="$1" t="$2" rustc=() vv major tmp rt name="rust sanitizer $2"
   rt="$(rust_triple "$t")"
-  if command -v rustc >/dev/null 2>&1 && rustc -vV 2>/dev/null | grep -q '^release:.*nightly'; then
+  if command -v rustc >/dev/null 2>&1 && rustc -vV 2>/dev/null | grep -c '^release:.*nightly' >/dev/null; then
     rustc=(rustc)
   elif command -v rustup >/dev/null 2>&1 && rustup run nightly rustc -vV >/dev/null 2>&1; then
     rustc=(rustup run nightly rustc)

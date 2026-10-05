@@ -311,7 +311,7 @@ check_macos_minos() {
   while IFS= read -r f; do
     case "$(file -b "$f" 2>/dev/null || true)" in *Mach-O*) ;; *) continue ;; esac
     if ! command -v vtool >/dev/null 2>&1; then out="${out}vtool not available, cannot read minos of $f"$'\n'; continue; fi
-    minos="$(vtool -show-build "$f" 2>/dev/null | awk '/minos/{print $2; exit}')"
+    minos="$(vtool -show-build "$f" 2>/dev/null | awk '/minos/ && !m {m = $2} END {print m}')"
     if [ -z "$minos" ]; then out="$out$f: no minos reported by vtool"$'\n'; continue; fi
     if version_lt "$MACOS_MIN" "$minos"; then out="$out$f: minos $minos"$'\n'; fi
   done < <(find "$root/bin" "$(smoke_dir "$t")" -type f -perm -u+x)
