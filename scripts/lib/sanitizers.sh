@@ -190,8 +190,11 @@ sanitizer_layer_flags() {
   local t="$1" s="${SANITIZER_LAYER:-}" r="${TOOLCHAIN_ROOT:-$BUNDLE_DIR}"
   [ -n "$s" ] || return 0
   # These flags also reach compile-only (-c) commands, where -L is unused: keep -Werror builds
-  # (stage 60's mimalloc shim, components' own -Werror) from failing on it.
-  printf -- '--config=%s/share/elide-toolchain/sanitizers/%s-%s.cfg -L%s/lib/%s/%s -Wno-unused-command-line-argument' \
+  # (stage 60's mimalloc shim, components' own -Werror) from failing on it. With fat ThinLTO
+  # objects the sanitizer pass runs in the pre-link pipeline and again in the native codegen, which
+  # skips the already-instrumented module and warns "Redundant instrumentation detected"
+  # (-Wbackend-plugin); harmless, but -Werror builds and their CMake probes (snappy) die on it.
+  printf -- '--config=%s/share/elide-toolchain/sanitizers/%s-%s.cfg -L%s/lib/%s/%s -Wno-unused-command-line-argument -Wno-backend-plugin' \
     "$r" "$t" "$s" "$r" "$t" "$s"
   if [ "$s" = asan ]; then printf -- ' -isystem %s/include/%s/asan/c++/v1' "$r" "$t"; fi
   printf ' '
