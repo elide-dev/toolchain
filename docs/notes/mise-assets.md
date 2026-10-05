@@ -5,7 +5,7 @@ Inspected: mise 2026.9.12 (installed locally), source tag `v2026.9.12`
 Paths below are relative to the mise repo root.
 
 Assets published: `elide-toolchain-<version>-<os>-<arch>.tar.xz`
-(os = linux|darwin, arch = amd64|arm64), each with one top-level dir
+(os = linux|darwin, arch = amd64|arm64; darwin is arm64 only), each with one top-level dir
 `elide-toolchain/` containing `bin/`.
 
 ## Findings
@@ -33,7 +33,7 @@ Assets published: `elide-toolchain-<version>-<os>-<arch>.tar.xz`
 
 ## Decision
 
-Autodetection picks the right asset on all four platforms; no `asset_pattern`
+Autodetection picks the right asset on all three platforms; no `asset_pattern`
 or `platforms` table is needed. Because mise auto-strips the single
 `elide-toolchain/` directory, `bin/` lands at the install root and is found by
 default, so `bin_path` is dropped (brief rule 3).

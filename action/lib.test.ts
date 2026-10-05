@@ -12,12 +12,16 @@ describe("platform", () => {
   test("rejects unsupported", () => {
     expect(() => detectPlatform("win32", "x64")).toThrow(/Unsupported OS/);
     expect(() => detectPlatform("linux", "ia32")).toThrow(/Unsupported architecture/);
+    expect(() => detectPlatform("darwin", "x64")).toThrow(/no darwin-amd64 bundle; use an arm64 macOS runner/);
   });
   test("overrides", () => {
     const d = { os: "linux", arch: "amd64" } as const;
     expect(parsePlatformOverride("", "", d)).toEqual(d);
     expect(parsePlatformOverride("darwin", "arm64", d)).toEqual({ os: "darwin", arch: "arm64" });
     expect(() => parsePlatformOverride("windows", "", d)).toThrow(/Invalid os/);
+    expect(() => parsePlatformOverride("darwin", "amd64", d)).toThrow(/no darwin-amd64 bundle/);
+    expect(() => parsePlatformOverride("darwin", "", { os: "darwin", arch: "arm64" } as const)).not.toThrow();
+    expect(() => parsePlatformOverride("", "amd64", { os: "darwin", arch: "arm64" } as const)).toThrow(/no darwin-amd64 bundle/);
   });
 });
 

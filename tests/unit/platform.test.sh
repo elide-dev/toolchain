@@ -12,7 +12,7 @@ source "$ROOT_DIR/versions.env"
 
 assert_eq "$(bundle_triples linux amd64)" "x86_64-unknown-linux-musl x86_64-unknown-linux-gnu"
 assert_eq "$(bundle_triples linux arm64)" "aarch64-unknown-linux-musl aarch64-unknown-linux-gnu"
-assert_eq "$(bundle_triples darwin amd64)" "x86_64-apple-darwin"
+assert_fails bundle_triples darwin amd64
 assert_eq "$(bundle_triples darwin arm64)" "arm64-apple-darwin"
 assert_fails bundle_triples windows amd64
 

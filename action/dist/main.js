@@ -20754,6 +20754,7 @@ import { join } from "path";
 var TOOL_NAME = "elide-toolchain";
 var DEFAULT_REPO = "elide-dev/toolchain";
 var DEFAULT_BASE_URL = "https://static.elideusercontent.com";
+var DARWIN_AMD64_ERROR = "no darwin-amd64 bundle; use an arm64 macOS runner";
 function detectPlatform(platform, arch) {
   const os = platform === "linux" ? "linux" : platform === "darwin" ? "darwin" : null;
   if (!os)
@@ -20761,6 +20762,8 @@ function detectPlatform(platform, arch) {
   const a = arch === "x64" ? "amd64" : arch === "arm64" ? "arm64" : null;
   if (!a)
     throw new Error(`Unsupported architecture: ${arch} (supported: x64, arm64)`);
+  if (os === "darwin" && a === "amd64")
+    throw new Error(DARWIN_AMD64_ERROR);
   return { os, arch: a };
 }
 function parsePlatformOverride(os, arch, detected) {
@@ -20770,6 +20773,8 @@ function parsePlatformOverride(os, arch, detected) {
     throw new Error(`Invalid os input: ${o} (linux or darwin)`);
   if (a !== "amd64" && a !== "arm64")
     throw new Error(`Invalid arch input: ${a} (amd64 or arm64)`);
+  if (o === "darwin" && a === "amd64")
+    throw new Error(DARWIN_AMD64_ERROR);
   return { os: o, arch: a };
 }
 function normalizeVersion(v) {

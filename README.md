@@ -10,7 +10,6 @@ Releases are `elide-toolchain-<version>-<os>-<arch>.tar.xz`, each with a `.sha25
 |---|---|
 | `linux-amd64` | `x86_64-unknown-linux-musl`, `x86_64-unknown-linux-gnu` |
 | `linux-arm64` | `aarch64-unknown-linux-musl`, `aarch64-unknown-linux-gnu` |
-| `darwin-amd64` | `x86_64-apple-darwin` |
 | `darwin-arm64` | `arm64-apple-darwin` |
 
 Each bundle targets its own OS and architecture (no cross-OS or cross-arch targeting).
@@ -23,7 +22,7 @@ Floors:
 
 Every target library (each sysroot's static archives) and the libc++ runtimes (`lib/<triple>/libc++.a`, `libc++abi.a`, `libunwind.a`) carry LLVM 23 ThinLTO bitcode, so downstream links are `-flto=thin` end to end with lld. Components are pure bitcode; musl `libc.a` and libc++/libc++abi/libunwind are fat (bitcode plus native); compiler-rt, glibc's own archives and hand-written assembly members are native only. The LLVM/clang development libraries in `lib/` (`libLLVM*.a`, `libclang*.a`) are host tool libraries and are native code, not bitcode. Consumers using Rust need a rustc whose LLVM major is **<=** the bundle's (`llvmMajor` in `manifest.json`).
 
-Assets are named `elide-toolchain-<version>-<os>-<arch>.tar.xz` (`os` = `linux|darwin`, `arch` = `amd64|arm64`), with one top-level directory, `elide-toolchain/`.
+Assets are named `elide-toolchain-<version>-<os>-<arch>.tar.xz` (`os` = `linux|darwin`, `arch` = `amd64|arm64`; macOS ships arm64 only), with one top-level directory, `elide-toolchain/`.
 
 ## Install
 
@@ -160,6 +159,8 @@ git submodule update --init --depth=1 --recursive
 ./build.sh
 ```
 
+glibc is fetched from sourceware.org (canonical, as pinned in `.gitmodules`); because sourceware returns HTTP 403 to some CI IPs, the CI submodule step falls back to the GitHub mirror `https://github.com/bminor/glibc.git` and still asserts that the checked-out commit equals the pinned gitlink.
+
 Options:
 
 | Option | Meaning |
@@ -207,7 +208,7 @@ Stages:
 
 - `scripts/bump-submodules.sh` moves every submodule to its latest stable tag (or branch tip) and regenerates the pin block.
 - `scripts/check-versions.sh` verifies the pins against `git submodule status` (run in CI and in stage 00).
-- Releases are CalVer, `vYYYY.M.N`, with the month not zero-padded (`v2026.9.0`, not `v2026.09.0`; CI rejects padded versions). `git tag vYYYY.M.N && git push --tags` builds all four bundles, publishes the GitHub Release (archives, checksums, SBOMs) and mirrors it to R2.
+- Releases are CalVer, `vYYYY.M.N`, with the month not zero-padded (`v2026.9.0`, not `v2026.09.0`; CI rejects padded versions). `git tag vYYYY.M.N && git push --tags` builds all three bundles, publishes the GitHub Release (archives, checksums, SBOMs) and mirrors it to R2.
 
 ## Verification
 

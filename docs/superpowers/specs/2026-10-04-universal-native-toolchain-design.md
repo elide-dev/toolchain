@@ -18,7 +18,7 @@ projects WHIPLASH / HEATWAVE):
 
 ### Success criteria
 
-1. CI produces four bundles — `linux-amd64`, `linux-arm64`, `darwin-amd64`,
+1. CI produces three bundles — `linux-amd64`, `linux-arm64`,
    `darwin-arm64` — from one tagged commit, published to GitHub Releases with
    checksums and an SBOM, mirrored to R2.
 2. Each Linux bundle compiles, links and runs C and C++ programs for both
@@ -84,7 +84,6 @@ Triples per bundle:
 |---|---|
 | linux-amd64 | `x86_64-unknown-linux-musl`, `x86_64-unknown-linux-gnu` |
 | linux-arm64 | `aarch64-unknown-linux-musl`, `aarch64-unknown-linux-gnu` |
-| darwin-amd64 | `x86_64-apple-darwin` |
 | darwin-arm64 | `arm64-apple-darwin` |
 
 ### 2.1 Clang config files
@@ -322,7 +321,7 @@ with `git fetch --tags` in the bump helper.
 
 ### 4.1 Workflows
 
-- `job.build.yml` (reusable): matrix of four hosts, each runs `./build.sh`,
+- `job.build.yml` (reusable): matrix of three hosts, each runs `./build.sh`,
   uploads the tarball + `.sha256` as a workflow artifact.
 
   | Bundle | Runner |
@@ -330,14 +329,13 @@ with `git fetch --tags` in the bump helper.
   | linux-amd64 | `linux-amd64-cipool` |
   | linux-arm64 | `linux-arm64-cipool` |
   | darwin-arm64 | `macos-15` |
-  | darwin-amd64 | `macos-15-intel` |
 
 - `on.pr.yml` / `on.push.yml`: call `job.build.yml` (artifacts only, no publish).
 - `on.release.yml` (new): on tag `v*` → `job.build.yml` → create GitHub
   Release, attach all bundles, `.sha256`s, SBOMs; mirror `dist/` to R2
   under `toolchain/<version>/`; attest build provenance.
 - `job.action-e2e.yml` (new): after build, run the action (via its `archive`
-  input, §5.1) against the just-built artifacts on all four runners and run
+  input, §5.1) against the just-built artifacts on all three runners and run
   `elide-toolchain doctor`.
 
 ### 4.2 Risks
@@ -348,9 +346,7 @@ with `git fetch --tags` in the bump helper.
   skips stage 2, and `lldb` is dropped from `LLVM_PROJECTS` everywhere (no
   consumer uses it; it pulls in Python/SWIG and `liblldb.so`) — verify on first
   run and fall back to a self-hosted macOS runner if not.
-- **Intel macOS runners** are being retired by GitHub; `macos-15-intel` is
-  time-limited. When it disappears, darwin-amd64 moves to a self-hosted runner
-  or is built by cross-compiling on arm64 (explicit follow-up, out of scope now).
+- **darwin-amd64 dropped (2026-10-05).** No Intel macOS bundle is built.
 - **linux-arm64** was previously disabled (commit `04a6ded`, "doesn't run?").
   Treat it as an explicit first-class verification target; failures there
   block release.

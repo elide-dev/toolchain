@@ -5,7 +5,6 @@ openssl_target() {
     x86_64-unknown-linux-*) echo linux-x86_64 ;;
     aarch64-unknown-linux-*) echo linux-aarch64 ;;
     arm64-apple-darwin) echo darwin64-arm64-cc ;;
-    x86_64-apple-darwin) echo darwin64-x86_64-cc ;;
     *) die "no OpenSSL target for $1" ;;
   esac
 }

@@ -22,7 +22,7 @@ bundle_triples() {
   case "$1-$2" in
     linux-amd64)  echo "x86_64-unknown-linux-musl x86_64-unknown-linux-gnu" ;;
     linux-arm64)  echo "aarch64-unknown-linux-musl aarch64-unknown-linux-gnu" ;;
-    darwin-amd64) echo "x86_64-apple-darwin" ;;
+    darwin-amd64) die "darwin-amd64 is not a supported bundle (use darwin-arm64)" ;;
     darwin-arm64) echo "arm64-apple-darwin" ;;
     *) die "unsupported bundle: $1-$2" ;;
   esac
