@@ -45,7 +45,25 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
       - name: "Setup: Submodules"
-        run: git submodule update --init --depth=1 --recursive --jobs 8
+        # glibc's gitlink is the tip of release/2.34/master on sourceware.org, whose fetch-by-SHA
+        # support is not guaranteed: init everything else shallowly, then try glibc by SHA and fall
+        # back to a shallow fetch of its branch. Stage 00 (scripts/check-versions.sh) checks pins.
+        run: |
+          subs="$(git config -f .gitmodules --get-regexp '^submodule\..*\.path$' | awk '$2 != "glibc" {print $2}')"
+          # shellcheck disable=SC2086 # submodule paths contain no spaces
+          git submodule update --init --depth=1 --recursive --jobs 8 -- $subs
+          rev="$(git ls-tree HEAD glibc | awk '{print $3}')"
+          branch="$(git config -f .gitmodules submodule.glibc.branch)"
+          if ! git submodule update --init --depth=1 glibc; then
+            echo "::warning::glibc fetch by SHA failed; fetching $branch instead"
+            git submodule init glibc
+            rm -rf glibc ".git/modules/glibc"
+            git clone --no-checkout --depth=50 --branch "$branch" "$(git config -f .gitmodules submodule.glibc.url)" glibc
+            git -C glibc checkout --detach "$rev" || {
+              git -C glibc fetch --unshallow origin "$branch" && git -C glibc checkout --detach "$rev"
+            }
+          fi
+          test "$(git -C glibc rev-parse HEAD)" = "$rev"
       - name: "Setup: Packages (Linux)"
         if: matrix.os == 'linux'
         run: |
@@ -54,12 +72,23 @@ jobs:
             cmake rsync xz-utils curl clang lld llvm
       - name: "Setup: Packages (macOS)"
         if: matrix.os == 'darwin'
-        run: brew install bash ninja cmake
+        # GNU rsync: stage_source needs --from0/--files-from, which macOS's openrsync lacks. Homebrew's
+        # bin dir (/opt/homebrew/bin, /usr/local/bin on Intel) precedes /usr/bin on GitHub runners;
+        # the check below fails the job if that ever changes.
+        run: |
+          brew install bash ninja cmake rsync xz
+          v="$(rsync --version 2>&1 || true)"
+          echo "rsync: $(command -v rsync): ${v%%$'\n'*}"
+          case "$v" in *"rsync  version"*) ;; *) echo "::error::GNU rsync is not first on PATH"; exit 1 ;; esac
       - name: "Setup: Version"
         id: version
         run: |
           if [ -n "$INPUT_VERSION" ]; then
             v="${INPUT_VERSION#v}"
+            if ! [[ "$v" =~ ^[0-9]{4}\.[1-9][0-9]?\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
+              echo "::error::invalid version '$INPUT_VERSION': want YYYY.M.N (CalVer; month not zero-padded, e.g. 2026.10.0 or 2026.9.1), optionally v-prefixed with a -/+ suffix"
+              exit 1
+            fi
           else
             v="$(. ./versions.env && echo "$TOOLCHAIN_VERSION")-dev.$(git rev-parse --short HEAD)"
           fi
