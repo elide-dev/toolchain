@@ -129,4 +129,27 @@ build_musl_phase2() {
   # musl installs the loader as an absolute symlink to /usr/lib/libc.so; make it relocatable.
   ln -sfn ../usr/lib/libc.so "$sysroot/$(musl_loader "$(triple_cpu "$t")")"
   cp "$ROOT_DIR"/mimalloc/include/mimalloc*.h "$prefix/include/"
+  install_musl_mimalloc_stub "$prefix"
+}
+
+# install_musl_mimalloc_stub PREFIX — mimalloc (the whole mi_* API) lives in musl's libc.a. Like
+# musl's empty libpthread.a, an empty libmimalloc.a and a mimalloc.pc let -lmimalloc and
+# pkg-config resolve without a second copy of the allocator (duplicate symbols in static links).
+install_musl_mimalloc_stub() {
+  local prefix="$1"
+  mkdir -p "$prefix/lib/pkgconfig"
+  rm -f "$prefix/lib/libmimalloc.a"
+  printf '!<arch>\n' > "$prefix/lib/libmimalloc.a"
+  cat > "$prefix/lib/pkgconfig/mimalloc.pc" <<PC
+prefix=/usr
+libdir=\${prefix}/lib
+includedir=\${prefix}/include
+
+Name: libmimalloc
+Description: mimalloc $MIMALLOC_VERSION, built into musl libc.a (libmimalloc.a is an empty stub)
+Version: $MIMALLOC_VERSION
+URL: https://github.com/microsoft/mimalloc/
+Libs: -L\${libdir} -lmimalloc
+Cflags: -I\${includedir}
+PC
 }

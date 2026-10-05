@@ -55,7 +55,9 @@ check_components() {
     read -r -a more <<< "${link#*|}"
     libs+=("${more[@]}")
   done
-  if [ "$(triple_libc "$t")" != musl ]; then defs+=(-DHAVE_MIMALLOC); libs+=(-lmimalloc); else static=(-static); fi
+  # musl: -lmimalloc is the empty stub, the mi_* API comes from libc.a.
+  defs+=(-DHAVE_MIMALLOC); libs+=(-lmimalloc)
+  if [ "$(triple_libc "$t")" = musl ]; then static=(-static); fi
   if [ "$(triple_os "$t")" = linux ]; then
     local i
     for i in "${!libs[@]}"; do
