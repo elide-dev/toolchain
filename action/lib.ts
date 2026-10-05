@@ -38,6 +38,42 @@ export function assetName(version: string, p: Platform): string {
   return `${TOOL_NAME}-${version}-${p.os}-${p.arch}.tar.xz`;
 }
 
+/** Sanitizers the `sanitizer` input accepts (helper: `elide-toolchain env --sanitizer`). */
+export const SANITIZERS = ["asan", "tsan", "msan", "ubsan", "lsan", "hwasan"] as const;
+export type Sanitizer = (typeof SANITIZERS)[number];
+
+/** Sanitizers that ship as a per-sanitizer add-on archive (Linux only; spec 2026-10-05 §4.2). */
+export const ADDON_SANITIZERS: readonly Sanitizer[] = ["asan", "tsan", "msan"];
+
+export function parseSanitizer(input: string, target: string): Sanitizer | null {
+  const s = input.trim().toLowerCase();
+  if (!s) return null;
+  if (!(SANITIZERS as readonly string[]).includes(s)) {
+    throw new Error(`Invalid sanitizer input: ${input} (expected ${SANITIZERS.join(", ")})`);
+  }
+  if (!target) throw new Error("The sanitizer input requires the target input");
+  return s as Sanitizer;
+}
+
+/** The add-on asset for `sanitizer` on `p`, or null when that sanitizer has no add-on there. */
+export function addonAssetName(version: string, p: Platform, sanitizer: Sanitizer): string | null {
+  if (p.os !== "linux" || !ADDON_SANITIZERS.includes(sanitizer)) return null;
+  return `${TOOL_NAME}-${version}-${p.os}-${p.arch}-sanitizer-${sanitizer}.tar.xz`;
+}
+
+/** A missing add-on is fatal for msan (false positives otherwise) and a warning for asan/tsan. */
+export function addonRequired(sanitizer: Sanitizer): boolean {
+  return sanitizer === "msan";
+}
+
+/** Arguments for `elide-toolchain env`. */
+export function envArgs(target: string, sanitizer: Sanitizer | null): string[] {
+  const args = ["env", "--format", "json"];
+  if (target) args.push("--target", target);
+  if (sanitizer) args.push("--sanitizer", sanitizer);
+  return args;
+}
+
 export function releaseUrl(repo: string, version: string, asset: string): string {
   return `https://github.com/${repo}/releases/download/v${version}/${asset}`;
 }

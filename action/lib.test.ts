@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
-  assetName, detectPlatform, mirrorUrl, normalizeVersion, parseEnvJson,
+  addonAssetName, addonRequired, assetName, detectPlatform, envArgs, parseSanitizer, mirrorUrl, normalizeVersion, parseEnvJson,
   parsePlatformOverride, parseSha256File, releaseUrl, resolveVersion,
 } from "./lib";
 
@@ -78,5 +78,38 @@ describe("parsers", () => {
     expect(parseEnvJson('{"CC":"/x/bin/cc"}')).toEqual({ CC: "/x/bin/cc" });
     expect(() => parseEnvJson("[]")).toThrow(/not a JSON object/);
     expect(() => parseEnvJson('{"A":1}')).toThrow(/not a string/);
+  });
+});
+
+describe("sanitizer add-ons", () => {
+  const linux = { os: "linux", arch: "amd64" } as const;
+  const mac = { os: "darwin", arch: "arm64" } as const;
+  test("asset names keep the main bundle the shortest platform match", () => {
+    expect(addonAssetName("2026.10.0", linux, "msan")).toBe("elide-toolchain-2026.10.0-linux-amd64-sanitizer-msan.tar.xz");
+    expect(addonAssetName("2026.10.0", { os: "linux", arch: "arm64" }, "asan"))
+      .toBe("elide-toolchain-2026.10.0-linux-arm64-sanitizer-asan.tar.xz");
+    const main = assetName("2026.10.0", linux);
+    expect(addonAssetName("2026.10.0", linux, "tsan")!.startsWith(main.replace(/\.tar\.xz$/, "-"))).toBe(true);
+    expect(addonAssetName("2026.10.0", linux, "tsan")!.length).toBeGreaterThan(main.length);
+  });
+  test("only asan/tsan/msan on linux have add-ons", () => {
+    expect(addonAssetName("2026.10.0", linux, "ubsan")).toBeNull();
+    expect(addonAssetName("2026.10.0", linux, "lsan")).toBeNull();
+    expect(addonAssetName("2026.10.0", mac, "asan")).toBeNull();
+  });
+  test("parses the input", () => {
+    expect(parseSanitizer("", "")).toBeNull();
+    expect(parseSanitizer(" MSan ", "x86_64-unknown-linux-gnu")).toBe("msan");
+    expect(() => parseSanitizer("cfi", "x86_64-unknown-linux-gnu")).toThrow(/Invalid sanitizer/);
+    expect(() => parseSanitizer("asan", "")).toThrow(/requires the target/);
+  });
+  test("msan requires its add-on", () => {
+    expect(addonRequired("msan")).toBe(true);
+    expect(addonRequired("asan")).toBe(false);
+  });
+  test("env arguments", () => {
+    expect(envArgs("", null)).toEqual(["env", "--format", "json"]);
+    expect(envArgs("x86_64-unknown-linux-gnu", "tsan"))
+      .toEqual(["env", "--format", "json", "--target", "x86_64-unknown-linux-gnu", "--sanitizer", "tsan"]);
   });
 });

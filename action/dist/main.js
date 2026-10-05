@@ -20195,7 +20195,7 @@ var require_retry_helper = __commonJS(function(exports) {
 
 // node_modules/@actions/tool-cache/lib/tool-cache.js
 var require_tool_cache = __commonJS(function(exports) {
-  var __dirname = "/home/sam/workspace/toolchains/native/action/node_modules/@actions/tool-cache/lib";
+  var __dirname = "/home/sam/workspace/toolchains/native/.claude/worktrees/agent-ad3eb12b31004456d/action/node_modules/@actions/tool-cache/lib";
   var __createBinding = exports && exports.__createBinding || (Object.create ? function(o, m, k, k2) {
     if (k2 === undefined)
       k2 = k;
@@ -20746,7 +20746,7 @@ var core = __toESM(require_core(), 1);
 var exec = __toESM(require_exec(), 1);
 var tc = __toESM(require_tool_cache(), 1);
 import { createHash } from "crypto";
-import { existsSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import { readFile } from "fs/promises";
 import { join } from "path";
 
@@ -20786,6 +20786,35 @@ function normalizeVersion(v) {
 }
 function assetName(version, p) {
   return `${TOOL_NAME}-${version}-${p.os}-${p.arch}.tar.xz`;
+}
+var SANITIZERS = ["asan", "tsan", "msan", "ubsan", "lsan", "hwasan"];
+var ADDON_SANITIZERS = ["asan", "tsan", "msan"];
+function parseSanitizer(input, target) {
+  const s = input.trim().toLowerCase();
+  if (!s)
+    return null;
+  if (!SANITIZERS.includes(s)) {
+    throw new Error(`Invalid sanitizer input: ${input} (expected ${SANITIZERS.join(", ")})`);
+  }
+  if (!target)
+    throw new Error("The sanitizer input requires the target input");
+  return s;
+}
+function addonAssetName(version, p, sanitizer) {
+  if (p.os !== "linux" || !ADDON_SANITIZERS.includes(sanitizer))
+    return null;
+  return `${TOOL_NAME}-${version}-${p.os}-${p.arch}-sanitizer-${sanitizer}.tar.xz`;
+}
+function addonRequired(sanitizer) {
+  return sanitizer === "msan";
+}
+function envArgs(target, sanitizer) {
+  const args = ["env", "--format", "json"];
+  if (target)
+    args.push("--target", target);
+  if (sanitizer)
+    args.push("--sanitizer", sanitizer);
+  return args;
 }
 function releaseUrl(repo, version, asset) {
   return `https://github.com/${repo}/releases/download/v${version}/${asset}`;
@@ -20864,12 +20893,47 @@ async function helperOutput(helper, args) {
   const out = await exec.getExecOutput(helper, args, { silent: true });
   return out.stdout;
 }
+function addonInstalled(root, sanitizer) {
+  const meta = join(root, "share", "elide-toolchain", "sanitizers", `${sanitizer}.addon.json`);
+  if (!existsSync(meta))
+    return false;
+  const version = readFileSync(join(root, "share", "elide-toolchain", "VERSION"), "utf-8").trim();
+  return JSON.parse(readFileSync(meta, "utf-8")).version === version;
+}
+async function installAddon(root, sanitizer, platform, repo, baseUrl, localArchive) {
+  const version = readFileSync(join(root, "share", "elide-toolchain", "VERSION"), "utf-8").trim();
+  const asset = addonAssetName(version, platform, sanitizer);
+  if (!asset)
+    return "";
+  if (addonInstalled(root, sanitizer)) {
+    core.info(`Sanitizer add-on ${asset} already installed`);
+    return asset;
+  }
+  let archive = localArchive;
+  if (archive) {
+    core.info(`Installing sanitizer add-on from local archive ${archive}`);
+  } else {
+    try {
+      archive = await downloadVerified([releaseUrl(repo, version, asset), mirrorUrl(baseUrl, version, asset)]);
+    } catch (e) {
+      if (addonRequired(sanitizer))
+        throw new Error(`${sanitizer} needs its add-on ${asset}: ${e}`);
+      core.warning(`Sanitizer add-on ${asset} unavailable (${e}); libc++ and components stay uninstrumented`);
+      return "";
+    }
+  }
+  await tc.extractTar(archive, join(root, ".."), ["xJ"]);
+  if (!addonInstalled(root, sanitizer))
+    throw new Error(`${asset} did not install a matching ${sanitizer}.addon.json`);
+  return asset;
+}
 async function run() {
   try {
     const repo = core.getInput("repo") || DEFAULT_REPO;
     const baseUrl = core.getInput("base-url") || DEFAULT_BASE_URL;
     const token = core.getInput("github-token") || undefined;
     const target = core.getInput("target");
+    const sanitizer = parseSanitizer(core.getInput("sanitizer"), target);
     const archiveInput = core.getInput("archive");
     const platform = parsePlatformOverride(core.getInput("os"), core.getInput("arch"), detectPlatform(process.platform, process.arch));
     let root;
@@ -20900,10 +20964,11 @@ async function run() {
     if (!existsSync(helper))
       throw new Error(`Bundle is missing ${helper}`);
     core.addPath(join(root, "bin"));
-    const envArgs = ["env", "--format", "json"];
-    if (target)
-      envArgs.push("--target", target);
-    for (const [k, v] of Object.entries(parseEnvJson(await helperOutput(helper, envArgs)))) {
+    let addon = "";
+    if (sanitizer) {
+      addon = await installAddon(root, sanitizer, platform, repo, baseUrl, core.getInput("sanitizer-archive"));
+    }
+    for (const [k, v] of Object.entries(parseEnvJson(await helperOutput(helper, envArgs(target, sanitizer))))) {
       core.exportVariable(k, v);
     }
     const version = (await helperOutput(helper, ["version"])).trim();
@@ -20912,6 +20977,7 @@ async function run() {
     core.setOutput("home", root);
     core.setOutput("version", version);
     core.setOutput("targets", JSON.stringify(targets));
+    core.setOutput("sanitizer-addon", addon);
     core.info(`${TOOL_NAME} ${version} ready at ${root} (targets: ${targets.join(", ")})`);
   } catch (e) {
     core.setFailed(e instanceof Error ? e.message : String(e));

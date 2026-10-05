@@ -2,10 +2,11 @@ import * as core from "@actions/core";
 import * as exec from "@actions/exec";
 import * as tc from "@actions/tool-cache";
 import { createHash } from "crypto";
-import { existsSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import { readFile } from "fs/promises";
 import { join } from "path";
 import {
+  addonAssetName, addonRequired, envArgs, parseSanitizer, type Platform, type Sanitizer,
   assetName, DEFAULT_BASE_URL, DEFAULT_REPO, detectPlatform, mirrorUrl, parseEnvJson,
   parsePlatformOverride, parseSha256File, releaseUrl, resolveVersion, TOOL_NAME,
 } from "./lib";
@@ -50,12 +51,50 @@ async function helperOutput(helper: string, args: string[]): Promise<string> {
   return out.stdout;
 }
 
+/** True when the bundle at `root` already carries `sanitizer`'s add-on for its own version. */
+function addonInstalled(root: string, sanitizer: Sanitizer): boolean {
+  const meta = join(root, "share", "elide-toolchain", "sanitizers", `${sanitizer}.addon.json`);
+  if (!existsSync(meta)) return false;
+  const version = readFileSync(join(root, "share", "elide-toolchain", "VERSION"), "utf-8").trim();
+  return JSON.parse(readFileSync(meta, "utf-8")).version === version;
+}
+
+/** Fetch, verify and extract a sanitizer add-on over the bundle at `root`; returns its asset name. */
+async function installAddon(
+  root: string, sanitizer: Sanitizer, platform: Platform, repo: string, baseUrl: string, localArchive: string,
+): Promise<string> {
+  const version = readFileSync(join(root, "share", "elide-toolchain", "VERSION"), "utf-8").trim();
+  const asset = addonAssetName(version, platform, sanitizer);
+  if (!asset) return "";
+  if (addonInstalled(root, sanitizer)) {
+    core.info(`Sanitizer add-on ${asset} already installed`);
+    return asset;
+  }
+  let archive = localArchive;
+  if (archive) {
+    core.info(`Installing sanitizer add-on from local archive ${archive}`);
+  } else {
+    try {
+      archive = await downloadVerified([releaseUrl(repo, version, asset), mirrorUrl(baseUrl, version, asset)]);
+    } catch (e) {
+      if (addonRequired(sanitizer)) throw new Error(`${sanitizer} needs its add-on ${asset}: ${e}`);
+      core.warning(`Sanitizer add-on ${asset} unavailable (${e}); libc++ and components stay uninstrumented`);
+      return "";
+    }
+  }
+  // The add-on's single root dir is elide-toolchain/, like the bundle's: extract next to it.
+  await tc.extractTar(archive, join(root, ".."), ["xJ"]);
+  if (!addonInstalled(root, sanitizer)) throw new Error(`${asset} did not install a matching ${sanitizer}.addon.json`);
+  return asset;
+}
+
 async function run(): Promise<void> {
   try {
     const repo = core.getInput("repo") || DEFAULT_REPO;
     const baseUrl = core.getInput("base-url") || DEFAULT_BASE_URL;
     const token = core.getInput("github-token") || undefined;
     const target = core.getInput("target");
+    const sanitizer = parseSanitizer(core.getInput("sanitizer"), target);
     const archiveInput = core.getInput("archive");
     const platform = parsePlatformOverride(
       core.getInput("os"), core.getInput("arch"), detectPlatform(process.platform, process.arch));
@@ -85,9 +124,11 @@ async function run(): Promise<void> {
     if (!existsSync(helper)) throw new Error(`Bundle is missing ${helper}`);
     core.addPath(join(root, "bin"));
 
-    const envArgs = ["env", "--format", "json"];
-    if (target) envArgs.push("--target", target);
-    for (const [k, v] of Object.entries(parseEnvJson(await helperOutput(helper, envArgs)))) {
+    let addon = "";
+    if (sanitizer) {
+      addon = await installAddon(root, sanitizer, platform, repo, baseUrl, core.getInput("sanitizer-archive"));
+    }
+    for (const [k, v] of Object.entries(parseEnvJson(await helperOutput(helper, envArgs(target, sanitizer))))) {
       core.exportVariable(k, v);
     }
 
@@ -96,6 +137,7 @@ async function run(): Promise<void> {
     core.setOutput("home", root);
     core.setOutput("version", version);
     core.setOutput("targets", JSON.stringify(targets));
+    core.setOutput("sanitizer-addon", addon);
     core.info(`${TOOL_NAME} ${version} ready at ${root} (targets: ${targets.join(", ")})`);
   } catch (e) {
     core.setFailed(e instanceof Error ? e.message : String(e));

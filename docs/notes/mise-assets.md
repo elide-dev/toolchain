@@ -63,3 +63,22 @@ Equivalent explicit form (no reliance on auto-strip; keeps the outer dir):
 - If the release also ships other assets (checksums, `.tar.gz`), autodetect
   still prefers the matching platform archive; keep names strictly
   `elide-toolchain-<version>-<os>-<arch>.tar.xz`.
+
+## Sanitizer add-on assets (2026-10-05)
+
+Releases now also carry `elide-toolchain-<version>-<os>-<arch>-sanitizer-<san>.tar.xz` (Linux;
+`san` = asan, tsan, msan). Checked against mise `v2026.9.12` `src/backend/asset_matcher.rs`
+(fetched from GitHub raw):
+
+- `pick_best_asset` (`:329-357`) keeps assets with a positive score and picks the highest score,
+  tie-broken by **shorter name** (`then_with(|| name_a.len().cmp(&name_b.len()))`, `:353`).
+- `score_asset` (`:443-457`) = OS (+100, `:488`) + arch (+50, `:515`) + libc (`:551`; neither
+  name has a gnu/musl token) + format (`.tar.xz` +11, `:589-611`) + preferred name + build
+  penalties (`:632`: `debug`/`test`/checksum suffixes; `sanitizer-asan` matches none of them).
+- The OS/arch/libc regexes (`:126-181`) match nothing in `-sanitizer-<san>`.
+
+So the main bundle and an add-on score identically, and the main bundle wins because its name
+is shorter. The plain `"github:elide-dev/toolchain" = "<ver>"` snippet keeps installing the main
+bundle. `action/lib.test.ts` pins the naming invariant (each add-on name extends the main
+bundle's name). If a later mise changes the tie-break, the fallback is an explicit
+`asset_pattern` in the README snippet.
