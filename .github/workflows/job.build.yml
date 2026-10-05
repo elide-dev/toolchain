@@ -29,7 +29,6 @@ jobs:
           - { os: linux, arch: amd64, runner: linux-amd64-cipool, timeout: 720 }
           - { os: linux, arch: arm64, runner: linux-arm64-cipool, timeout: 720 }
           - { os: darwin, arch: arm64, runner: macos-15, timeout: 360 }
-          - { os: darwin, arch: amd64, runner: macos-15-intel, timeout: 360 }
     env:
       REQUIRE_CONTAINER_CHECKS: ${{ matrix.os == 'linux' && 'yes' || 'no' }}
       INPUT_VERSION: ${{ inputs.version }}
@@ -45,23 +44,27 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
       - name: "Setup: Submodules"
-        # glibc's gitlink is the tip of release/2.34/master on sourceware.org, whose fetch-by-SHA
-        # support is not guaranteed: init everything else shallowly, then try glibc by SHA and fall
-        # back to a shallow fetch of its branch. Stage 00 (scripts/check-versions.sh) checks pins.
+        # glibc's gitlink is the tip of release/2.34/master on sourceware.org (canonical, kept in
+        # .gitmodules). sourceware returns HTTP 403 to some CI IPs, so the order is: sourceware by SHA,
+        # GitHub mirror by SHA, then a mirror branch fetch. The final HEAD == gitlink assertion (and
+        # stage 00's scripts/check-versions.sh) keeps the mirror honest. Must stay bash 3.2-safe.
         run: |
           subs="$(git config -f .gitmodules --get-regexp '^submodule\..*\.path$' | awk '$2 != "glibc" {print $2}')"
           # shellcheck disable=SC2086 # submodule paths contain no spaces
           git submodule update --init --depth=1 --recursive --jobs 8 -- $subs
           rev="$(git ls-tree HEAD glibc | awk '{print $3}')"
           branch="$(git config -f .gitmodules submodule.glibc.branch)"
+          mirror="https://github.com/bminor/glibc.git"
           if ! git submodule update --init --depth=1 glibc; then
-            echo "::warning::glibc fetch by SHA failed; fetching $branch instead"
-            git submodule init glibc
+            echo "::warning::glibc fetch from sourceware failed; trying $mirror"
             rm -rf glibc ".git/modules/glibc"
-            git clone --no-checkout --depth=50 --branch "$branch" "$(git config -f .gitmodules submodule.glibc.url)" glibc
-            git -C glibc checkout --detach "$rev" || {
-              git -C glibc fetch --unshallow origin "$branch" && git -C glibc checkout --detach "$rev"
-            }
+            mkdir glibc
+            git -C glibc init -q
+            if ! { git -C glibc fetch --depth=1 "$mirror" "$rev" && git -C glibc checkout -q --detach FETCH_HEAD; }; then
+              echo "::warning::glibc fetch by SHA from mirror failed; fetching $branch from mirror"
+              git -C glibc fetch --depth=50 "$mirror" "$branch"
+              git -C glibc checkout -q --detach "$rev"
+            fi
           fi
           test "$(git -C glibc rev-parse HEAD)" = "$rev"
       - name: "Setup: Packages (Linux)"
