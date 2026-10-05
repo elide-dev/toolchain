@@ -308,7 +308,7 @@ check_addon_elidealloc() {
   [ -f "$root/sysroot/$t+$s/usr/lib/libelidealloc-shim.a" ] || return 0
   tmp="$(mktemp -d)"
   if "$root/bin/$t-$s-clang++" -g "$ROOT_DIR/tests/fixtures/elidealloc-shim-test.cc" \
-       -lelidealloc-shim -lmimalloc -o "$tmp/t" 2>"$tmp/err" \
+       -Wl,-u,_Znwm12__hot_cold_t -lelidealloc-shim -lmimalloc -o "$tmp/t" 2>"$tmp/err" \
      && "$tmp/t" >"$tmp/log" 2>&1 && ! grep -qE 'Sanitizer|runtime error' "$tmp/log"; then
     pass "$name"
   else

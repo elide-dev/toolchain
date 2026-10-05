@@ -35,10 +35,17 @@ build_elidealloc_shim() {
   rm -f "$prefix/lib/libelidealloc-shim.a"
   "$TOOLCHAIN_ROOT/bin/llvm-ar" rcs "$prefix/lib/libelidealloc-shim.a" "$b/core.o" "$b/hotcold.o" "$b/backend-$backend.o"
   cp "$src/elidealloc-shim.h" "$prefix/include/"
-  libs="-lelidealloc-shim"
+  # The hot/cold operator new calls only appear during LTO code generation, after archive member
+  # selection; an explicit undefined reference makes the linker load that member up front.
+  libs="$(elidealloc_force_load "$t") -lelidealloc-shim"
   if [ "$(triple_libc "$t")" = gnu ]; then libs="$libs -lmimalloc"; fi
   sed -e "s|@LIBS@|$libs|" -e "s|@BACKEND@|$backend|" -e "s|@VERSION@|$TOOLCHAIN_VERSION|" \
     "$src/elidealloc-shim.pc.in" > "$prefix/lib/pkgconfig/elidealloc-shim.pc"
+}
+
+# elidealloc_force_load TRIPLE — linker flag pulling the shim's hot/cold member into the link.
+elidealloc_force_load() {
+  if [ "$(triple_os "$1")" = darwin ]; then echo "-Wl,-u,__Znwm12__hot_cold_t"; else echo "-Wl,-u,_Znwm12__hot_cold_t"; fi
 }
 
 mimalloc_args() { # OVERRIDE

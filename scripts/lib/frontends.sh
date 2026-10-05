@@ -18,6 +18,7 @@ render_cfg() {
     darwin)
       printf '%s\n' \
         "--target=$(triple_cpu "$t")-apple-macos$MACOS_MIN" \
+        "-mmacosx-version-min=$MACOS_MIN" \
         "-isystem <CFGDIR>/../sysroot/$t/usr/include" \
         "-L<CFGDIR>/../sysroot/$t/usr/lib" \
         "-fuse-ld=lld"

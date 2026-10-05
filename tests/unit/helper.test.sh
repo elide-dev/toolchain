@@ -54,7 +54,7 @@ touch "$B/bin/arm64-apple-darwin.cfg"
 f="$("$H" flags --target x86_64-unknown-linux-gnu memprof-use=/p/app.memprofdata)"
 assert_contains "$f" "-fmemory-profile-use=/p/app.memprofdata"
 assert_contains "$f" "-Wl,-mllvm,-supports-hot-cold-new"
-assert_contains "$f" "-lelidealloc-shim -lmimalloc"
+assert_contains "$f" "-Wl,-u,_Znwm12__hot_cold_t -lelidealloc-shim -lmimalloc"
 assert_contains "$f" "export ELIDE_RUSTFLAGS='-Clinker-plugin-lto"
 assert_contains "$f" "-Clink-arg=-Wl,-mllvm,-supports-hot-cold-new"
 assert_not_contains "$f" "export PATH="
@@ -76,7 +76,7 @@ assert_contains "$d" "-Wl,--lto-basic-block-address-map"
 assert_contains "$d" "-Wl,-mllvm,-dedubb-directives=/d/x.txt"
 assert_fails "$H" flags --target arm64-apple-darwin propeller-baseline
 assert_fails "$H" flags --target arm64-apple-darwin dedubb-apply=/d/x.txt
-assert_contains "$("$H" flags --target arm64-apple-darwin memprof-use=/p/a)" "-lelidealloc-shim"
+assert_contains "$("$H" flags --target arm64-apple-darwin memprof-use=/p/a)" "-Wl,-u,__Znwm12__hot_cold_t -lelidealloc-shim"
 assert_fails "$H" flags --target x86_64-unknown-linux-gnu propeller-use=/only-one
 assert_fails "$H" flags --target x86_64-unknown-linux-gnu frobnicate
 assert_fails "$H" flags memprof-use=/p/a

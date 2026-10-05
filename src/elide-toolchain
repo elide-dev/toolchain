@@ -177,7 +177,10 @@ cmd_flags() {
       memprof-use=*)
         f=${m#memprof-use=}; [ -n "$f" ] || die "memprof-use needs a profile path"
         cf="$cf -flto=thin -gmlt -fdebug-info-for-profiling -fmemory-profile-use=$f"
-        lf="$lf -flto=thin -fuse-ld=lld -Wl,-mllvm,-enable-memprof-context-disambiguation -Wl,-mllvm,-optimize-hot-cold-new -Wl,-mllvm,-supports-hot-cold-new -lelidealloc-shim"
+        lf="$lf -flto=thin -fuse-ld=lld -Wl,-mllvm,-enable-memprof-context-disambiguation -Wl,-mllvm,-optimize-hot-cold-new -Wl,-mllvm,-supports-hot-cold-new"
+        # hot/cold operator new is only referenced by LTO codegen: force-load the shim member
+        case $target in *-apple-darwin) lf="$lf -Wl,-u,__Znwm12__hot_cold_t" ;; *) lf="$lf -Wl,-u,_Znwm12__hot_cold_t" ;; esac
+        lf="$lf -lelidealloc-shim"
         case $target in *-linux-gnu) lf="$lf -lmimalloc" ;; *-linux-musl) lf="$lf -static" ;; esac ;;
       *) die "flags: unknown mode: $m" ;;
     esac
