@@ -77,5 +77,6 @@ install_frontends() {
     ln -sfn clang++ "$prefix/bin/$t-clang++"
     render_toolchain_cmake "$t" > "$prefix/share/elide-toolchain/cmake/$t.cmake"
     if [ "$(triple_libc "$t")" = musl ]; then install_musl_shims "$prefix" "$t"; fi
+    install_sanitizer_frontends "$prefix" "$t"
   done
 }

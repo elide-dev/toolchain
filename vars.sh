@@ -34,4 +34,8 @@ REQUIRE_LBR=${REQUIRE_LBR:-no}            # yes: the live Propeller check fails 
 
 # Build behaviour
 USE_SCCACHE=${USE_SCCACHE:-no}
+# Sanitizers: runtimes (+ libFuzzer) in the main bundle; per-sanitizer add-on archives (Linux gnu
+# triples; CI builds them only on push to main and on release).
+BUILD_SANITIZERS=${BUILD_SANITIZERS:-yes}
+BUILD_SANITIZER_VARIANTS=${BUILD_SANITIZER_VARIANTS:-no}
 REQUIRE_CONTAINER_CHECKS=${REQUIRE_CONTAINER_CHECKS:-no}

@@ -43,8 +43,11 @@ llvm_stage1_linux() {
 }
 
 llvm_darwin() {
-  local t cpu b="$BUILD_DIR/llvm" args=()
+  local t cpu b="$BUILD_DIR/llvm" args=() san=OFF fuzz=OFF
   t="$ALL_TARGETS"
+  # Sanitizer dylibs + libFuzzer (spec 2026-10-05 §6.3); matrix in versions.env.
+  if [ -n "$(triple_sanitizers "$t")" ]; then san=ON; fi
+  if triple_has_libfuzzer "$t"; then fuzz=ON; fi
   cpu="$(triple_cpu "$t")"
   mapfile -t args < <(llvm_common_args)
   fresh_dir "$b"
@@ -59,7 +62,9 @@ llvm_darwin() {
     -DLLVM_DEFAULT_TARGET_TRIPLE="$t" \
     -DLLVM_ENABLE_ZLIB=ON \
     -DCOMPILER_RT_BUILD_BUILTINS=ON -DCOMPILER_RT_BUILD_PROFILE=ON \
-    -DCOMPILER_RT_BUILD_SANITIZERS=OFF -DCOMPILER_RT_BUILD_XRAY=OFF -DCOMPILER_RT_BUILD_LIBFUZZER=OFF \
+    -DCOMPILER_RT_BUILD_SANITIZERS="$san" -DCOMPILER_RT_BUILD_XRAY=OFF -DCOMPILER_RT_BUILD_LIBFUZZER="$fuzz" \
+    -DCOMPILER_RT_SANITIZERS_TO_BUILD="$(crt_sanitizers_to_build "$t")" \
+    -DSANITIZER_MIN_OSX_VERSION="$MACOS_MIN" \
     -DCOMPILER_RT_BUILD_MEMPROF=OFF -DCOMPILER_RT_BUILD_ORC=OFF -DCOMPILER_RT_BUILD_CTX_PROFILE=OFF \
     -DCOMPILER_RT_BUILD_GWP_ASAN=OFF \
     -DCOMPILER_RT_ENABLE_IOS=OFF -DCOMPILER_RT_ENABLE_WATCHOS=OFF -DCOMPILER_RT_ENABLE_TVOS=OFF \

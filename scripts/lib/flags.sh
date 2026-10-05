@@ -37,8 +37,10 @@ target_cflags() {
   local t="$1" os arch
   os="$(triple_os "$t")"
   arch="$(cpu_to_arch "$(triple_cpu "$t")")"
+  # sanitizer_layer_flags (scripts/lib/sanitizers.sh) is empty unless stage 60 sets SANITIZER_LAYER.
   # shellcheck disable=SC2046
-  printf '%s %s\n' "$(filter_flags_for_triple "$t" $(profile_flags "$os" "$arch"))" "$(arch_flags "$t")"
+  printf '%s%s %s\n' "$(sanitizer_layer_flags "$t")" \
+    "$(filter_flags_for_triple "$t" $(profile_flags "$os" "$arch"))" "$(arch_flags "$t")"
 }
 
 target_cxxflags() { target_cflags "$1"; }

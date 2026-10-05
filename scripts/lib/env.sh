@@ -13,6 +13,8 @@ source "$ROOT_DIR/scripts/lib/flags.sh"
 source "$ROOT_DIR/scripts/lib/cmake.sh"
 # shellcheck source=scripts/lib/frontends.sh
 source "$ROOT_DIR/scripts/lib/frontends.sh"
+# shellcheck source=scripts/lib/sanitizers.sh
+source "$ROOT_DIR/scripts/lib/sanitizers.sh"
 # shellcheck source=scripts/lib/components.sh
 source "$ROOT_DIR/scripts/lib/components.sh"
 # shellcheck source=scripts/verify/elf.sh
