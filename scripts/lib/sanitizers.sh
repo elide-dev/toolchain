@@ -188,7 +188,10 @@ install_sanitizer_addon_frontends() {
 sanitizer_layer_flags() {
   local t="$1" s="${SANITIZER_LAYER:-}" r="${TOOLCHAIN_ROOT:-$BUNDLE_DIR}"
   [ -n "$s" ] || return 0
-  printf -- '--config=%s/share/elide-toolchain/sanitizers/%s-%s.cfg -L%s/lib/%s/%s' "$r" "$t" "$s" "$r" "$t" "$s"
+  # These flags also reach compile-only (-c) commands, where -L is unused: keep -Werror builds
+  # (stage 60's mimalloc shim, components' own -Werror) from failing on it.
+  printf -- '--config=%s/share/elide-toolchain/sanitizers/%s-%s.cfg -L%s/lib/%s/%s -Wno-unused-command-line-argument' \
+    "$r" "$t" "$s" "$r" "$t" "$s"
   if [ "$s" = asan ]; then printf -- ' -isystem %s/include/%s/asan/c++/v1' "$r" "$t"; fi
   printf ' '
 }
