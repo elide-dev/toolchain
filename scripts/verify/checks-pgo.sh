@@ -196,6 +196,111 @@ check_dedubb_inert() {
   rm -rf "$tmp"
 }
 
+# shim_libs ROOT TRIPLE — link flags from the shipped elidealloc-shim.pc (Libs:, minus -L).
+shim_libs() {
+  sed -n 's/^Libs: *//p' "$1/sysroot/$2/usr/lib/pkgconfig/elidealloc-shim.pc" | tr ' ' '\n' | grep -v '^-L' | xargs
+}
+# can_run TRIPLE — binaries for TRIPLE run on this host.
+can_run() {
+  local c; c="$(triple_cpu "$1")"; [ "$c" = arm64 ] && c=aarch64
+  [ "$(triple_os "$1")" = "$HOST_OS" ] && [ "$c" = "$(host_cpu)" ]
+}
+
+# check_elidealloc_shim ROOT TRIPLE — the packaged shim links via its .pc and passes its test.
+check_elidealloc_shim() {
+  local root="$1" t="$2" tmp libs st=()
+  [ -f "$root/sysroot/$t/usr/lib/libelidealloc-shim.a" ] || { fail "elidealloc shim $t" "libelidealloc-shim.a missing"; return; }
+  tmp="$(mktemp -d)"; libs="$(shim_libs "$root" "$t")"
+  [ "$(triple_libc "$t")" = musl ] && st=(-static)
+  # shellcheck disable=SC2086
+  if ! "$root/bin/$t-clang++" -O2 "${st[@]}" "$ROOT_DIR/tests/fixtures/elidealloc-shim-test.cc" $libs \
+       -o "$tmp/t" 2>"$tmp/err"; then
+    fail "elidealloc shim $t" "$(head -3 "$tmp/err")"; rm -rf "$tmp"; return
+  fi
+  if can_run "$t"; then
+    if ! "$tmp/t" >"$tmp/out" 2>&1 || ! ELIDEALLOC_DISABLE=1 "$tmp/t" disabled >/dev/null 2>&1 ||
+       ! ELIDEALLOC_HOT_MIN=200 "$tmp/t" hotmin200 >/dev/null 2>&1; then
+      fail "elidealloc shim $t" "$(grep FAIL "$tmp/out" | head -3)"; rm -rf "$tmp"; return
+    fi
+  fi
+  pass "elidealloc shim $t"
+  rm -rf "$tmp"
+}
+
+memprof_hint_ldflags() {
+  printf '%s\n' -flto=thin -fuse-ld=lld -Wl,-mllvm,-enable-memprof-context-disambiguation \
+    -Wl,-mllvm,-optimize-hot-cold-new -Wl,-mllvm,-supports-hot-cold-new
+}
+
+# check_memprof_runtime ROOT TRIPLE — instrument, run, index (x86_64 gnu only).
+check_memprof_runtime() {
+  local root="$1" t="$2" tmp n
+  memprof_supported "$t" || return 0
+  tmp="$(mktemp -d)"
+  if ! "$root/bin/$t-clang++" -O2 -gmlt -fdebug-info-for-profiling -fmemory-profile \
+       -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer -fno-optimize-sibling-calls -fno-pie -no-pie \
+       -Wl,-z,noseparate-code -Wl,--build-id "$ROOT_DIR/tests/fixtures/memprof.cc" -o "$tmp/instr" 2>"$tmp/err"; then
+    fail "memprof runtime $t" "$(head -3 "$tmp/err")"; rm -rf "$tmp"; return
+  fi
+  if ! (cd "$tmp" && ./instr); then fail "memprof runtime $t" "instrumented binary failed"; rm -rf "$tmp"; return; fi
+  if ! "$root/bin/llvm-profdata" merge "$tmp"/memprof.profraw.* --profiled-binary "$tmp/instr" \
+       -o "$tmp/p.memprofdata" 2>"$tmp/err"; then
+    fail "memprof runtime $t" "merge: $(head -3 "$tmp/err")"; rm -rf "$tmp"; return
+  fi
+  n="$("$root/bin/llvm-profdata" show --memory "$tmp/p.memprofdata" | sed -n 's/^#  *Total contexts: //p')"
+  if [ "${n:-0}" -ge 2 ]; then pass "memprof runtime $t"; else fail "memprof runtime $t" "contexts=${n:-none}"; fi
+  rm -rf "$tmp"
+}
+
+# check_memprof_use ROOT TRIPLE — YAML profile -> match -> ThinLTO context cloning -> hot/cold
+# operator new served by libelidealloc-shim (cold context lands in the COLD partition).
+check_memprof_use() {
+  local root="$1" t="$2" tmp st=() l=() libs
+  tmp="$(mktemp -d)"; mapfile -t l < <(memprof_hint_ldflags); libs="$(shim_libs "$root" "$t")"
+  [ "$(triple_libc "$t")" = musl ] && st=(-static)
+  "$root/bin/llvm-profdata" merge "$ROOT_DIR/tests/fixtures/memprof-ctx.yaml" -o "$tmp/p.memprofdata" \
+    || { fail "memprof use $t" "yaml merge"; rm -rf "$tmp"; return; }
+  if ! "$root/bin/$t-clang++" -O2 -gmlt -fdebug-info-for-profiling -flto=thin -fmemory-profile-use="$tmp/p.memprofdata" \
+       -Rpass=memprof -c "$ROOT_DIR/tests/fixtures/memprof-ctx.cc" -o "$tmp/c.o" 2>"$tmp/rem"; then
+    fail "memprof use $t" "$(head -3 "$tmp/rem")"; rm -rf "$tmp"; return
+  fi
+  grep -q 'matched alloc context' "$tmp/rem" || { fail "memprof use $t" "no MemProf match remark"; rm -rf "$tmp"; return; }
+  # shellcheck disable=SC2086
+  if ! "$root/bin/$t-clang++" -O2 "${st[@]}" "$tmp/c.o" -o "$tmp/c" "${l[@]}" $libs 2>"$tmp/err"; then
+    fail "memprof use $t" "link: $(head -3 "$tmp/err")"; rm -rf "$tmp"; return
+  fi
+  if ! "$root/bin/llvm-nm" "$tmp/c" | grep -q '_Z5allocm\.memprof\.1'; then fail "memprof use $t" "no context clone"; rm -rf "$tmp"; return; fi
+  if ! "$root/bin/llvm-nm" "$tmp/c" | grep -q '_Znam12__hot_cold_t'; then fail "memprof use $t" "no hot/cold operator new"; rm -rf "$tmp"; return; fi
+  if can_run "$t" && ! "$tmp/c"; then fail "memprof use $t" "cold context not in the COLD partition"; rm -rf "$tmp"; return; fi
+  pass "memprof use $t"
+  rm -rf "$tmp"
+}
+
+# check_memprof_strip ROOT TRIPLE — without -supports-hot-cold-new no hint survives the link.
+check_memprof_strip() {
+  local root="$1" t="$2" tmp st=() libs
+  tmp="$(mktemp -d)"; libs="$(shim_libs "$root" "$t")"
+  [ "$(triple_libc "$t")" = musl ] && st=(-static)
+  "$root/bin/llvm-profdata" merge "$ROOT_DIR/tests/fixtures/memprof-ctx.yaml" -o "$tmp/p.memprofdata"
+  # shellcheck disable=SC2086
+  if ! "$root/bin/$t-clang++" -O2 "${st[@]}" -gmlt -fdebug-info-for-profiling -flto=thin -fuse-ld=lld \
+       -fmemory-profile-use="$tmp/p.memprofdata" "$ROOT_DIR/tests/fixtures/memprof-ctx.cc" -o "$tmp/c" $libs 2>"$tmp/err"; then
+    fail "memprof strip $t" "$(head -3 "$tmp/err")"; rm -rf "$tmp"; return
+  fi
+  if "$root/bin/llvm-nm" "$tmp/c" | grep -q '_Znam12__hot_cold_t\|memprof\.1'; then
+    fail "memprof strip $t" "hints or clones without -supports-hot-cold-new"
+  else pass "memprof strip $t"; fi
+  rm -rf "$tmp"
+}
+
+check_memprof_absent() {
+  local root="$1" t="$2"
+  memprof_supported "$t" && return 0
+  if compgen -G "$root/lib/clang/$LLVM_MAJOR/lib/$t/libclang_rt.memprof*" >/dev/null; then
+    fail "memprof absent $t" "unexpected memprof runtime"
+  else pass "memprof absent $t"; fi
+}
+
 run_feature_checks() { # ROOT
   local root="$1" t
   check_propeller_golden "$root"
@@ -205,5 +310,10 @@ run_feature_checks() { # ROOT
     check_propeller_tool "$root" "$t"
     check_dedubb_codegen "$root" "$t"
     check_dedubb_inert "$root" "$t"
+    check_elidealloc_shim "$root" "$t"
+    check_memprof_runtime "$root" "$t"
+    check_memprof_use "$root" "$t"
+    check_memprof_strip "$root" "$t"
+    check_memprof_absent "$root" "$t"
   done
 }
