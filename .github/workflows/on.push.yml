@@ -17,13 +17,15 @@ concurrency:
 jobs:
   unit:
     name: "Unit tests"
-    runs-on: ubuntu-24.04
+    runs-on: linux-amd64-cipool
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           persist-credentials: false
       - run: git submodule update --init --depth=1 cflags
-      - run: sudo apt-get install -y shellcheck
+      - name: "Setup: shellcheck"
+        # Self-hosted runners keep packages between jobs; only install when missing.
+        run: command -v shellcheck >/dev/null || { sudo apt-get update -qq && sudo apt-get install -qq -y shellcheck; }
       - run: tests/run.sh
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
       - run: cd action && bun install --frozen-lockfile && bun run typecheck && bun test
