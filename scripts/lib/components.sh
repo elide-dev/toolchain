@@ -2,7 +2,7 @@
 # Component registry and helpers shared by scripts/components/*.sh recipes.
 
 # Build order: zlib before capnp; crypto before sqlcipher/capnp/hiredis.
-COMPONENTS=(zlib zlib-ng zstd brotli snappy lz4 crc32c openssl aws-lc sqlite sqlcipher capnp hiredis leveldb)
+COMPONENTS=(zlib zlib-ng zstd brotli snappy lz4 crc32c openssl aws-lc sqlite sqlite3elide sqlcipher capnp hiredis leveldb)
 
 component_var() { local v="${1//-/_}"; printf 'BUILD_%s\n' "${v^^}"; }
 component_fn()  { printf 'build_%s\n' "${1//-/_}"; }
@@ -40,6 +40,7 @@ component_artifact() {
     crc32c) echo lib/libcrc32c.a ;;
     openssl|aws-lc) echo lib/libcrypto.a ;;
     sqlite) echo lib/libsqlite3.a ;;
+    sqlite3elide) echo lib/libsqlite3elide.a ;;
     sqlcipher) echo "sqlcipher/lib/libsqlcipher.a|sqlcipher/lib/libsqlite3.a" ;;
     capnp) echo lib/libcapnp.a ;;
     hiredis) echo lib/libhiredis.a ;;
@@ -58,6 +59,7 @@ component_link() {
     lz4) echo "HAVE_LZ4|-llz4" ;;
     crc32c) echo "HAVE_CRC32C|-lcrc32c" ;;
     openssl|aws-lc) echo "HAVE_CRYPTO|-lssl -lcrypto" ;;
+    sqlite3elide) echo "HAVE_SQLITE3ELIDE|-lsqlite3elide -lm" ;;
     *) echo "" ;;
   esac
 }

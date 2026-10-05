@@ -1,6 +1,6 @@
 # Elide Toolchain
 
-A self-contained native toolchain: LLVM 23 (clang, lld, BOLT, Polly), libc++ / libc++abi / libunwind, compiler-rt, and a full tree of pre-built static libraries (zlib-ng, zstd, brotli, snappy, lz4, crc32c, AWS-LC, mimalloc, and optionally OpenSSL, zlib, SQLite, SQLCipher, Cap'n Proto, hiredis, LevelDB), all compiled with one consistent flags profile. Linux bundles carry two sysroots, fully static **musl** (with mimalloc built into `libc.a`) and **glibc 2.34**; macOS bundles carry a component overlay on top of the system SDK. It is built from source, one bundle per host OS/arch, and is used by Elide, Komodo, Bali (crema-jit) and GraalVM `native-image` builds (`--libc=musl`).
+A self-contained native toolchain: LLVM 23 (clang, lld, BOLT, Polly), libc++ / libc++abi / libunwind, compiler-rt, and a full tree of pre-built static libraries (zlib-ng, zstd, brotli, snappy, lz4, crc32c, AWS-LC, mimalloc, libsqlite3elide, and optionally OpenSSL, zlib, SQLite, SQLCipher, Cap'n Proto, hiredis, LevelDB), all compiled with one consistent flags profile. Linux bundles carry two sysroots, fully static **musl** (with mimalloc built into `libc.a`) and **glibc 2.34**; macOS bundles carry a component overlay on top of the system SDK. It is built from source, one bundle per host OS/arch, and is used by Elide, Komodo, Bali (crema-jit) and GraalVM `native-image` builds (`--libc=musl`).
 
 Releases are `elide-toolchain-<version>-<os>-<arch>.tar.xz`, each with a `.sha256` and a CycloneDX SBOM, on [GitHub Releases](https://github.com/elide-dev/toolchain/releases) (tags `vYYYY.M.N`; the month is not zero-padded, e.g. `v2026.9.0`), mirrored to `https://static.elideusercontent.com/toolchain/<version>/`.
 
@@ -94,6 +94,8 @@ eval "$(elide-toolchain env --target x86_64-unknown-linux-gnu)"
 **Doctor.** `elide-toolchain doctor` compiles, links and runs a C and C++ hello world for every triple in the bundle. `doctor --sanitizers` also builds a clean C++ program and a known bug through every shipped sanitizer wrapper (with the add-on when installed) and checks the bug is reported. Other subcommands: `home`, `targets`, `version`, `flags` (see below).
 
 **Link rules.** Linux archives are fat ThinLTO objects. A link without `-flto` (dev builds, GNU ld, an older rust-lld) uses their native code. An LTO link takes their bitcode only when it passes `-flto=thin -ffat-lto-objects` (clang forwards lld's `--fat-lto-objects`); with `-flto=thin` alone, lld uses the native code and components, libc and libc++ stay out of cross-module optimization. `elide-toolchain flags` adds `-ffat-lto-objects` to its Linux LTO link flags. Bitcode needs LLVM at least the bundle's major: the bundle's clang/lld, or rust-lld from a rustc whose LLVM major is <= the bundle's. darwin archives are pure ThinLTO bitcode, so link them through the bundle's `<triple>-clang` (its cfg sets `-fuse-ld=lld`), not Apple's `ld64`, which fails loudly on them.
+
+**SQLite for Elide.** `libsqlite3elide.a` is SQLite (`SQLITE_VERSION` in `versions.env`, aligned with the sqlite-jdbc jar Elide ships) with the [sqlite-jni](https://github.com/elide-tools/sqlite-jni) shim (`sqlite_*` entry points that Elide's Rust JNI layer forwards to) compiled into the amalgamation, built with `SQLITE_GVM_STATIC` and sqlite-jdbc's compile options (`MAX_ATTACHED=25`, `MAX_VARIABLE_NUMBER=250000`, `API_ARMOR`, FTS3/FTS5, RTREE, STAT4, geopoly, column metadata, update/delete limit; math functions off). It replaces sqlite-jni's release tarballs: `lib/libsqlite3elide.a` and `include/{sqlite3.h,sqlite3ext.h,sqlite3jni.h}` sit in each sysroot's `usr/`, with `sqlite3elide.pc`. `sqlite3jni.h` includes `<jni.h>`, which comes from the consumer's JDK.
 
 C++ implies libc++ on every target; there is no libstdc++ in the bundle, so drop any `-lstdc++`.
 
@@ -281,7 +283,7 @@ Stages:
 
 **`vars.sh` toggles** (each may also be set in the environment):
 
-- Components: `BUILD_ZLIB_NG`, `BUILD_ZSTD`, `BUILD_BROTLI`, `BUILD_SNAPPY`, `BUILD_LZ4`, `BUILD_CRC32C`, `BUILD_AWS_LC` (default yes); `BUILD_OPENSSL`, `BUILD_ZLIB`, `BUILD_SQLITE`, `BUILD_SQLCIPHER`, `BUILD_CAPNP`, `BUILD_HIREDIS`, `BUILD_LEVELDB` (default no).
+- Components: `BUILD_ZLIB_NG`, `BUILD_ZSTD`, `BUILD_BROTLI`, `BUILD_SNAPPY`, `BUILD_LZ4`, `BUILD_CRC32C`, `BUILD_AWS_LC`, `BUILD_SQLITE3ELIDE` (default yes); `BUILD_OPENSSL`, `BUILD_ZLIB`, `BUILD_SQLITE`, `BUILD_SQLCIPHER`, `BUILD_CAPNP`, `BUILD_HIREDIS`, `BUILD_LEVELDB` (default no).
 - musl: `MUSL_USE_MIMALLOC`, `MUSL_USE_LTO`. mimalloc: `MIMALLOC_SECURE`, `MIMALLOC_GUARDED`.
 - LLVM features: `LLVM_DEDUBB` (DeduBB patch, default yes), `BUILD_PROPELLER` (stage 45, default yes).
 - `USE_CCACHE`, `USE_SCCACHE`, `STAGE1_SOURCE` (see Build speed), `REQUIRE_CONTAINER_CHECKS` (fail instead of skip when docker is missing), `REQUIRE_LBR` (fail instead of skip when the live Propeller check finds no LBR/SPE).

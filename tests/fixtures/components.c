@@ -27,6 +27,11 @@
 #ifdef HAVE_MIMALLOC
 #include <mimalloc.h>
 #endif
+#ifdef HAVE_SQLITE3ELIDE
+#include <sqlite3.h>
+/* From sqlite3jni.h, which needs jni.h: the shim must be inside libsqlite3elide.a. */
+extern int sqlite_isStatic(void *env, void *reserved);
+#endif
 
 int main(void) {
 #ifdef HAVE_ZLIB
@@ -54,6 +59,22 @@ int main(void) {
   void *p = mi_malloc(16);
   mi_free(p);
   printf("mimalloc ok\n");
+#endif
+#ifdef HAVE_SQLITE3ELIDE
+  {
+    sqlite3 *db = NULL;
+    if (sqlite3_libversion_number() != SQLITE_VERSION_NUMBER) { fprintf(stderr, "sqlite3elide: header/library mismatch\n"); return 1; }
+    if (!sqlite3_compileoption_used("MAX_ATTACHED=25") || !sqlite3_compileoption_used("ENABLE_API_ARMOR")) {
+      fprintf(stderr, "sqlite3elide: compile options missing\n"); return 1;
+    }
+    if (!sqlite_isStatic(NULL, NULL)) { fprintf(stderr, "sqlite3elide: shim not built with SQLITE_GVM_STATIC\n"); return 1; }
+    if (sqlite3_open(":memory:", &db) != SQLITE_OK ||
+        sqlite3_exec(db, "CREATE VIRTUAL TABLE t USING fts5(x); INSERT INTO t VALUES('ok');", NULL, NULL, NULL) != SQLITE_OK) {
+      fprintf(stderr, "sqlite3elide: %s\n", db ? sqlite3_errmsg(db) : "open failed"); return 1;
+    }
+    sqlite3_close(db);
+    printf("sqlite3elide %s\n", sqlite3_libversion());
+  }
 #endif
   return 0;
 }
