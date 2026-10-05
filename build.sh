@@ -134,6 +134,9 @@ run_stage() {
 # Validate stage names before --clean can delete anything: a typo must not wipe a build.
 if [ -n "$only" ]; then stage_index "$only" >/dev/null; fi
 if [ -n "$from" ]; then stage_index "$from" >/dev/null; fi
+if is_yes "${USE_CCACHE:-auto}" && ! command -v ccache >/dev/null 2>&1; then
+  die "USE_CCACHE=$USE_CCACHE but ccache is not on PATH"
+fi
 
 if [ "$clean" = yes ] && [ "$dry_run" = no ]; then
   log "cleaning $OUT_DIR"
@@ -169,5 +172,7 @@ if [ "${#plan[@]}" -eq 0 ]; then
   exit 0
 fi
 
+log "parallelism: JOBS=$JOBS LINK_JOBS=$LINK_JOBS (cpus $(cpu_count), available memory ${MEM_GB:-unknown} GiB)"
+log "compiler launcher: $(compiler_launcher | grep . || echo none)${CCACHE_DIR:+ (CCACHE_DIR=$CCACHE_DIR)}; downloads: $CACHE_DIR"
 for s in "${plan[@]}"; do run_stage "$s"; done
 log "bundle: $BUNDLE_DIR"

@@ -223,6 +223,8 @@ san_runtimes_base_args() { # TRIPLE
     -DLLVM_ENABLE_PER_TARGET_RUNTIME_DIR=ON \
     -DCOMPILER_RT_INSTALL_PATH:STRING="lib/clang/$LLVM_MAJOR" \
     -DCOMPILER_RT_DEFAULT_TARGET_ONLY=ON
+  llvm_link_jobs_args
+  cmake_launcher_args
 }
 
 # san_cxx_args TRIPLE — libunwind/libc++abi/libc++ options of stage 30's pass 2 (kept in sync by

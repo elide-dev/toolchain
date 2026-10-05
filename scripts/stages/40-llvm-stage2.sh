@@ -12,7 +12,7 @@ stage_main() {
   af="$(arch_flags "$t")"
   [ -x "$s/$t-clang" ] || die "stage-1 front-ends missing; run 30-runtimes"
   [ -f "$deps/lib/libzstd.a" ] || die "llvm deps missing; run 36-llvm-deps"
-  mapfile -t launcher < <(cmake_launcher_args)
+  mapfile -t launcher < <(cmake_launcher_args; llvm_link_jobs_args)
   fresh_dir "$b"
   cmake -S "$ROOT_DIR/llvm/llvm" -B "$b" -G Ninja "${launcher[@]}" \
     -DCMAKE_BUILD_TYPE=Release \

@@ -108,4 +108,20 @@ assert_eq "$(patch_required_var "$work/patches/demo/0003-gated.patch")" "DEMO_KN
 assert_eq "$(patch_required_var "$work/patches/demo/0002-g.patch")" "" "no requires header"
 rm -rf "$ROOT_DIR/out/test-tmp"
 
+# OOM guard: memory-aware parallelism
+assert_eq "$(ELIDE_MEM_GB=64 mem_gb)" 64 "ELIDE_MEM_GB overrides detection"
+assert_eq "$(ELIDE_CPU_COUNT=12 cpu_count)" 12 "ELIDE_CPU_COUNT overrides detection"
+case "$(mem_gb)" in ''|*[!0-9]*) [ -z "$(mem_gb)" ] || _fail "mem_gb not numeric: $(mem_gb)" ;; esac
+assert_eq "$(default_jobs 32 16)" 8 "memory-bound: 16 GiB -> 8 jobs"
+assert_eq "$(default_jobs 4 64)" 4 "cpu-bound"
+assert_eq "$(default_jobs 8 1)" 1 "at least one job"
+assert_eq "$(default_jobs 8 0)" 1 "at least one job (0 GiB)"
+assert_eq "$(default_jobs 8 '')" 8 "unknown memory: all cpus"
+assert_eq "$(default_link_jobs 7)" 1 "< 8 GiB: one link"
+assert_eq "$(default_link_jobs 16)" 2
+assert_eq "$(default_link_jobs 31)" 3
+assert_eq "$(default_link_jobs 256)" 4 "capped at 4"
+assert_eq "$(default_link_jobs '')" 2 "unknown memory"
+
+
 finish

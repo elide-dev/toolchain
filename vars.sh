@@ -34,6 +34,7 @@ REQUIRE_LBR=${REQUIRE_LBR:-no}            # yes: the live Propeller check fails 
 
 # Build behaviour
 USE_SCCACHE=${USE_SCCACHE:-no}
+USE_CCACHE=${USE_CCACHE:-auto}            # ccache for CMake builds (auto: when on PATH); wins over sccache
 # Sanitizers: runtimes (+ libFuzzer) in the main bundle; per-sanitizer add-on archives (Linux gnu
 # triples; CI builds them only on push to main and on release).
 BUILD_SANITIZERS=${BUILD_SANITIZERS:-yes}

@@ -15,7 +15,8 @@ stage_main() {
   [ -d "$CACHE_DIR/propeller-deps" ] || die "propeller deps missing in $CACHE_DIR/propeller-deps; run 00-sources"
   [ -x "$s/$t-clang++" ] || die "stage-1 front-ends missing; run 30-runtimes"
   apply_patches llvm-propeller "$ROOT_DIR/llvm-propeller"
-  mapfile -t launcher < <(cmake_launcher_args)
+  # Not an LLVM build (LLVM_PARALLEL_LINK_JOBS is ignored): cap links with a Ninja job pool.
+  mapfile -t launcher < <(cmake_launcher_args; cmake_link_pool_args)
   fresh_dir "$b"
   cmake -S "$ROOT_DIR/llvm-propeller" -B "$b" -G Ninja "${launcher[@]}" \
     -DCMAKE_BUILD_TYPE=Release \

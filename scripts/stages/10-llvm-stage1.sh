@@ -17,6 +17,7 @@ llvm_common_args() {
     -DLLVM_ENABLE_CURL=OFF -DLLVM_ENABLE_HTTPLIB=OFF -DLLVM_ENABLE_FFI=OFF \
     -DLLVM_ENABLE_ZSTD=OFF \
     -DLLVM_FORCE_VC_REPOSITORY=https://github.com/llvm/llvm-project.git
+  llvm_link_jobs_args
   cmake_launcher_args
 }
 

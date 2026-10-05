@@ -34,5 +34,42 @@ assert_eq "${calls[2]}" "--install /build"
 cmake_target x86_64-unknown-linux-gnu /src /build /prefix
 assert_not_contains "$(head -1 "$T/calls")" "-static"
 
+
+# Compiler launchers: ccache (USE_CCACHE auto|yes|no) wins over sccache (USE_SCCACHE=yes).
+mkdir -p "$T/bin"
+for c in ccache sccache; do printf '#!/bin/sh\n' > "$T/bin/$c"; chmod +x "$T/bin/$c"; done
+la() { local a=(); mapfile -t a < <(cmake_launcher_args); printf '%s' "${a[*]}"; }
+P="$T/bin"   # only the fake launchers: the host's own ccache/sccache must not count
+assert_eq "$(PATH="$P" USE_CCACHE="" USE_SCCACHE="" la)" "-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache" "auto: ccache on PATH"
+assert_eq "$(PATH="$P" USE_CCACHE=auto USE_SCCACHE=yes la)" "-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache" "ccache wins"
+assert_eq "$(PATH="$P" USE_CCACHE=no USE_SCCACHE=yes la)" "-DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache" "ccache off: sccache"
+assert_eq "$(PATH="$P" USE_CCACHE=no USE_SCCACHE=no la)" "" "both off"
+rm "$T/bin/ccache"
+assert_eq "$(PATH="$P" USE_CCACHE=auto USE_SCCACHE=no la)" "" "auto: no ccache on PATH"
+assert_eq "$(PATH="$P" USE_CCACHE=yes USE_SCCACHE=yes la)" "-DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache" "ccache missing: sccache"
+printf '#!/bin/sh\n' > "$T/bin/ccache"; chmod +x "$T/bin/ccache"
+: > "$T/calls"
+PATH="$P:$PATH" USE_CCACHE=yes cmake_target x86_64-unknown-linux-gnu /src /build /prefix
+assert_contains "$(head -n 1 "$T/calls")" "-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache" "cmake_target uses the launcher"
+# ccache settings: defaults only where the caller set nothing
+d="$(env -u CCACHE_BASEDIR -u CCACHE_COMPILERCHECK -u CCACHE_NOHASHDIR -u CCACHE_EXTRAFILES CCACHE_MAXSIZE=5G \
+  bash -c "source '$ROOT_DIR/scripts/lib/common.sh'; source '$ROOT_DIR/scripts/lib/cmake.sh'; ROOT_DIR=/r; ccache_defaults; env" | grep '^CCACHE_' | sort | xargs)"
+assert_contains "$d" "CCACHE_BASEDIR=/r"
+assert_contains "$d" "CCACHE_COMPILERCHECK=content"
+assert_contains "$d" "CCACHE_NOHASHDIR=1"
+assert_contains "$d" "CCACHE_MAXSIZE=5G" "caller's size kept"
+assert_contains "$d" "CCACHE_EXTRAFILES=/r/scripts/lib/frontends.sh:/r/scripts/lib/sanitizers.sh"
+assert_eq "$(env -u CCACHE_MAXSIZE bash -c "source '$ROOT_DIR/scripts/lib/common.sh'; source '$ROOT_DIR/scripts/lib/cmake.sh'; ccache_defaults; echo \$CCACHE_MAXSIZE")" 50G
+
+# Link caps
+assert_eq "$(LINK_JOBS=3 llvm_link_jobs_args)" "-DLLVM_PARALLEL_LINK_JOBS=3"
+assert_eq "$(LINK_JOBS=3 cmake_link_pool_args | xargs)" "-DCMAKE_JOB_POOLS=link=3 -DCMAKE_JOB_POOL_LINK=link"
+for f in 10-llvm-stage1 30-runtimes 40-llvm-stage2; do
+  assert_contains "$(cat "$ROOT_DIR/scripts/stages/$f.sh")" "llvm_link_jobs_args" "$f caps LLVM links"
+done
+assert_contains "$(sed -n '/^san_runtimes_base_args()/,/^}/p' "$ROOT_DIR/scripts/lib/sanitizers.sh")" "llvm_link_jobs_args" "stages 31/60 cap links"
+assert_contains "$(cat "$ROOT_DIR/scripts/stages/45-propeller.sh")" "cmake_link_pool_args" "propeller uses a link pool"
+
 rm -rf "$T"
+
 finish

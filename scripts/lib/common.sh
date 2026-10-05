@@ -19,8 +19,40 @@ version_lt() {
   [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -n1)" = "$1" ]
 }
 
+# cpu_count — host CPUs (ELIDE_CPU_COUNT overrides, for tests).
 cpu_count() {
+  if [ -n "${ELIDE_CPU_COUNT:-}" ]; then echo "$ELIDE_CPU_COUNT"; return 0; fi
   if command -v nproc >/dev/null 2>&1; then nproc; else sysctl -n hw.ncpu; fi
+}
+
+# mem_gb — memory available to the build in whole GiB: Linux MemAvailable, darwin total RAM
+# (ELIDE_MEM_GB overrides, for tests). Empty when it cannot be determined.
+mem_gb() {
+  if [ -n "${ELIDE_MEM_GB:-}" ]; then echo "$ELIDE_MEM_GB"; return 0; fi
+  if [ -r /proc/meminfo ]; then
+    awk '/^MemAvailable:/ {printf "%d\n", $2 / 1048576; exit}' /proc/meminfo
+  elif command -v sysctl >/dev/null 2>&1; then
+    sysctl -n hw.memsize 2>/dev/null | awk '{printf "%d\n", $1 / 1073741824}'
+  fi
+  return 0
+}
+
+# default_jobs CPUS MEM_GB — compile parallelism: one job per CPU, but at most one per 2 GiB
+# (LLVM's heaviest translation units need ~1.5 GiB each). Unknown memory: CPUS.
+default_jobs() {
+  local cpus="$1" mem="${2:-}" by_mem
+  if [ -z "$mem" ]; then echo "$cpus"; return 0; fi
+  by_mem=$(( mem / 2 )); [ "$by_mem" -ge 1 ] || by_mem=1
+  if [ "$by_mem" -lt "$cpus" ]; then echo "$by_mem"; else echo "$cpus"; fi
+}
+
+# default_link_jobs MEM_GB — concurrent heavy links (static clang/lld/bolt link at several GiB
+# each): one per 8 GiB, between 1 and 4. Unknown memory: 2.
+default_link_jobs() {
+  local mem="${1:-}" n
+  if [ -z "$mem" ]; then echo 2; return 0; fi
+  n=$(( mem / 8 )); [ "$n" -ge 1 ] || n=1; [ "$n" -le 4 ] || n=4
+  echo "$n"
 }
 
 sha256_of() {

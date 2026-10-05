@@ -42,10 +42,16 @@ DIST_DIR="${ELIDE_DIST_DIR:-$ROOT_DIR/dist}"
 TOOLCHAIN_ROOT="${TOOLCHAIN_ROOT:-$BUNDLE_DIR}"
 ALL_TARGETS="$(bundle_triples "$HOST_OS" "$HOST_ARCH")"
 TARGETS="${TARGETS:-$ALL_TARGETS}"
-JOBS="${JOBS:-$(cpu_count)}"
+# OOM guard: compile jobs capped at one per 2 GiB of available memory, heavy links at one per 8 GiB.
+_mem_gb="$(mem_gb)"
+JOBS="${JOBS:-$(default_jobs "$(cpu_count)" "$_mem_gb")}"
+LINK_JOBS="${LINK_JOBS:-$(default_link_jobs "$_mem_gb")}"
+MEM_GB="$_mem_gb"
+unset _mem_gb
 LLVM_MAJOR="${LLVM_VERSION%%.*}"
 export ROOT_DIR HOST_OS HOST_ARCH OUT_DIR BUNDLE_DIR STAGE1_DIR BUILD_DIR STAMPS_DIR CACHE_DIR \
-  DIST_DIR TOOLCHAIN_ROOT ALL_TARGETS TARGETS JOBS LLVM_MAJOR TOOLCHAIN_VERSION
+  DIST_DIR TOOLCHAIN_ROOT ALL_TARGETS TARGETS JOBS LINK_JOBS MEM_GB LLVM_MAJOR TOOLCHAIN_VERSION
+if ccache_enabled; then ccache_defaults; fi
 
 if [ "$HOST_OS" = darwin ] && [ -z "${SDKROOT:-}" ] && command -v xcrun >/dev/null 2>&1; then
   SDKROOT="$(xcrun --show-sdk-path)"
