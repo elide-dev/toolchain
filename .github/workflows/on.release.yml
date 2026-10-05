@@ -1,0 +1,84 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    uses: ./.github/workflows/job.build.yml
+    with:
+      version: ${{ github.ref_name }}
+  e2e:
+    needs: build
+    uses: ./.github/workflows/job.action-e2e.yml
+  publish:
+    needs: [build, e2e]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: "Setup: Harden Runner"
+        uses: step-security/harden-runner@c6295a65d1254861815972266d5933fd6e532bdf # v2.11.1
+        with:
+          egress-policy: audit
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          pattern: elide-toolchain-*
+          merge-multiple: true
+          path: dist
+      - name: "Verify checksums"
+        run: cd dist && for f in *.tar.xz; do sha256sum -c "$f.sha256"; done
+      - name: "Provenance"
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: "dist/*.tar.xz"
+      - name: "GitHub Release"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" \
+            --title "elide-toolchain ${GITHUB_REF_NAME#v}" --generate-notes
+  mirror:
+    needs: publish
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: "Setup: Harden Runner"
+        uses: step-security/harden-runner@c6295a65d1254861815972266d5933fd6e532bdf # v2.11.1
+        with:
+          egress-policy: audit
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          pattern: elide-toolchain-*
+          merge-multiple: true
+          path: dist
+      - name: "Mirror: prepare"
+        id: ver
+        run: |
+          echo "v=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          mkdir -p latest && echo "${GITHUB_REF_NAME#v}" > latest/latest.txt
+      - name: "Mirror: bundles"
+        uses: elide-tools/r2-upload-action@b59314040b32715ae31337cdbb7418582ade7cff # main @ 2025-12-22
+        with:
+          path: "./dist"
+          target: "toolchain/${{ steps.ver.outputs.v }}"
+          bucket: "elide-userdata-public"
+          account-id: ${{ secrets.R2_ACCOUNT_ID }}
+          access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
+          secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      - name: "Mirror: latest"
+        uses: elide-tools/r2-upload-action@b59314040b32715ae31337cdbb7418582ade7cff # main @ 2025-12-22
+        with:
+          path: "./latest"
+          target: "toolchain"
+          bucket: "elide-userdata-public"
+          account-id: ${{ secrets.R2_ACCOUNT_ID }}
+          access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
+          secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}

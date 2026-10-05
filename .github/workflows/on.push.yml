@@ -30,7 +30,6 @@ jobs:
   build:
     needs: unit
     uses: ./.github/workflows/job.build.yml
-    secrets: inherit
   e2e:
     needs: build
     uses: ./.github/workflows/job.action-e2e.yml

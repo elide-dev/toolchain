@@ -38,10 +38,14 @@ jobs:
           archive: ${{ steps.archive.outputs.path }}
           target: ${{ matrix.target }}
       - name: "Use it"
+        env:
+          TARGET: ${{ matrix.target }}
+          TC_HOME: ${{ steps.tc.outputs.home }}
+          TC_TARGETS: ${{ steps.tc.outputs.targets }}
         run: |
           elide-toolchain doctor
-          echo "home=${{ steps.tc.outputs.home }} targets=${{ steps.tc.outputs.targets }}"
-          case "${{ matrix.target }}" in *-linux-musl) extra=-static ;; *) extra= ;; esac
+          echo "home=$TC_HOME targets=$TC_TARGETS"
+          case "$TARGET" in *-linux-musl) extra=-static ;; *) extra= ;; esac
           "$CC" $extra tests/fixtures/hello.c -o hello && ./hello
           "$CXX" $extra tests/fixtures/hello.cpp -o hello-cxx && ./hello-cxx
           test -f "$CMAKE_TOOLCHAIN_FILE"
