@@ -7,6 +7,7 @@ stage_applies() { [ "$HOST_OS" = linux ]; }
 
 stage_main() {
   local t s="$STAGE1_DIR/bin" b="$BUILD_DIR/llvm-stage2" deps="$OUT_DIR/llvm-deps" af launcher=()
+  apply_patches llvm "$ROOT_DIR/llvm"
   t="$(bundle_triple_for_libc gnu)"
   af="$(arch_flags "$t")"
   [ -x "$s/$t-clang" ] || die "stage-1 front-ends missing; run 30-runtimes"

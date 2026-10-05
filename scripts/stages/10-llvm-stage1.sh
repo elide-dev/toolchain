@@ -21,6 +21,7 @@ llvm_common_args() {
 }
 
 stage_main() {
+  apply_patches llvm "$ROOT_DIR/llvm"
   if [ "$HOST_OS" = linux ]; then llvm_stage1_linux; else llvm_darwin; fi
 }
 

@@ -10,6 +10,7 @@ stage_applies() { [ "$HOST_OS" = linux ]; }
 stage_main() {
   local t
   [ -x "$STAGE1_DIR/bin/clang" ] || die "stage-1 clang missing; run 10-llvm-stage1"
+  apply_patches llvm "$ROOT_DIR/llvm"
   for t in $ALL_TARGETS; do
     build_builtins "$t"
     build_cxx_runtimes "$t"

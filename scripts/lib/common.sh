@@ -43,15 +43,24 @@ stamp_clear()  { rm -f "$(stamp_path "$1")"; }
 # fresh_dir DIR — remove and recreate a directory; every stage starts from a clean build dir.
 fresh_dir() { rm -rf "$1"; mkdir -p "$1"; }
 
+# patch_required_var PATCH — VAR from a leading "# requires: VAR" line (empty if none). Such a
+# patch is applied only when VAR is yes (a vars.sh knob).
+patch_required_var() { head -n1 "$1" | sed -n 's/^# requires: *\([A-Za-z_][A-Za-z0-9_]*\) *$/\1/p'; }
+
 # apply_patches COMPONENT DIR — apply PATCHES_DIR/COMPONENT/*.patch to DIR, idempotently.
 # GIT_CEILING_DIRECTORIES stops git from discovering the enclosing repo, so patch paths are
-# always relative to DIR (a submodule root, or a source copy under out/).
+# always relative to DIR (a submodule root, or a source copy under out/). Patches of one
+# component must not overlap hunks: "already applied" is detected per patch by a reverse check.
 apply_patches() {
-  local component="$1" dir="$2" patch_dir patch
+  local component="$1" dir="$2" patch_dir patch req
   patch_dir="${PATCHES_DIR:-$ROOT_DIR/src/patches}/$component"
   [ -d "$patch_dir" ] || return 0
   for patch in "$patch_dir"/*.patch; do
     [ -e "$patch" ] || continue
+    req="$(patch_required_var "$patch")"
+    if [ -n "$req" ] && ! is_yes "${!req:-}"; then
+      log "skipping $(basename "$patch") ($req is not yes)"; continue
+    fi
     if (cd "$dir" && GIT_CEILING_DIRECTORIES="$(dirname "$dir")" git apply --check "$patch" 2>/dev/null); then
       log "applying $(basename "$patch") to $component"
       (cd "$dir" && GIT_CEILING_DIRECTORIES="$(dirname "$dir")" git apply "$patch")
@@ -59,6 +68,23 @@ apply_patches() {
       log "already applied: $(basename "$patch")"
     else
       die "cannot apply $patch to $dir"
+    fi
+  done
+  return 0
+}
+
+# unapply_patches COMPONENT DIR — reverse every applied PATCHES_DIR/COMPONENT patch, last first,
+# so DIR is back at its pinned commit (stage 00's clean-tree check runs after this).
+unapply_patches() {
+  local component="$1" dir="$2" patch_dir patches=() p i
+  patch_dir="${PATCHES_DIR:-$ROOT_DIR/src/patches}/$component"
+  [ -d "$patch_dir" ] || return 0
+  for p in "$patch_dir"/*.patch; do [ -e "$p" ] && patches+=("$p"); done
+  for (( i=${#patches[@]}-1; i>=0; i-- )); do
+    p="${patches[$i]}"
+    if (cd "$dir" && GIT_CEILING_DIRECTORIES="$(dirname "$dir")" git apply --reverse --check "$p" 2>/dev/null); then
+      log "un-applying $(basename "$p") from $component"
+      (cd "$dir" && GIT_CEILING_DIRECTORIES="$(dirname "$dir")" git apply --reverse "$p")
     fi
   done
   return 0

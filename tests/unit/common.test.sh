@@ -61,4 +61,51 @@ printf 'unrelated\n' > "$work/src/file.txt"
 assert_fails env PATCHES_DIR="$work/patches" bash -c "source '$ROOT_DIR/scripts/lib/common.sh'; ROOT_DIR='$ROOT_DIR' apply_patches demo '$work/src'"
 rm -rf "$ROOT_DIR/out/test-tmp"
 
+# A series of adjacent (non-overlapping) patches re-applies as a no-op; '# requires: VAR'
+# gates a patch on a knob; unapply_patches restores the pristine tree and is idempotent.
+work="$ROOT_DIR/out/test-tmp/series"; rm -rf "$work"; mkdir -p "$work/src" "$work/patches/demo"
+printf 'a\nb\nc\nd\ne\nf\ng\n' > "$work/src/f.txt"; printf 'x\n' > "$work/src/g.txt"
+cat > "$work/patches/demo/0001-a.patch" <<'EOF'
+--- a/f.txt
++++ b/f.txt
+@@ -1,3 +1,3 @@
+-a
++A
+ b
+ c
+EOF
+cat > "$work/patches/demo/0002-g.patch" <<'EOF'
+# upstream: none (test)
+--- a/f.txt
++++ b/f.txt
+@@ -5,3 +5,3 @@
+ e
+ f
+-g
++G
+EOF
+cat > "$work/patches/demo/0003-gated.patch" <<'EOF'
+# requires: DEMO_KNOB
+--- a/g.txt
++++ b/g.txt
+@@ -1 +1 @@
+-x
++X
+EOF
+series() { # KNOB FUNCTION
+  env PATCHES_DIR="$work/patches" DEMO_KNOB="$1" bash -c "source '$ROOT_DIR/scripts/lib/common.sh'; ROOT_DIR='$ROOT_DIR' $2 demo '$work/src'"
+}
+assert_ok series no apply_patches
+assert_eq "$(head -1 "$work/src/f.txt")$(tail -1 "$work/src/f.txt")$(cat "$work/src/g.txt")" "AGx" "series applied, gated patch skipped"
+assert_ok series no apply_patches
+assert_ok series yes apply_patches
+assert_eq "$(cat "$work/src/g.txt")" "X" "gated patch applied when the knob is yes"
+assert_ok series yes apply_patches
+assert_ok series yes unapply_patches
+assert_eq "$(tr -d '\n' < "$work/src/f.txt")$(cat "$work/src/g.txt")" "abcdefgx" "unapply restores the pristine tree"
+assert_ok series yes unapply_patches
+assert_eq "$(patch_required_var "$work/patches/demo/0003-gated.patch")" "DEMO_KNOB" "requires header parsed"
+assert_eq "$(patch_required_var "$work/patches/demo/0002-g.patch")" "" "no requires header"
+rm -rf "$ROOT_DIR/out/test-tmp"
+
 finish

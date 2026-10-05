@@ -25,6 +25,13 @@ MUSL_USE_LTO=${MUSL_USE_LTO:-yes}
 MIMALLOC_SECURE=${MIMALLOC_SECURE:-OFF}
 MIMALLOC_GUARDED=${MIMALLOC_GUARDED:-OFF}
 
+# LLVM feature patches (src/patches/llvm, '# requires:' headers) and tools
+LLVM_DEDUBB=${LLVM_DEDUBB:-yes}           # DeduBB codegen; inert without -dedubb-directives
+BUILD_PROPELLER=${BUILD_PROPELLER:-yes}   # stage 45: generate_propeller_profiles (Linux)
+
+# Verification
+REQUIRE_LBR=${REQUIRE_LBR:-no}            # yes: the live Propeller check fails instead of skipping
+
 # Build behaviour
 USE_SCCACHE=${USE_SCCACHE:-no}
 REQUIRE_CONTAINER_CHECKS=${REQUIRE_CONTAINER_CHECKS:-no}

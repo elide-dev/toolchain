@@ -17,6 +17,12 @@ check_submodules() {
   local missing
   missing="$(git -C "$ROOT_DIR" submodule status | awk '/^-/{print $2}' | xargs)"
   [ -z "$missing" ] || die "uninitialized submodules: $missing (run: git submodule update --init --depth=1 --recursive)"
+  # Our own src/patches series are applied in place by later stages (glibc: 20; llvm: 10/30/40;
+  # llvm-propeller: 45); take them back out first so only foreign modifications count as dirty.
+  local c
+  for c in glibc llvm llvm-propeller; do
+    if [ -d "$ROOT_DIR/$c" ]; then unapply_patches "$c" "$ROOT_DIR/$c"; fi
+  done
   # Component sources are copied from the submodule work trees, so modified or deleted tracked
   # files (e.g. leftovers of an old in-tree build) would leak into the bundle.
   local dirty
