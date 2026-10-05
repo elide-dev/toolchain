@@ -34,9 +34,10 @@ Assets are named `elide-toolchain-<version>-<os>-<arch>.tar.xz` (`os` = `linux|d
     version: latest                    # or 2026.10.0 / v2026.10.0
     target: x86_64-unknown-linux-gnu   # optional: exports CC, CXX, AR, ... for this triple
     github-token: ${{ github.token }}  # optional
+    sanitizer: asan                    # optional (needs target): see Sanitizers
 ```
 
-With no inputs it installs the latest bundle for the runner's OS/arch, exports `ELIDE_TOOLCHAIN_HOME` and adds `bin/` to `PATH`. Outputs: `home`, `version`, `targets`. Inputs for testing and mirrors: `archive` (local `.tar.xz`), `base-url`, `repo`, `os`, `arch`. `latest` is resolved via the Releases API, falling back to the R2 mirror.
+With no inputs it installs the latest bundle for the runner's OS/arch, exports `ELIDE_TOOLCHAIN_HOME` and adds `bin/` to `PATH`. Outputs: `home`, `version`, `targets`, `sanitizer-addon`. Inputs for testing and mirrors: `archive` (local `.tar.xz`), `sanitizer-archive` (local add-on `.tar.xz`), `base-url`, `repo`, `os`, `arch`. `latest` is resolved via the Releases API, falling back to the R2 mirror.
 
 ### mise
 
@@ -52,7 +53,7 @@ mise picks the asset by OS/arch and strips the single top-level directory, so `b
 "github:elide-dev/toolchain" = { version = "2026.10.0", bin_path = "elide-toolchain/bin" }
 ```
 
-mise only provides `PATH`; use `elide-toolchain env` (below) for target settings.
+mise only provides `PATH`; use `elide-toolchain env` (below) for target settings. Sanitizer add-ons are separate release assets (`…-<os>-<arch>-sanitizer-<san>.tar.xz`). mise always picks the main bundle (its asset matcher scores both equally on OS/arch/format and breaks the tie by the shorter name; see `docs/notes/mise-assets.md`); install an add-on with `elide-toolchain addon install sanitizer-<san>`.
 
 ### Manual
 
@@ -88,7 +89,9 @@ eval "$(elide-toolchain env --target x86_64-unknown-linux-gnu)"
 
 **GraalVM native-image.** Linux bundles ship `<cpu>-linux-musl-gcc` / `-g++` (and `cc`, `c++`, `ar`, `ranlib`, `nm`, `strip`) as shims over clang and the llvm tools, so `native-image --libc=musl` works with `bin/` on `PATH`. The shims never add `-static`.
 
-**Doctor.** `elide-toolchain doctor` compiles, links and runs a C and C++ hello world for every triple in the bundle. Other subcommands: `home`, `targets`, `version`, `flags` (see below).
+**Sanitizers.** See [Sanitizers](#sanitizers).
+
+**Doctor.** `elide-toolchain doctor` compiles, links and runs a C and C++ hello world for every triple in the bundle. `doctor --sanitizers` also builds a clean C++ program and a known bug through every shipped sanitizer wrapper (with the add-on when installed) and checks the bug is reported. Other subcommands: `home`, `targets`, `version`, `flags` (see below).
 
 **Link rules.** Component archives are pure ThinLTO bitcode by design, so link them with LLVM at least the bundle's major: the bundle's clang/lld, or rust-lld from a rustc whose LLVM major is <= the bundle's. A non-LLVM linker (GNU ld, Apple ld64) fails loudly; it does not silently skip LTO. On macOS, link through the bundle's `<triple>-clang` (its cfg sets `-fuse-ld=lld`), not Apple's `ld64`. musl `libc.a` and libc++ are fat objects: lld uses their native code unless the link passes `-flto=thin -ffat-lto-objects` (clang forwards `--fat-lto-objects`); pass it to get cross-module LTO into libc and libc++.
 
@@ -132,6 +135,42 @@ Only C++ `operator new` sites are hinted (not `malloc`, not Rust allocations). R
 
 **GraalVM native-image** Java code cannot take part (Graal compiles it). Separately built C/C++ (JNI libraries) can.
 
+## Sanitizers
+
+Design: [`docs/superpowers/specs/2026-10-05-sanitizer-variants-design.md`](docs/superpowers/specs/2026-10-05-sanitizer-variants-design.md).
+
+| Sanitizer | `*-linux-gnu` | `*-linux-musl` | `arm64-apple-darwin` |
+|---|---|---|---|
+| `asan` (+ leak checking) | runtime in bundle; add-on recommended | — | runtime (dylib) |
+| `tsan` | runtime in bundle; add-on recommended | — | runtime (dylib) |
+| `msan` | runtime in bundle; **add-on required** | — | — |
+| `ubsan` (standalone + minimal) | runtime in bundle | runtime, fully static | runtime (dylib) |
+| `lsan` (standalone) | runtime in bundle | — | — |
+| `hwasan` | aarch64 only (kernel needs the tagged-address ABI) | — | — |
+| libFuzzer (`-fsanitize=fuzzer`) | in bundle | — | in bundle |
+
+musl is static-only by design, and ASan/TSan/MSan/LSan need dynamic linking, so on musl only UBSan is offered: sanitize on the gnu triple.
+
+**Use.** `bin/<triple>-<san>-clang` / `-clang++` are wrappers that add the sanitizer to the triple's normal cfg (and, once installed, the add-on's instrumented sysroot and libc++); `share/elide-toolchain/cmake/<triple>-<san>.cmake` is the matching toolchain file. The helper sets it all up:
+
+```sh
+eval "$(elide-toolchain env --target x86_64-unknown-linux-gnu --sanitizer asan)"
+# CC/CXX = the wrappers, CMAKE_TOOLCHAIN_FILE, PKG_CONFIG_* (add-on sysroot when installed),
+# CARGO_TARGET_<T>_LINKER + CARGO_TARGET_<T>_RUSTFLAGS="-Zsanitizer=address -Zexternal-clangrt",
+# ELIDE_SANITIZER, ELIDE_SANITIZER_RUNTIME (shared runtime, for LD_PRELOAD)
+elide-toolchain sanitizers            # what is supported and installed
+elide-toolchain doctor --sanitizers   # clean program + known bug through every wrapper
+```
+
+**Add-ons.** Each Linux release also publishes one archive per sanitizer, `elide-toolchain-<ver>-linux-<arch>-sanitizer-{asan,tsan,msan}.tar.xz` (+ `.sha256`), with libc++/libc++abi and every component instrumented for that sanitizer, a mimalloc forwarding shim, and a sysroot `sysroot/<triple>+<san>/` that layers them over the normal one. Each extracts over the main bundle of the same version, independently of the others: `elide-toolchain addon install sanitizer-msan` (GitHub release, then the R2 mirror; checksum and version checked), the action's `sanitizer:` input, or `tar -xJf <addon> -C <dir containing elide-toolchain/>`. MSan needs its add-on (anything uninstrumented produces false positives); ASan/TSan work without one but cannot see inside libc++ and the components. Add-ons are built on pushes to `main` and on releases, not on pull requests; locally, `BUILD_SANITIZER_VARIANTS=yes ./build.sh`.
+
+**Caveats.**
+- Sanitizers own `malloc`: do not link the main sysroot's `libmimalloc.a` (it overrides `malloc`) into a sanitized program; the add-ons' `libmimalloc.a` forwards `mi_*` to the sanitized libc allocator. Disable Rust's `mimalloc` global allocator in sanitizer builds.
+- Rust (nightly): one runtime only. `env --sanitizer` uses clang's (`-Zexternal-clangrt`, linked by the wrapper); passing `-fsanitize` to the linker *and* letting rustc link its own runtime fails with duplicate symbols. MSan/TSan need `-Zbuild-std`.
+- GraalVM native-image output cannot be sanitized with ASan/TSan/MSan/LSan (static, uninstrumented image with its own heap and signal handling). Sanitize the JNI/native libraries instead: in test executables on the gnu triple, or loaded by a JVM with `-shared-libsan` and `LD_PRELOAD=$ELIDE_SANITIZER_RUNTIME ASAN_OPTIONS=detect_leaks=0:handle_segv=0:allow_user_segv_handler=1`.
+- ASan/TSan/MSan cannot link `-static`; `env --static --sanitizer` refuses everything but `ubsan`.
+- darwin: clang links the sanitizer dylibs with an absolute rpath into the bundle, so sanitized test binaries do not survive moving the bundle.
+
 ## Layout
 
 ```
@@ -145,9 +184,10 @@ elide-toolchain/
     <triple>-clang  -> clang
     <triple>-clang++ -> clang++
     <arch>-linux-musl-gcc, <arch>-linux-musl-g++   # Linux GCC-named shims
+    <triple>-<san>-clang, <triple>-<san>-clang++   # sanitizer front-ends (POSIX sh)
   lib/
     clang/<major>/include/                # resource dir
-    clang/<major>/lib/<triple>/libclang_rt.*   # Linux: builtins, crtbegin/crtend, profile; memprof (x86_64 gnu)
+    clang/<major>/lib/<triple>/libclang_rt.*   # Linux: builtins, crtbegin/crtend, profile, sanitizers, libFuzzer; memprof (x86_64 gnu)
     clang/<major>/lib/darwin/libclang_rt.*     # macOS
     <triple>/libc++.a libc++abi.a libunwind.a  # Linux
   include/
@@ -161,8 +201,11 @@ elide-toolchain/
   share/elide-toolchain/
     manifest.json
     sbom.cdx.json
-    cmake/<triple>.cmake
+    cmake/<triple>.cmake, cmake/<triple>-<san>.cmake
+    sanitizers/<triple>-<san>.cfg         # sanitizer runtime layer
 ```
+
+A sanitizer add-on adds `lib/<triple>/<san>/` (instrumented libc++), `sysroot/<triple>+<san>/`, `include/<triple>/asan/` (asan) and `share/elide-toolchain/sanitizers/{<triple>-<san>.addon.cfg,<san>.addon.json}`.
 
 `manifest.json` records the version, revision, host floors (`glibcFloor`, `march`), per-target libc and march/mtune, component versions, `llvmMajor`, the cflags profile, and `features` (Propeller tool and pin, DeduBB, MemProf runtime targets and backports, shim ABI and per-triple backend).
 
@@ -226,12 +269,14 @@ Stages:
 | 20 | `libc-gnu` | Host GCC builds glibc 2.34 into the gnu sysroot (Linux) |
 | 21 | `libc-musl` | Stage-1 clang builds musl phase 1 (Linux) |
 | 30 | `runtimes` | compiler-rt, libunwind, libc++abi, libc++ per Linux triple, as fat ThinLTO archives; the memprof runtime for x86_64 gnu |
+| 31 | `sanitizer-runtimes` | compiler-rt sanitizer runtimes and libFuzzer per Linux triple (matrix in `versions.env`) |
 | 35 | `mimalloc` | musl: mimalloc into musl phase 2; gnu/macOS: standalone `libmimalloc.a`; `libelidealloc-shim.a` for every triple |
 | 36 | `llvm-deps` | Static zlib-ng and zstd for the stage-2 LLVM build (Linux, not shipped) |
 | 40 | `llvm-stage2` | Rebuild clang/lld/bolt/polly against the gnu 2.34 sysroot with static libc++ (Linux); these are the shipped tools |
 | 45 | `propeller` | `generate_propeller_profiles` (with DeduBB) linked against the stage-2 LLVM build tree, offline from cached deps (Linux) |
 | 50 | `components` | Build each enabled component per triple with the bundle's own `<triple>-clang`, installing `.pc` files |
-| 90 | `package` | Helper CLI, cfgs, shims, CMake files, manifest and SBOM; strip; `tar -cJf` plus `.sha256` |
+| 60 | `sanitizer-addons` | With `BUILD_SANITIZER_VARIANTS=yes`: per sanitizer (asan/tsan/msan, gnu), instrumented libc++ and components and the `sysroot/<triple>+<san>` farm |
+| 90 | `package` | Helper CLI, cfgs, shims, CMake files, manifest and SBOM; strip; `tar -cJf` plus `.sha256`; one archive per sanitizer add-on |
 | 95 | `verify` | Run every check (see Verification) against a fresh extraction of the archive |
 
 **`vars.sh` toggles** (each may also be set in the environment):
@@ -241,6 +286,7 @@ Stages:
 - LLVM features: `LLVM_DEDUBB` (DeduBB patch, default yes), `BUILD_PROPELLER` (stage 45, default yes).
 - `USE_SCCACHE`, `REQUIRE_CONTAINER_CHECKS` (fail instead of skip when docker is missing), `REQUIRE_LBR` (fail instead of skip when the live Propeller check finds no LBR/SPE).
 - Local patches live in `src/patches/<component>/`. Stage 00 un-applies them before its clean-submodule check, and the stages that build a component apply them again.
+- Sanitizers: `BUILD_SANITIZERS` (runtimes and libFuzzer in the bundle, default yes), `BUILD_SANITIZER_VARIANTS` (add-on archives, default no; CI sets yes on push to `main` and on release).
 
 > [!IMPORTANT]
 > Switching providers (zlib vs zlib-ng, OpenSSL vs AWS-LC) or disabling components requires `./build.sh --clean`. Otherwise stale archives and shared objects already in the sysroot shadow the new ones.
@@ -277,6 +323,8 @@ Stage 95 (`scripts/verify/checks.sh`) runs against a fresh extraction of the pac
 - **elidealloc shim:** the shim test (hot/cold/default mapping, all eight overloads, alignment, OOM, cross-thread frees, C API, stats, env tuning) links through the shipped `.pc` and passes.
 - **memprof:** on x86_64 gnu, instrument, run, merge `--profiled-binary`. On every triple, a YAML profile is matched, the ThinLTO link clones the allocation context and calls `_Znam12__hot_cold_t`, and the cold object lands in the COLD partition. Without `-supports-hot-cold-new` no hint survives. No memprof runtime ships for other triples.
 - **relocatable:** the bundle is copied elsewhere and smoke tests plus `elide-toolchain doctor` rerun.
+- **sanitizers** (`scripts/verify/sanitizers.sh`): the runtimes match the matrix (musl has no dynamic-only runtime); every sanitizer's fixture bug (`tests/fixtures/sanitizers/`) is reported through its wrapper, and the msan wrapper refuses to work without its add-on; `-static` is refused for the dynamic-only runtimes; a `-shared-libsan` library loaded by an uninstrumented host trips with the runtime `LD_PRELOAD`ed; a libFuzzer target runs.
+- **sanitizer add-ons:** each add-on archive is checksummed, has the single root and shares no entry with the main archive; it is extracted over its own hardlinked copy of the main bundle (so add-ons are independent) and checked there: every archive in its sysroot and libc++ dir is instrumented, no libunwind is shipped, the farm has no dangling or absolute links and no `.so` beside a replaced `.a`; the fixture bug trips; libc++, every component (round-tripping real data in heap buffers) and the mimalloc shim run with no report, with and without `-flto=thin`; a CMake consumer resolves the add-on's archives; its archives pass the bitcode check; ASan sees `mi_malloc` overflows; `env --sanitizer` points at the add-on; and (asan) Rust nightly + C trips with clang's runtime when a nightly rustc is available.
 
 Unit tests and shellcheck: `tests/run.sh`. Per-stage checks: `tests/stages/*.check.sh`. Action tests: `cd action && bun test`.
 
