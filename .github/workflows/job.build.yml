@@ -54,18 +54,18 @@ jobs:
           if [ -d .git/modules ]; then find .git/modules -name '*.lock' -type f -print -delete; fi
           subs="$(git config -f .gitmodules --get-regexp '^submodule\..*\.path$' | awk '$2 != "glibc" {print $2}')"
           # shellcheck disable=SC2086 # submodule paths contain no spaces
-          git submodule update --init --depth=1 --recursive --jobs 8 -- $subs
+          git submodule update --quiet --init --depth=1 --recursive --jobs 8 -- $subs
           rev="$(git ls-tree HEAD glibc | awk '{print $3}')"
           branch="$(git config -f .gitmodules submodule.glibc.branch)"
           mirror="https://github.com/bminor/glibc.git"
-          if ! git submodule update --init --depth=1 glibc; then
+          if ! git submodule update --quiet --init --depth=1 glibc; then
             echo "::warning::glibc fetch from sourceware failed; trying $mirror"
             rm -rf glibc ".git/modules/glibc"
             mkdir glibc
             git -C glibc init -q
-            if ! { git -C glibc fetch --depth=1 "$mirror" "$rev" && git -C glibc checkout -q --detach FETCH_HEAD; }; then
+            if ! { git -C glibc fetch --quiet --depth=1 "$mirror" "$rev" && git -C glibc checkout -q --detach FETCH_HEAD; }; then
               echo "::warning::glibc fetch by SHA from mirror failed; fetching $branch from mirror"
-              git -C glibc fetch --depth=50 "$mirror" "$branch"
+              git -C glibc fetch --quiet --depth=50 "$mirror" "$branch"
               git -C glibc checkout -q --detach "$rev"
             fi
           fi
@@ -76,8 +76,8 @@ jobs:
       - name: "Setup: Packages (Linux)"
         if: matrix.os == 'linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends build-essential bison gawk python3 ninja-build \
+          sudo apt-get update -qq
+          sudo apt-get install -qq -y --no-install-recommends build-essential bison gawk python3 ninja-build \
             cmake rsync xz-utils curl clang lld llvm
       - name: "Setup: Packages (macOS)"
         if: matrix.os == 'darwin'
@@ -113,3 +113,12 @@ jobs:
           compression-level: 0
           overwrite: true
           path: dist/*
+      - name: "Artifact: Build logs"
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: build-logs-${{ matrix.os }}-${{ matrix.arch }}
+          overwrite: true
+          if-no-files-found: ignore
+          retention-days: 14
+          path: out/*/logs/

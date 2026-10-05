@@ -78,18 +78,52 @@ stage_index() {
   die "unknown stage: $1"
 }
 
-run_stage() {
-  local stage="$1"
-  log "stage $stage ($HOST_OS-$HOST_ARCH; targets: $TARGETS)"
+LOG_DIR="$OUT_DIR/logs"
+FAIL_TAIL_LINES="${FAIL_TAIL_LINES:-200}"
+
+# stage_body STAGE — run one stage in a subshell (errexit re-enabled inside: callers capture rc).
+stage_body() {
   (
+    set -euo pipefail
     # shellcheck source=/dev/null
-    source "$STAGES_DIR/$stage.sh"
+    source "$STAGES_DIR/$1.sh"
     if declare -F stage_applies >/dev/null && ! stage_applies; then
-      log "stage $stage does not apply to $HOST_OS-$HOST_ARCH; skipping"
+      log "stage $1 does not apply to $HOST_OS-$HOST_ARCH; skipping"
       exit 0
     fi
     stage_main
   )
+}
+
+# run_stage STAGE — full output goes to $LOG_DIR/STAGE.log; the console gets start/finish lines
+# (and the log tail on failure). VERBOSE=yes, or stage 95 (short ok/FAIL lines), also streams it.
+run_stage() {
+  local stage="$1" logf start rc stream=no
+  mkdir -p "$LOG_DIR"
+  logf="$LOG_DIR/$stage.log"
+  if is_yes "${VERBOSE:-no}" || [ "$stage" = 95-verify ]; then stream=yes; fi
+  if [ -n "${GITHUB_ACTIONS:-}" ]; then echo "::group::stage $stage"; fi
+  log "stage $stage ($HOST_OS-$HOST_ARCH; targets: $TARGETS) → $logf"
+  start=$SECONDS
+  set +e
+  if [ "$stream" = yes ]; then
+    stage_body "$stage" 2>&1 | tee "$logf"
+    rc=${PIPESTATUS[0]}
+  else
+    stage_body "$stage" > "$logf" 2>&1
+    rc=$?
+  fi
+  set -e
+  if [ -n "${GITHUB_ACTIONS:-}" ]; then echo "::endgroup::"; fi
+  if [ "$rc" -ne 0 ]; then
+    if [ "$stream" = no ]; then
+      log "last $FAIL_TAIL_LINES lines of $logf:"
+      tail -n "$FAIL_TAIL_LINES" "$logf" >&2
+    fi
+    if [ -n "${GITHUB_ACTIONS:-}" ]; then echo "::error::stage $stage failed (exit $rc); full log: $logf"; fi
+    die "stage $stage failed after $((SECONDS - start))s (exit $rc); full log: $logf"
+  fi
+  log "stage $stage done in $((SECONDS - start))s"
   stamp_done "$stage"
 }
 

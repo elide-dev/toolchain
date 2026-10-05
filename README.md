@@ -173,6 +173,8 @@ Options:
 
 Output goes to `out/<os>-<arch>/` (stamps in `stamps/`); the packaged archive, checksum and SBOM land in `dist/`. Completed stages are skipped on re-run. Stage names are checked before `--clean` deletes anything.
 
+Logs: each stage's full output goes to `out/<os>-<arch>/logs/<stage>.log`. The console shows one start and one finish line per stage, plus the verification results; when a stage fails, the last 200 lines of its log are printed (`FAIL_TAIL_LINES=N` changes that). Set `VERBOSE=yes` to stream every stage's output. In CI, each stage is a collapsible log group and the `logs/` directory is uploaded as the `build-logs-<os>-<arch>` artifact on every run, pass or fail.
+
 To rebuild stage 1, use `--from 10-llvm-stage1`, not `--only 10-llvm-stage1`. Stage 10 wipes `out/<os>-<arch>/stage1`, and the runtimes and cfgs that stage 30 installs there would then be missing.
 
 Stages:

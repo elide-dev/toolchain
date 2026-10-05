@@ -10,6 +10,7 @@ mkdir -p "$T/stages"
 for s in $STAGES; do
   cat > "$T/stages/$s.sh" <<EOF
 stage_main() {
+  echo "noisy-output-$s"
   [ "\${FAIL_STAGE:-}" = "$s" ] && return 1
   echo "$s \$TARGETS" >> "\$ELIDE_TEST_LOG"
 }
@@ -52,6 +53,21 @@ run --clean --from 99-nope; assert_eq "$?" 1 "--clean with unknown --from stage 
 assert_file "$T/out/stamps/95-verify.done"
 run --clean --only 00-sources
 assert_fails test -f "$T/out/stamps/95-verify.done"
+
+# logging: stage output goes to out/logs/<stage>.log, not the console; failures print the log tail
+console="$(env ELIDE_STAGES_DIR="$T/stages" ELIDE_OUT_DIR="$T/out" ELIDE_HOST_OS=linux ELIDE_HOST_ARCH=amd64 \
+  ELIDE_TEST_LOG="$T/log" "$ROOT_DIR/build.sh" --only 30-runtimes 2>&1)"
+assert_not_contains "$console" "noisy-output-30-runtimes" "stage output kept off the console"
+assert_contains "$(cat "$T/out/logs/30-runtimes.log")" "noisy-output-30-runtimes" "stage output captured in its log"
+assert_contains "$console" "stage 30-runtimes done in" "console gets a completion line"
+console="$(env ELIDE_STAGES_DIR="$T/stages" ELIDE_OUT_DIR="$T/out" ELIDE_HOST_OS=linux ELIDE_HOST_ARCH=amd64 \
+  ELIDE_TEST_LOG="$T/log" FAIL_STAGE=50-components "$ROOT_DIR/build.sh" --only 50-components 2>&1)"; status=$?
+assert_eq "$status" 1 "failing stage still fails the build"
+assert_contains "$console" "noisy-output-50-components" "failure prints the log tail"
+assert_contains "$console" "stage 50-components failed" "failure is named"
+console="$(env ELIDE_STAGES_DIR="$T/stages" ELIDE_OUT_DIR="$T/out" ELIDE_HOST_OS=linux ELIDE_HOST_ARCH=amd64 \
+  ELIDE_TEST_LOG="$T/log" VERBOSE=yes "$ROOT_DIR/build.sh" --only 30-runtimes 2>&1)"
+assert_contains "$console" "noisy-output-30-runtimes" "VERBOSE=yes streams stage output"
 
 rm -rf "$T"
 finish
