@@ -2,7 +2,7 @@
 
 A self-contained native toolchain: LLVM 23 (clang, lld, BOLT, Polly), libc++ / libc++abi / libunwind, compiler-rt, and a full tree of pre-built static libraries (zlib-ng, zstd, brotli, snappy, lz4, crc32c, AWS-LC, mimalloc, and optionally OpenSSL, zlib, SQLite, SQLCipher, Cap'n Proto, hiredis, LevelDB), all compiled with one consistent flags profile. Linux bundles carry two sysroots, fully static **musl** (with mimalloc built into `libc.a`) and **glibc 2.34**; macOS bundles carry a component overlay on top of the system SDK. It is built from source, one bundle per host OS/arch, and is used by Elide, Komodo, Bali (crema-jit) and GraalVM `native-image` builds (`--libc=musl`).
 
-Releases are `elide-toolchain-<version>-<os>-<arch>.tar.xz`, each with a `.sha256` and a CycloneDX SBOM, on [GitHub Releases](https://github.com/elide-dev/toolchain/releases) (tags `vYYYY.MM.N`), mirrored to `https://static.elideusercontent.com/toolchain/<version>/`.
+Releases are `elide-toolchain-<version>-<os>-<arch>.tar.xz`, each with a `.sha256` and a CycloneDX SBOM, on [GitHub Releases](https://github.com/elide-dev/toolchain/releases) (tags `vYYYY.M.N`; the month is not zero-padded, e.g. `v2026.9.0`), mirrored to `https://static.elideusercontent.com/toolchain/<version>/`.
 
 ## Bundles
 
@@ -21,7 +21,7 @@ Floors:
 - **macOS 12.0** (`minos` <= 12.0).
 - **Host ISA:** x86-64-v3 (AVX2) on amd64, `armv8.2-a+crypto+crc+dotprod` on arm64. The shipped tools are built with the same `-march` as the code they produce, so they need such a host.
 
-Every shipped static archive carries LLVM 23 ThinLTO bitcode, so downstream links are `-flto=thin` end to end with lld. Components are pure bitcode; musl `libc.a` and libc++/libc++abi/libunwind are fat (bitcode plus native); compiler-rt, glibc's own archives and hand-written assembly members are native only. Consumers using Rust need a rustc whose LLVM major is **<=** the bundle's (`llvmMajor` in `manifest.json`).
+Every target library (each sysroot's static archives) and the libc++ runtimes (`lib/<triple>/libc++.a`, `libc++abi.a`, `libunwind.a`) carry LLVM 23 ThinLTO bitcode, so downstream links are `-flto=thin` end to end with lld. Components are pure bitcode; musl `libc.a` and libc++/libc++abi/libunwind are fat (bitcode plus native); compiler-rt, glibc's own archives and hand-written assembly members are native only. The LLVM/clang development libraries in `lib/` (`libLLVM*.a`, `libclang*.a`) are host tool libraries and are native code, not bitcode. Consumers using Rust need a rustc whose LLVM major is **<=** the bundle's (`llvmMajor` in `manifest.json`).
 
 Assets are named `elide-toolchain-<version>-<os>-<arch>.tar.xz` (`os` = `linux|darwin`, `arch` = `amd64|arm64`), with one top-level directory, `elide-toolchain/`.
 
@@ -68,7 +68,7 @@ export ELIDE_TOOLCHAIN_HOME=$PWD/elide-toolchain PATH=$PWD/elide-toolchain/bin:$
 
 ## Use
 
-Invoke `<triple>-clang` / `<triple>-clang++`; clang loads `bin/<triple>.cfg`, which supplies `--target`, `--sysroot`, `-rtlib=compiler-rt`, `-unwindlib=libunwind`, `-stdlib=libc++` and `-fuse-ld=lld`. The bundle is relocatable. For fully static output use the musl triple with `-static`; static linking of the gnu triple is unsupported.
+Invoke `<triple>-clang` / `<triple>-clang++`; clang loads `bin/<triple>.cfg`, which supplies `--target`, `--sysroot`, `-rtlib=compiler-rt`, `-unwindlib=libunwind`, `-stdlib=libc++` and `-fuse-ld=lld`. Plain `bin/clang` (and `clang --target=<triple>`) auto-loads the cfg too: plain `clang` loads the host's default-triple cfg, which is the gnu triple on Linux and the darwin triple on macOS. Pass `--no-default-config` for a bare clang. The bundle is relocatable. For fully static output use the musl triple with `-static`; static linking of the gnu triple is unsupported.
 
 ```sh
 x86_64-unknown-linux-musl-clang hello.c -static -o hello
@@ -85,7 +85,7 @@ eval "$(elide-toolchain env --target x86_64-unknown-linux-gnu)"
 
 **pkg-config.** `PKG_CONFIG_LIBDIR=<sysroot>/usr/lib/pkgconfig` and `PKG_CONFIG_SYSROOT_DIR=<sysroot>` (set by `env --target`); every component installs its `.pc` file there.
 
-**Rust.** Link through the bundle for cross-language LTO: `CARGO_TARGET_<TRIPLE>_LINKER=<triple>-clang` (printed by `env --target`) with `-Clink-arg=-fuse-ld=lld`. rustc's LLVM major must be <= the bundle's.
+**Rust.** Link through the bundle for cross-language LTO: `CARGO_TARGET_<TRIPLE>_LINKER=<triple>-clang` (printed by `env --target`) with `-Clink-arg=-fuse-ld=lld`. rustc's LLVM major must be <= the bundle's. The gnu std always passes `-lgcc_s`; the gnu sysroot's `usr/lib/libgcc_s.so` is a linker script (`INPUT(-lunwind)`) that resolves it to the static libunwind, so outputs never need `libgcc_s.so.1`. For musl, add `-C target-feature=+crt-static`.
 
 **GraalVM native-image.** Linux bundles ship `<cpu>-linux-musl-gcc` / `-g++` (and `cc`, `c++`, `ar`, `ranlib`, `nm`, `strip`) as shims over clang and the llvm tools, so `native-image --libc=musl` works with `bin/` on `PATH`. The shims never add `-static`.
 
@@ -151,7 +151,7 @@ Other changes to plan for:
 Host requirements:
 
 - **Linux:** `build-essential bison gawk python3 ninja-build cmake rsync xz-utils curl clang lld llvm` (apt), bash >= 4, and optionally `docker` for the container checks. No `sudo` is used by the build.
-- **macOS:** Xcode Command Line Tools, then `brew install bash ninja cmake` (bash >= 4 is required; run `build.sh` with Homebrew bash).
+- **macOS:** Xcode Command Line Tools, then `brew install bash ninja cmake rsync xz`. bash >= 4 is required, so run `build.sh` with Homebrew bash. GNU rsync is required because the build uses `rsync --from0 --files-from`, which macOS's bundled openrsync lacks. Homebrew's bin directory must precede `/usr/bin` on `PATH`. Homebrew's standard shell setup does this, and the CI build job checks that GNU rsync is the one found.
 
 ```sh
 git submodule update --init --depth=1 --recursive
@@ -168,7 +168,9 @@ Options:
 | `--clean` | delete `out/<os>-<arch>` first |
 | `--dry-run` | print the stages that would run |
 
-Output goes to `out/<os>-<arch>/` (stamps in `stamps/`); the packaged archive, checksum and SBOM land in `dist/`. Completed stages are skipped on re-run.
+Output goes to `out/<os>-<arch>/` (stamps in `stamps/`); the packaged archive, checksum and SBOM land in `dist/`. Completed stages are skipped on re-run. Stage names are checked before `--clean` deletes anything.
+
+To rebuild stage 1, use `--from 10-llvm-stage1`, not `--only 10-llvm-stage1`. Stage 10 wipes `out/<os>-<arch>/stage1`, and the runtimes and cfgs that stage 30 installs there would then be missing.
 
 Stages:
 
@@ -203,18 +205,19 @@ Stages:
 
 - `scripts/bump-submodules.sh` moves every submodule to its latest stable tag (or branch tip) and regenerates the pin block.
 - `scripts/check-versions.sh` verifies the pins against `git submodule status` (run in CI and in stage 00).
-- Releases are CalVer: `git tag vYYYY.MM.N && git push --tags` builds all four bundles, publishes the GitHub Release (archives, checksums, SBOMs) and mirrors it to R2.
+- Releases are CalVer, `vYYYY.M.N`, with the month not zero-padded (`v2026.9.0`, not `v2026.09.0`; CI rejects padded versions). `git tag vYYYY.M.N && git push --tags` builds all four bundles, publishes the GitHub Release (archives, checksums, SBOMs) and mirrors it to R2.
 
 ## Verification
 
 Stage 95 (`scripts/verify/checks.sh`) runs against a fresh extraction of the packaged archive and ends with `verification: N failure(s)`:
 
-- **manifest:** `manifest.json` parses and matches `versions.env`.
+- **manifest:** `manifest.json` parses; its `version` (and `elide-toolchain version`) is the build's version, `llvmMajor` is the LLVM major, and every submodule's recorded revision is its `*_REV` pin in `versions.env`.
 - **no build paths:** no text file mentions the build directory and there are no absolute symlinks.
 - **smoke:** per triple, compile, link and run C and C++ (iostream, exceptions, threads); musl output is static.
 - **werror:** `<triple>-clang -Werror -c` is clean (cfg flags raise no unused-argument warnings).
-- **components:** a program links against every enabled component.
-- **bitcode:** every member of every shipped static archive (except compiler-rt and glibc's own) is LLVM bitcode or an object with a `.llvm.lto` section, produced by the bundle's LLVM major.
+- **components:** a program links against every enabled component. On Linux, a `-shared` object also links `libssl.a`/`libcrypto.a` cleanly under `-z defs` (the ACCP/JNI case), and for gnu it stays within the glibc floor.
+- **bitcode:** every member of every sysroot archive and of the libc++ runtimes is LLVM bitcode (raw or the Mach-O wrapper) or an object with a `.llvm.lto` section, produced by the bundle's LLVM major. Each occurrence of a duplicated member name is checked. Exempt: compiler-rt, glibc's own archives (gnu only), musl's empty stub archives, and hand-written assembly. A member counts as assembly only if it is a native object with no `.llvm.lto` and no compiler `.comment`, and its source is assembly (a CMake `*.S.o`/`*.s.o`/`*.asm.o` object, or a musl `src/*/<arch>/*.s` source).
+- **rust:** when `rustc` and the target's std are installed, a hello world with a caught panic links through `<triple>-clang` and runs (musl: `+crt-static`; gnu: within the glibc floor, no `libgcc_s`). Otherwise it is skipped with a warning.
 - **glibc floor (gnu):** no `GLIBC_x.y` above 2.34 and no `GLIBC_ABI_DT_RELR` in outputs or bundled ELFs; no `libstdc++`/`libgcc_s` in `NEEDED`.
 - **interp (gnu):** `PT_INTERP` is the canonical loader path.
 - **musl libc (musl):** a `libc.a` member carries bitcode for the musl triple and native code, and a `-fno-lto` link works.
