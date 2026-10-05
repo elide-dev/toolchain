@@ -59,8 +59,16 @@ build_cxx_runtimes() {
   local t="$1" b="$BUILD_DIR/runtimes/$1/cxx" args=() musl=OFF
   if [ "$(triple_libc "$t")" = musl ]; then musl=ON; fi
   mapfile -t args < <(runtimes_common_args "$t")
+  # MemProf runtime (x86_64 gnu only). Later -D options override runtimes_common_args'
+  # MEMPROF=OFF. The always-built libclang_rt.memprof.so must link against our sysroot: no
+  # libstdc++ (SANITIZER_CXX_ABI=none), and lld + compiler-rt crt instead of the host ld.
+  local memprof_args=()
+  if memprof_supported "$t"; then
+    memprof_args=(-DCOMPILER_RT_BUILD_MEMPROF=ON -DSANITIZER_CXX_ABI=none
+      "-DCMAKE_SHARED_LINKER_FLAGS=-fuse-ld=lld -rtlib=compiler-rt -unwindlib=none")
+  fi
   fresh_dir "$b"
-  cmake -S "$ROOT_DIR/llvm/runtimes" -B "$b" "${args[@]}" \
+  cmake -S "$ROOT_DIR/llvm/runtimes" -B "$b" "${args[@]}" "${memprof_args[@]}" \
     -DLLVM_ENABLE_RUNTIMES="libunwind;libcxxabi;libcxx;compiler-rt" \
     -DCOMPILER_RT_BUILD_BUILTINS=OFF -DCOMPILER_RT_BUILD_CRT=OFF -DCOMPILER_RT_BUILD_PROFILE=ON \
     -DCOMPILER_RT_USE_BUILTINS_LIBRARY=ON \

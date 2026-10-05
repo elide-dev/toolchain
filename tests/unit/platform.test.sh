@@ -49,4 +49,9 @@ assert_eq "$(arch_flags arm64-apple-darwin)" ""
 
 case "$(uname -s)" in Linux) assert_eq "$(detect_host_os)" linux ;; Darwin) assert_eq "$(detect_host_os)" darwin ;; esac
 
+assert_ok memprof_supported x86_64-unknown-linux-gnu
+assert_fails memprof_supported x86_64-unknown-linux-musl
+assert_fails memprof_supported aarch64-unknown-linux-gnu
+assert_fails memprof_supported arm64-apple-darwin
+
 finish

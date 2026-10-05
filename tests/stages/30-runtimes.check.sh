@@ -16,6 +16,12 @@ for t in $ALL_TARGETS; do
     assert_file "$prefix/include/$t/c++/v1/__config_site"
     assert_file "$prefix/include/c++/v1/vector"
   done
+  rd="$BUNDLE_DIR/lib/clang/$LLVM_MAJOR/lib/$t"
+  if memprof_supported "$t"; then
+    for f in libclang_rt.memprof.a libclang_rt.memprof_cxx.a libclang_rt.memprof-preinit.a libclang_rt.memprof.so; do assert_file "$rd/$f"; done
+  else
+    assert_eq "$(find "$rd" -name 'libclang_rt.memprof*' | wc -l | tr -d ' ')" "0" "no memprof runtime for $t"
+  fi
   site="$(cat "$STAGE1_DIR/include/$t/c++/v1/__config_site")"
   if [ "$(triple_libc "$t")" = musl ]; then
     assert_contains "$site" "_LIBCPP_HAS_MUSL_LIBC 1"; static=-static

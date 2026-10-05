@@ -72,6 +72,11 @@ glibc_loader() {
 
 musl_loader() { printf 'lib/ld-musl-%s.so.1\n' "$1"; }
 
+# memprof_supported TRIPLE — compiler-rt's memprof runtime exists for x86_64 Linux only
+# (AllSupportedArchDefs.cmake:96, config-ix.cmake:842) and refuses static linking
+# (memprof_rtl.cpp:181), which rules out musl. Profiles from it apply to every triple.
+memprof_supported() { [ "$1" = x86_64-unknown-linux-gnu ]; }
+
 # musl_gcc_prefix TRIPLE — GCC-style prefix GraalVM looks for, e.g. x86_64-linux-musl.
 musl_gcc_prefix() { printf '%s-linux-musl\n' "$(triple_cpu "$1")"; }
 
