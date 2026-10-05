@@ -10,8 +10,12 @@ cd "$ROOT_DIR"
 #   tag:     newest tag matching the ERE selector (prereleases excluded)
 #   branch:  tip of the named branch
 #   default: tip of the remote's default branch
+# Held to an exact tag (change in lockstep with the consumer pin named beside it):
+#   aws-lc  v5.7.0        = the aws-lc vendored by aws-lc-sys 0.45.0 (Elide's Cargo.lock); ACCP
+#                           is built against the same symbols (AWS_LC_SYS_NO_PREFIX)
+#   sqlite  version-3.53.4 = org.xerial:sqlite-jdbc 3.53.4.0 (Elide)
 SPEC='
-aws-lc|tag|v[0-9]+\.[0-9]+\.[0-9]+
+aws-lc|tag|v5\.7\.0
 brotli|tag|v[0-9]+\.[0-9]+\.[0-9]+
 capnp|tag|v1\.[0-9]+\.[0-9]+
 cflags|branch|main
@@ -27,14 +31,14 @@ musl|branch|elide-v1.2.5
 openssl|tag|openssl-[0-9]+\.[0-9]+\.[0-9]+
 snappy|tag|[0-9]+\.[0-9]+\.[0-9]+
 sqlcipher|tag|v[0-9]+\.[0-9]+\.[0-9]+
-sqlite|default|
+sqlite|tag|version-3\.53\.4
 zlib|default|
 zlib-ng|tag|[0-9]+\.[0-9]+\.[0-9]+
 zstd|tag|v[0-9]+\.[0-9]+\.[0-9]+
 '
 
 var_of() { echo "$1" | tr 'a-z-' 'A-Z_'; }
-strip_tag() { echo "$1" | sed -E 's/^(v|llvmorg-|openssl-)//'; }
+strip_tag() { echo "$1" | sed -E 's/^(v|llvmorg-|openssl-|version-)//'; }
 url_of() { git -C "$1" remote get-url origin; }
 
 block=""
