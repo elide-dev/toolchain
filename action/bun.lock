@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "install-musl-toolchain",
+      "name": "setup-elide-toolchain",
       "dependencies": {
         "@actions/core": "^1.11.1",
         "@actions/exec": "^1.1.1",
