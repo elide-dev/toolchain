@@ -17,6 +17,13 @@ check_submodules() {
   local missing
   missing="$(git -C "$ROOT_DIR" submodule status | awk '/^-/{print $2}' | xargs)"
   [ -z "$missing" ] || die "uninitialized submodules: $missing (run: git submodule update --init --depth=1 --recursive)"
+  # Component sources are copied from the submodule work trees, so modified or deleted tracked
+  # files (e.g. leftovers of an old in-tree build) would leak into the bundle.
+  local dirty
+  # shellcheck disable=SC2016 # $sm_path is expanded by `git submodule foreach`, not this shell
+  dirty="$(git -C "$ROOT_DIR" submodule foreach --quiet \
+    'git diff --quiet --ignore-submodules HEAD -- . || echo "$sm_path"' | xargs)"
+  [ -z "$dirty" ] || die "submodules with modified or deleted tracked files: $dirty (inspect, then: git -C <path> checkout -- .)"
   "$ROOT_DIR/scripts/check-versions.sh"
 }
 

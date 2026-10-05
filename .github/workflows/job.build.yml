@@ -70,6 +70,9 @@ jobs:
             fi
           fi
           test "$(git -C glibc rev-parse HEAD)" = "$rev"
+          # Persistent runners may hold submodule work trees damaged by earlier jobs (tracked files
+          # deleted or modified); `submodule update` does not repair them when HEAD already matches.
+          git submodule foreach --recursive --quiet 'git reset -q --hard && git clean -qffdx'
       - name: "Setup: Packages (Linux)"
         if: matrix.os == 'linux'
         run: |

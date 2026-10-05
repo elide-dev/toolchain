@@ -17,6 +17,10 @@
 -Wno-unused-parameter
 -Wno-sign-compare
 
+# LLVM 23 added -Wunused-but-set-global; aws-lc builds with an unconditional -Werror and trips it
+# on platform-gated globals (crypto/ube/fork_ube_detect.c on darwin).
+-Wno-error=unused-but-set-global
+
 # Most third-party C drops const for compatibility shims or does pointer
 # casts the standard would technically flag. We do not own these sources,
 # so the warnings are not actionable.
