@@ -1,0 +1,47 @@
+name: "Job - Action E2E"
+
+on:
+  workflow_call: {}
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: "Action (${{ matrix.os }}-${{ matrix.arch }} ${{ matrix.target }})"
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: linux, arch: amd64, runner: linux-amd64-cipool, target: x86_64-unknown-linux-gnu }
+          - { os: linux, arch: amd64, runner: linux-amd64-cipool, target: x86_64-unknown-linux-musl }
+          - { os: linux, arch: arm64, runner: linux-arm64-cipool, target: aarch64-unknown-linux-gnu }
+          - { os: linux, arch: arm64, runner: linux-arm64-cipool, target: aarch64-unknown-linux-musl }
+          - { os: darwin, arch: arm64, runner: macos-15, target: arm64-apple-darwin }
+          - { os: darwin, arch: amd64, runner: macos-15-intel, target: x86_64-apple-darwin }
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: elide-toolchain-${{ matrix.os }}-${{ matrix.arch }}
+          path: dist
+      - name: "Locate archive"
+        id: archive
+        run: echo "path=$(ls "$PWD"/dist/elide-toolchain-*.tar.xz)" >> "$GITHUB_OUTPUT"
+      - name: "Install via action"
+        id: tc
+        uses: ./action
+        with:
+          archive: ${{ steps.archive.outputs.path }}
+          target: ${{ matrix.target }}
+      - name: "Use it"
+        run: |
+          elide-toolchain doctor
+          echo "home=${{ steps.tc.outputs.home }} targets=${{ steps.tc.outputs.targets }}"
+          case "${{ matrix.target }}" in *-linux-musl) extra=-static ;; *) extra= ;; esac
+          "$CC" $extra tests/fixtures/hello.c -o hello && ./hello
+          "$CXX" $extra tests/fixtures/hello.cpp -o hello-cxx && ./hello-cxx
+          test -f "$CMAKE_TOOLCHAIN_FILE"

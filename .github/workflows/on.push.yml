@@ -2,13 +2,10 @@ name: CI
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
     paths-ignore:
-      - 'action/**'
-      - 'action/*'
       - '**/*.md'
-      - '.github/workflows/*'
+      - 'docs/**'
 
 permissions:
   contents: read
@@ -17,12 +14,23 @@ concurrency:
   group: "ci-main-${{ github.ref }}"
   cancel-in-progress: false
 
-env:
-  RUSTC_WRAPPER: "sccache"
-
 jobs:
+  unit:
+    name: "Unit tests"
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      - run: git submodule update --init --depth=1 cflags
+      - run: sudo apt-get install -y shellcheck
+      - run: tests/run.sh
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - run: cd action && bun install --frozen-lockfile && bun run typecheck && bun test
   build:
-    name: "Toolchain"
+    needs: unit
     uses: ./.github/workflows/job.build.yml
     secrets: inherit
-
+  e2e:
+    needs: build
+    uses: ./.github/workflows/job.action-e2e.yml

@@ -1,41 +1,38 @@
 name: "Job - Build"
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Toolchain version (YYYY.MM.N or vYYYY.MM.N); empty = dev build"
+        required: false
+        type: string
   workflow_call:
-    outputs:
-      artifactIds:
-        description: "Artifact IDs"
-        value: ${{ jobs.build.outputs.artifactId }}
-      artifactNames:
-        description: "Artifact Names"
-        value: ${{ jobs.build.outputs.artifactName }}
+    inputs:
+      version:
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
 
-env:
-  RUSTC_WRAPPER: "sccache"
-
 jobs:
   build:
-    name: "Toolchain (${{ matrix.arch }})"
+    name: "Bundle (${{ matrix.os }}-${{ matrix.arch }})"
     runs-on: ${{ matrix.runner }}
-    outputs:
-      artifactId: ${{ steps.artifact.outputs.id }}
-      artifactName: ${{ steps.artifact.outputs.name }}
+    timeout-minutes: ${{ matrix.timeout }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - arch: amd64
-            target: x86-64-v3
-            tune: znver4
-            runner: linux-amd64-cipool
-          # - arch: arm64
-          #   target: armv8.2-a+crypto+crc
-          #   tune: generic
-          #   runner: linux-arm64-cipool
+          - { os: linux, arch: amd64, runner: linux-amd64-cipool, timeout: 720 }
+          - { os: linux, arch: arm64, runner: linux-arm64-cipool, timeout: 720 }
+          - { os: darwin, arch: arm64, runner: macos-15, timeout: 360 }
+          - { os: darwin, arch: amd64, runner: macos-15-intel, timeout: 360 }
+    env:
+      REQUIRE_CONTAINER_CHECKS: ${{ matrix.os == 'linux' && 'yes' || 'no' }}
+      INPUT_VERSION: ${{ inputs.version }}
     steps:
       - name: "Setup: Harden Runner"
         uses: step-security/harden-runner@c6295a65d1254861815972266d5933fd6e532bdf # v2.11.1
@@ -47,60 +44,34 @@ jobs:
           submodules: false
           fetch-depth: 1
           persist-credentials: false
-      - name: "Setup: Git Variables"
-        id: vars
-        run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
       - name: "Setup: Submodules"
-        run: git submodule update --init --depth=1 && git submodule update --init --recursive --depth=1 sqlite
-      - name: "Setup: Sccache"
-        uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
-      - name: "Build: Toolchain"
-        run: C_TARGET_ARCH=${{ matrix.target }} ARCH_FLAVOR=${{ matrix.arch }} C_TARGET_TUNE=generic ./build.sh
-      - name: "Package: Toolchain"
+        run: git submodule update --init --depth=1 --recursive --jobs 8
+      - name: "Setup: Packages (Linux)"
+        if: matrix.os == 'linux'
         run: |
-          tar -cvf musl-toolchain.tar 1.2.5/
-          xz --best -9 --extreme -k -v musl-toolchain.tar
-          mv musl-toolchain.tar.xz musl-toolchain-${{ steps.vars.outputs.sha_short }}-${{ matrix.arch }}.txz
-          sha256sum musl-toolchain-${{ steps.vars.outputs.sha_short }}-${{ matrix.arch }}.txz > musl-toolchain-${{ steps.vars.outputs.sha_short }}-${{ matrix.arch }}.txz.sha256
-          rm -fr dist && mkdir -p dist
-          cp -fv \
-            musl.sbom.json \
-            dist/musl-toolchain-${{ steps.vars.outputs.sha_short }}-${{ matrix.arch }}.sbom.json;
-          cp -fv \
-            musl-toolchain-${{ steps.vars.outputs.sha_short }}-${{ matrix.arch }}.txz \
-            musl-toolchain-${{ steps.vars.outputs.sha_short }}-${{ matrix.arch }}.txz.sha256 \
-            dist/;
-      - name: "Provenance: Artifacts"
-        id: attest_artifacts
-        if: false
-        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
-        with:
-          subject-path: "musl-toolchain-${{ steps.vars.outputs.sha_short }}-${{ matrix.arch }}.txz"
-      - name: "Provenance: SBOM"
-        id: attest_sbom
-        if: false
-        uses: actions/attest-sbom@4651f806c01d8637787e274ac3bdf724ef169f34 # v3
-        with:
-          subject-path: "musl-toolchain-${{ steps.vars.outputs.sha_short }}-${{ matrix.arch }}.txz"
-          sbom-path: "musl.sbom.json"
-      - name: "Artifact: Toolchain"
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential bison gawk python3 ninja-build \
+            cmake rsync xz-utils curl clang lld llvm
+      - name: "Setup: Packages (macOS)"
+        if: matrix.os == 'darwin'
+        run: brew install bash ninja cmake
+      - name: "Setup: Version"
+        id: version
+        run: |
+          if [ -n "$INPUT_VERSION" ]; then
+            v="${INPUT_VERSION#v}"
+          else
+            v="$(. ./versions.env && echo "$TOOLCHAIN_VERSION")-dev.$(git rev-parse --short HEAD)"
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+      - name: "Build: Toolchain"
+        env:
+          TOOLCHAIN_VERSION: ${{ steps.version.outputs.version }}
+        run: ./build.sh
+      - name: "Artifact: Bundle"
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
-        id: artifact
         with:
-          name: musl-toolchain-${{ steps.vars.outputs.sha_short }}-${{ matrix.arch }}
-          compression-level: 1
+          name: elide-toolchain-${{ matrix.os }}-${{ matrix.arch }}
+          compression-level: 0
           overwrite: true
-          path: |
-            musl.sbom.json
-            musl-toolchain-${{ steps.vars.outputs.sha_short }}-${{ matrix.arch }}.txz
-            musl-toolchain-${{ steps.vars.outputs.sha_short }}-${{ matrix.arch }}.txz.sha256
-      - name: "Artifact: Publish to R2"
-        uses: elide-tools/r2-upload-action@main
-        with:
-          path: "./dist"
-          target: "musl-toolchain"
-          bucket: "elide-userdata-public"
-          account-id: ${{ secrets.R2_ACCOUNT_ID }}
-          access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
-          secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-
+          path: dist/*
