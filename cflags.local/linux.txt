@@ -1,0 +1,5 @@
+# Fat ThinLTO objects: every component member carries native code plus LLVM bitcode (.llvm.lto),
+# so non-LTO consumer links (dev builds, GNU ld, older rust-lld) use the native code, and LTO links
+# that pass -ffat-lto-objects (lld --fat-lto-objects) use the bitcode. ELF only: Mach-O has no
+# fat-object support, so darwin archives stay pure bitcode.
+-ffat-lto-objects

@@ -253,7 +253,12 @@ check_bitcode() {
       kind="$(head -c 4 "$m" | od -An -tx1 | tr -d ' \n')"
       bc=""; fmt=""; sections=""
       case "$kind" in
-        4243c0de|dec0170b) bc="$m" ;;   # raw bitcode, or the Mach-O bitcode wrapper (bcanalyzer reads both)
+        4243c0de|dec0170b)   # raw bitcode, or the Mach-O bitcode wrapper (bcanalyzer reads both)
+          # ELF targets ship fat objects so non-LTO links work; only darwin may be pure bitcode.
+          if [ "$(triple_os "$t")" = linux ]; then
+            bad="$bad$a($name#$k): pure bitcode, want a fat object (-ffat-lto-objects)"$'\n'; continue
+          fi
+          bc="$m" ;;
         7f454c46)
           fmt=elf
           sections="$("$root/bin/llvm-readelf" -S "$m" 2>/dev/null || true)"

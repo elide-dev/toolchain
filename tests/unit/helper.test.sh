@@ -60,6 +60,12 @@ assert_contains "$f" "-Clink-arg=-Wl,-mllvm,-supports-hot-cold-new"
 assert_not_contains "$f" "export PATH="
 assert_eq "$(eval "$f"; printf '%s' "$ELIDE_CFLAGS")" "-flto=thin -gmlt -fdebug-info-for-profiling -fmemory-profile-use=/p/app.memprofdata"
 assert_contains "$("$H" flags --target x86_64-unknown-linux-musl memprof-use=/p/a)" "-lelidealloc-shim -static"
+# Linux archives are fat: LTO links must ask lld for their bitcode; darwin's are pure bitcode.
+assert_contains "$(eval "$f"; printf '%s' "$ELIDE_LDFLAGS")" "-ffat-lto-objects"
+assert_contains "$f" "-Clink-arg=-ffat-lto-objects"
+assert_contains "$("$H" flags --target x86_64-unknown-linux-musl propeller-baseline)" "-ffat-lto-objects"
+assert_not_contains "$("$H" flags --target arm64-apple-darwin memprof-use=/p/a)" "-ffat-lto-objects"
+assert_not_contains "$("$H" flags --target x86_64-unknown-linux-gnu memprof-instrument)" "-ffat-lto-objects"
 assert_contains "$("$H" flags --target x86_64-unknown-linux-gnu memprof-instrument)" "-fmemory-profile -gmlt"
 assert_fails "$H" flags --target x86_64-unknown-linux-musl memprof-instrument
 assert_contains "$("$H" flags --target x86_64-unknown-linux-musl memprof-instrument 2>&1 || true)" "x86_64-unknown-linux-gnu only"

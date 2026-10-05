@@ -91,7 +91,7 @@ build_mimalloc_shim() {
   lib="$(variant_dir "$t" "$s")/usr/lib/libmimalloc.a"
   # shellcheck disable=SC2046
   "$BUNDLE_DIR/bin/$t-clang" $(SANITIZER_LAYER="$s" sanitizer_layer_flags "$t") $(arch_flags "$t") \
-    -O2 -flto=thin -fPIC -Wall -Werror -I"$ROOT_DIR/mimalloc/include" \
+    -O2 -flto=thin -ffat-lto-objects -fPIC -Wall -Werror -I"$ROOT_DIR/mimalloc/include" \
     -c "$ROOT_DIR/src/mimalloc-sanitizer-shim.c" -o "$o"
   mkdir -p "${lib%/*}"; rm -f "$lib"
   "$BUNDLE_DIR/bin/llvm-ar" rcs "$lib" "$o"

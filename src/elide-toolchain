@@ -185,6 +185,9 @@ cmd_flags() {
       *) die "flags: unknown mode: $m" ;;
     esac
   done
+  # Linux archives are fat: without -ffat-lto-objects (lld --fat-lto-objects) an LTO link would take
+  # their native code and leave components and libc out of the profile-driven optimization.
+  case "$target:$lf " in *-linux-*:*" -flto=thin "*) lf="$lf -ffat-lto-objects" ;; esac
   cf=$(uniq_words "$cf"); lf=$(uniq_words "$lf")
   rf="-Clinker-plugin-lto -Clinker=$ROOT/bin/$target-clang $rf"
   for w in $lf; do case $w in -flto=thin) ;; *) rf="$rf -Clink-arg=$w" ;; esac; done

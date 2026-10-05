@@ -243,7 +243,7 @@ LLVM major (`LLVM_MAJOR`, currently 23):
 
 | Archive | Form |
 |---|---|
-| Components (stage 50) and standalone `libmimalloc.a` | ThinLTO bitcode (from `-flto=thin` in the cflags profile) |
+| Components (stage 50) and standalone `libmimalloc.a` | Linux: fat ThinLTO objects (`-flto=thin` from the cflags profile, `-ffat-lto-objects` from `cflags.local/linux.txt`, 2026-10-05); darwin: ThinLTO bitcode |
 | musl `libc.a` | fat ThinLTO objects (bitcode + native) |
 | `libc++.a`, `libc++abi.a`, `libunwind.a` | fat ThinLTO objects (bitcode + native), so non-LTO links such as stage 2 still use the native code |
 | hand-written assembly members (`*.S.o`) | native only: no IR to carry |
