@@ -5,7 +5,7 @@ ROOT_DIR="${ROOT_DIR:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -
 source "$ROOT_DIR/tests/lib/assert.sh"
 
 T="$(mktemp -d)"
-STAGES="00-sources 10-llvm-stage1 20-libc-gnu 21-libc-musl 30-runtimes 35-mimalloc 36-llvm-deps 40-llvm-stage2 50-components 90-package 95-verify"
+STAGES="00-sources 10-llvm-stage1 20-libc-gnu 21-libc-musl 30-runtimes 35-mimalloc 36-llvm-deps 40-llvm-stage2 45-propeller 50-components 90-package 95-verify"
 mkdir -p "$T/stages"
 for s in $STAGES; do
   cat > "$T/stages/$s.sh" <<EOF
@@ -26,7 +26,7 @@ run() { # run build.sh with stub stages; log goes to $T/log
 }
 ran() { awk '{print $1}' "$T/log" | xargs; }
 
-run;                       assert_eq "$(ran)" "00-sources 10-llvm-stage1 21-libc-musl 30-runtimes 35-mimalloc 36-llvm-deps 40-llvm-stage2 50-components 90-package 95-verify" "full run (20 skipped by stage_applies)"
+run;                       assert_eq "$(ran)" "00-sources 10-llvm-stage1 21-libc-musl 30-runtimes 35-mimalloc 36-llvm-deps 40-llvm-stage2 45-propeller 50-components 90-package 95-verify" "full run (20 skipped by stage_applies)"
 assert_file "$T/out/stamps/95-verify.done"
 assert_file "$T/out/stamps/20-libc-gnu.done"
 run;                       assert_eq "$(ran)" "" "second run is a no-op"
