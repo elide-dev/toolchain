@@ -11,8 +11,13 @@ t="$(bundle_triple_for_libc gnu)"; s="$(sysroot_of "$t")"; cpu="$(triple_cpu "$t
 for f in usr/lib/libc.so.6 usr/lib/libc.so usr/lib/libc.a usr/lib/crt1.o usr/lib/libc_nonshared.a usr/include/stdio.h "$(glibc_loader "$cpu")"; do
   assert_file "$s/$f"
 done
-maxdef="$(readelf -V "$s/usr/lib/libc.so.6" | grep -oE 'GLIBC_2\.[0-9]+' | sort -uV | tail -1)"
-assert_eq "$maxdef" "GLIBC_$GLIBC_FLOOR" "libc.so.6 defines up to the floor"
+assert_contains "$(readelf -V "$s/usr/lib/libc.so.6")" "GLIBC_$GLIBC_FLOOR" "libc.so.6 defines the floor"
+# Upstream aarch64 glibc 2.17 exports _mcount@@GLIBC_2.18 (only -pg code references it).
+nm="$STAGE1_DIR/bin/llvm-nm"
+newer="$("$nm" -D --defined-only "$s/usr/lib/libc.so.6" | awk '{print $NF}' | grep -E '@@?GLIBC_[0-9]' \
+  | grep -v '^GLIBC_' | grep -v '^_mcount@' | while IFS= read -r sym; do
+    v="${sym##*GLIBC_}"; if version_lt "$GLIBC_FLOOR" "$v"; then echo "$sym"; fi; done)"
+assert_eq "$newer" "" "libc.so.6 defines nothing above the floor"
 loader_target="$(readlink "$s/$(glibc_loader "$cpu")" || true)"
 assert_not_contains "x$loader_target" "x/" "loader link is relative"
 assert_file "$OUT_DIR/glibc-files.txt"

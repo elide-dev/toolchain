@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # Stage 45: llvm-propeller's generate_propeller_profiles (Propeller layout profiles and DeduBB
 # directives), linked against the stage-2 LLVM build tree's static libraries with the stage-1
-# gnu cfg compiler (glibc 2.34 sysroot, static libc++), so it meets the glibc floor like the
+# gnu cfg compiler (glibc 2.17 sysroot, static libc++), so it meets the glibc floor like the
 # rest of bin/. Third-party deps come from the stage-00 cache; no network. Linux only (Propeller
 # and BB address maps are ELF-only).
 

@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Stage 40: the shipped LLVM, built by stage-1 clang (via the gnu cfg) against our glibc 2.34
+# Stage 40: the shipped LLVM, built by stage-1 clang (via the gnu cfg) against our glibc 2.17
 # sysroot, with static libc++/libunwind/compiler-rt and no shared libLLVM/libclang, so the
 # tools run on any glibc >= GLIBC_FLOOR host. lld gets zlib + zstd from stage 36.
 

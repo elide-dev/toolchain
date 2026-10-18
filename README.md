@@ -1,6 +1,6 @@
 # Elide Toolchain
 
-A self-contained native toolchain: LLVM 23 (clang, lld, BOLT, Polly), libc++ / libc++abi / libunwind, compiler-rt, and a full tree of pre-built static libraries (zlib-ng, zstd, brotli, snappy, lz4, crc32c, AWS-LC, mimalloc, libsqlite3elide, and optionally OpenSSL, zlib, SQLite, SQLCipher, Cap'n Proto, hiredis, LevelDB), all compiled with one consistent flags profile. Linux bundles carry two sysroots, fully static **musl** (with mimalloc built into `libc.a`) and **glibc 2.34**; macOS bundles carry a component overlay on top of the system SDK. It is built from source, one bundle per host OS/arch, and is used by Elide, Komodo, Bali (crema-jit) and GraalVM `native-image` builds (`--libc=musl`).
+A self-contained native toolchain: LLVM 23 (clang, lld, BOLT, Polly), libc++ / libc++abi / libunwind, compiler-rt, and a full tree of pre-built static libraries (zlib-ng, zstd, brotli, snappy, lz4, crc32c, AWS-LC, mimalloc, libsqlite3elide, and optionally OpenSSL, zlib, SQLite, SQLCipher, Cap'n Proto, hiredis, LevelDB), all compiled with one consistent flags profile. Linux bundles carry two sysroots, fully static **musl** (with mimalloc built into `libc.a`) and **glibc 2.17**; macOS bundles carry a component overlay on top of the system SDK. It is built from source, one bundle per host OS/arch, and is used by Elide, Komodo, Bali (crema-jit) and GraalVM `native-image` builds (`--libc=musl`).
 
 Releases are `elide-toolchain-<version>-<os>-<arch>.tar.xz`, each with a `.sha256` and a CycloneDX SBOM, on [GitHub Releases](https://github.com/elide-dev/toolchain/releases) (tags `vYYYY.M.N`; the month is not zero-padded, e.g. `v2026.9.0`), mirrored to `https://static.elideusercontent.com/toolchain/<version>/`.
 
@@ -16,7 +16,7 @@ Each bundle targets its own OS and architecture (no cross-OS or cross-arch targe
 
 Floors:
 
-- **glibc 2.34.** Every glibc-targeted binary, including the bundled clang and lld, references no symbol version newer than `GLIBC_2.34` (RHEL 9, AL2023, Ubuntu 22.04, Debian 12 and newer). Older systems are served by static musl.
+- **glibc 2.17.** Every glibc-targeted binary, including the bundled clang and lld, references no symbol version newer than `GLIBC_2.17` (RHEL/CentOS 7, Amazon Linux 2, Ubuntu 14.04, Debian 8 and newer). The gnu sysroot is CentOS 7.9's final glibc 2.17 build (prebuilt RPMs pinned by SHA256 in `versions.env`) over current Linux UAPI headers. Code built against it sees glibc 2.17 headers, so newer interfaces (`getrandom`, `getentropy`, `statx`, …) are absent and libraries fall back to their syscall or `/dev/urandom` paths.
 - **macOS 12.0** (`minos` <= 12.0).
 - **Host ISA:** x86-64-v3 (AVX2) on amd64, `armv8.2-a+crypto+crc+dotprod` on arm64. The shipped tools are built with the same `-march` as the code they produce, so they need such a host.
 
@@ -68,7 +68,7 @@ export ELIDE_TOOLCHAIN_HOME=$PWD/elide-toolchain PATH=$PWD/elide-toolchain/bin:$
 
 ## Use
 
-Invoke `<triple>-clang` / `<triple>-clang++`; clang loads `bin/<triple>.cfg`, which supplies `--target`, `--sysroot`, `-rtlib=compiler-rt`, `-unwindlib=libunwind`, `-stdlib=libc++` and `-fuse-ld=lld`. Plain `bin/clang` (and `clang --target=<triple>`) auto-loads the cfg too: plain `clang` loads the host's default-triple cfg, which is the gnu triple on Linux and the darwin triple on macOS. Pass `--no-default-config` for a bare clang. The bundle is relocatable. For fully static output use the musl triple with `-static`; static linking of the gnu triple is unsupported.
+Invoke `<triple>-clang` / `<triple>-clang++`; clang loads `bin/<triple>.cfg`, which supplies `--target`, `--sysroot`, `-rtlib=compiler-rt`, `-unwindlib=libunwind`, `-stdlib=libc++` and `-fuse-ld=lld`. On gnu triples it also links `libpthread`, `libdl` and `librt` `--as-needed` (glibc 2.17 keeps them out of `libc`); these are link-only options. Plain `bin/clang` (and `clang --target=<triple>`) auto-loads the cfg too: plain `clang` loads the host's default-triple cfg, which is the gnu triple on Linux and the darwin triple on macOS. Pass `--no-default-config` for a bare clang. The bundle is relocatable. For fully static output use the musl triple with `-static`; static linking of the gnu triple is unsupported.
 
 ```sh
 x86_64-unknown-linux-musl-clang hello.c -static -o hello
@@ -197,7 +197,7 @@ elide-toolchain/
     <triple>/c++/v1/__config_site
   sysroot/
     <arch>-unknown-linux-musl/usr/{include,lib}   # musl+mimalloc, kernel headers, components
-    <arch>-unknown-linux-gnu/usr/{include,lib}    # glibc 2.34, kernel headers, components, libmimalloc.a
+    <arch>-unknown-linux-gnu/usr/{include,lib}    # glibc 2.17, kernel headers, components, libmimalloc.a
     <every sysroot>/usr/lib/libelidealloc-shim.a, usr/include/elidealloc-shim.h
     <arch>-apple-darwin/usr/{include,lib}         # macOS component overlay (no SDK)
   share/elide-toolchain/
@@ -228,9 +228,9 @@ A sanitizer add-on adds `lib/<triple>/<san>/` (instrumented libc++), `sysroot/<t
 Other changes to plan for:
 
 - This is a clean break from the old layout; consumers migrate when they bump their pin.
-- glibc 2.34 is the new baseline for all consumers (Elide/WHIPLASH, Bali/crema-jit, Komodo).
+- glibc 2.17 is the baseline for all consumers (Elide/WHIPLASH, Bali/crema-jit, Komodo).
 - The default TLS library is AWS-LC 5.x (`libcrypto.a`, `libssl.a`); OpenSSL is off by default. The Elide ACCP fork (`elide-tools/amazon-corretto-crypto-provider`) must be synced to upstream `main` to build against AWS-LC v5.
-- Host GCC is no longer part of the bundle (it is used only to compile glibc); `musl-cross-make` is gone.
+- Host GCC is no longer part of the bundle; `musl-cross-make` is gone.
 
 ## Building
 
@@ -244,7 +244,7 @@ git submodule update --init --depth=1 --recursive
 ./build.sh
 ```
 
-glibc is fetched from sourceware.org (canonical, as pinned in `.gitmodules`); because sourceware returns HTTP 403 to some CI IPs, the CI submodule step falls back to the GitHub mirror `https://github.com/bminor/glibc.git` and still asserts that the checked-out commit equals the pinned gitlink.
+glibc is not a submodule: stage 20 downloads CentOS 7.9's `glibc`, `glibc-devel`, `glibc-headers` and `glibc-static` RPMs (release `GLIBC_RPM_RELEASE`) from vault.centos.org, checks each against its pinned SHA256 (the repodata digest), and unpacks them with `scripts/rpm-extract.py`. glibc 2.17 cannot be built with a current GCC or clang.
 
 Options:
 
@@ -268,13 +268,13 @@ Stages:
 |---|---|---|
 | 00 | `sources` | Check submodule pins; fetch Linux kernel headers (checksummed) into each Linux sysroot (macOS: check Xcode CLT) |
 | 10 | `llvm-stage1` | Linux: the bootstrap clang/lld (not shipped), by default the pinned official LLVM release (`STAGE1_SOURCE`), else built by the host compiler. macOS: builds the full LLVM (floor 12.0) and compiler-rt directly into the bundle |
-| 20 | `libc-gnu` | Host GCC builds glibc 2.34 into the gnu sysroot (Linux) |
+| 20 | `libc-gnu` | Unpack the pinned glibc 2.17 RPMs into the gnu sysroot (Linux) |
 | 21 | `libc-musl` | Stage-1 clang builds musl phase 1 (Linux) |
 | 30 | `runtimes` | compiler-rt, libunwind, libc++abi, libc++ per Linux triple, as fat ThinLTO archives; the memprof runtime for x86_64 gnu |
 | 31 | `sanitizer-runtimes` | compiler-rt sanitizer runtimes and libFuzzer per Linux triple (matrix in `versions.env`) |
 | 35 | `mimalloc` | musl: mimalloc into musl phase 2; gnu/macOS: standalone `libmimalloc.a`; `libelidealloc-shim.a` for every triple |
 | 36 | `llvm-deps` | Static zlib-ng and zstd for the stage-2 LLVM build (Linux, not shipped) |
-| 40 | `llvm-stage2` | Rebuild clang/lld/bolt/polly against the gnu 2.34 sysroot with static libc++ (Linux); these are the shipped tools |
+| 40 | `llvm-stage2` | Rebuild clang/lld/bolt/polly against the gnu 2.17 sysroot with static libc++ (Linux); these are the shipped tools |
 | 45 | `propeller` | `generate_propeller_profiles` (with DeduBB) linked against the stage-2 LLVM build tree, offline from cached deps (Linux) |
 | 50 | `components` | Build each enabled component per triple with the bundle's own `<triple>-clang`, installing `.pc` files |
 | 60 | `sanitizer-addons` | With `BUILD_SANITIZER_VARIANTS=yes`: per sanitizer (asan/tsan/msan, gnu), instrumented libc++ and components and the `sysroot/<triple>+<san>` farm |
@@ -329,12 +329,12 @@ Stage 95 (`scripts/verify/checks.sh`) runs against a fresh extraction of the pac
 - **components:** a program links against every enabled component. On Linux, a `-shared` object also links `libssl.a`/`libcrypto.a` cleanly under `-z defs` (the ACCP/JNI case), and for gnu it stays within the glibc floor.
 - **bitcode:** every member of every sysroot archive and of the libc++ runtimes is LLVM bitcode (raw or the Mach-O wrapper) or an object with a `.llvm.lto` section, produced by the bundle's LLVM major. Each occurrence of a duplicated member name is checked. Exempt: compiler-rt, glibc's own archives (gnu only), musl's empty stub archives, and hand-written assembly. A member counts as assembly only if it is a native object with no `.llvm.lto` and no compiler `.comment`, and its source is assembly (a CMake `*.S.o`/`*.s.o`/`*.asm.o` object, or a musl `src/*/<arch>/*.s` source).
 - **rust:** when `rustc` and the target's std are installed, a hello world with a caught panic links through `<triple>-clang` and runs (musl: `+crt-static`; gnu: within the glibc floor, no `libgcc_s`). Otherwise it is skipped with a warning.
-- **glibc floor (gnu):** no `GLIBC_x.y` above 2.34 and no `GLIBC_ABI_DT_RELR` in outputs or bundled ELFs; no `libstdc++`/`libgcc_s` in `NEEDED`.
+- **glibc floor (gnu):** no `GLIBC_x.y` above 2.17 and no `GLIBC_ABI_DT_RELR` in outputs or bundled ELFs; no `libstdc++`/`libgcc_s` in `NEEDED`.
 - **interp (gnu):** `PT_INTERP` is the canonical loader path.
 - **musl libc (musl):** a `libc.a` member carries bitcode for the musl triple and native code, and a `-fno-lto` link works.
 - **gcc shims (musl):** `<arch>-linux-musl-gcc hello.c -static` links and runs.
 - **macOS minos / dylibs (macOS):** `minos` <= 12.0 and no unexpected dylib dependencies.
-- **containers (Linux):** gnu smoke binaries and `clang --version` run inside `almalinux:9` and `ubuntu:22.04` (skipped without docker unless `REQUIRE_CONTAINER_CHECKS=yes`).
+- **containers (Linux):** gnu smoke binaries and `clang --version` run inside `centos:7` (glibc 2.17), `amazonlinux:2` and `ubuntu:20.04` (skipped without docker unless `REQUIRE_CONTAINER_CHECKS=yes`).
 - **propeller (Linux):** the shipped tool reproduces upstream's golden profile from checked-in perf data; a relink of upstream's fixture with the generated profiles shows functions in profile order, `.text.hot`/`.text.split`, and cold parts in `.text.split`. A live check runs only on hosts with LBR/SPE (otherwise a warned skip; `REQUIRE_LBR=yes` makes it fail).
 - **dedubb (Linux):** directives from a labelled binary; a relink with them folds the duplicate into a branch to `DeduBB.master.0` and the program still works. Without directives, the compiler's output is deterministic and has no DeduBB trace.
 - **elidealloc shim:** the shim test (hot/cold/default mapping, all eight overloads, alignment, OOM, cross-thread frees, C API, stats, env tuning) links through the shipped `.pc` and passes.
@@ -349,4 +349,4 @@ Unit tests and shellcheck: `tests/run.sh`. Per-stage checks: `tests/stages/*.che
 
 Component and consumer flags come from the `cflags/` submodule profiles: `cflags/cli/cflags.sh <os> <arch>`, then the `cflags.local/` overlay, then `-march`/`-mtune` from `versions.env`. Compile profiles (`base`, `linux`, `linux-amd64`, ...) apply to every compilation unit and intermediate link; binary profiles (`*-bin`) apply only to a consumer's final link. Both Linux libcs use the `linux-<arch>` profile. The toolchain layer (libc, runtimes, LLVM, mimalloc) keeps its own tuned flags.
 
-**glibc and DT_RELR.** `cflags/linux.txt` carries `-Wl,-z,pack-relative-relocs`, which makes lld emit a `GLIBC_ABI_DT_RELR` version need (glibc 2.36+). The build removes that flag for gnu triples whenever the glibc floor is below 2.36. Consumers applying the cflags profile themselves to gnu targets must drop it too, or their binaries will not load on glibc 2.34.
+**glibc and DT_RELR.** `cflags/linux.txt` carries `-Wl,-z,pack-relative-relocs`, which makes lld emit a `GLIBC_ABI_DT_RELR` version need (glibc 2.36+). The build removes that flag for gnu triples whenever the glibc floor is below 2.36. Consumers applying the cflags profile themselves to gnu targets must drop it too, or their binaries will not load on older glibc.

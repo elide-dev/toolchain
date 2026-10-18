@@ -162,7 +162,7 @@ check_shims() {
   rm -rf "$tmp"
 }
 
-# check_containers ROOT — gnu output and the shipped clang run on glibc-2.34-era distros.
+# check_containers ROOT — gnu output and the shipped clang run on glibc-floor-era distros.
 check_containers() {
   local root="$1" gnu musl image cmd
   gnu="$(bundle_triple_for_libc gnu)"
@@ -173,7 +173,7 @@ check_containers() {
   fi
   cmd="/smoke-gnu/hello-c && /smoke-gnu/hello-cxx && /smoke-musl/hello-c && /tc/bin/clang --version >/dev/null \
     && /tc/bin/$gnu-clang /src/hello.c -o /tmp/h && /tmp/h"
-  for image in almalinux:9 ubuntu:22.04; do
+  for image in centos:7 amazonlinux:2 ubuntu:20.04; do
     if docker run --rm -v "$root:/tc:ro" -v "$(smoke_dir "$gnu"):/smoke-gnu:ro" -v "$(smoke_dir "$musl"):/smoke-musl:ro" \
         -v "$ROOT_DIR/tests/fixtures:/src:ro" "$image" sh -c "$cmd" >/dev/null 2>"$VERIFY_DIR/docker.err"; then
       pass "container $image"

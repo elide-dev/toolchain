@@ -18,7 +18,7 @@ glibc_needs() {
 }
 
 # glibc_floor_violations FILE — one line per requirement above GLIBC_FLOOR, plus any
-# GLIBC_ABI_* (e.g. DT_RELR, DT_X86_64_PLT: absent from stock 2.34 hosts) or GLIBC_PRIVATE.
+# GLIBC_ABI_* (e.g. DT_RELR, DT_X86_64_PLT: absent from older hosts) or GLIBC_PRIVATE.
 glibc_floor_violations() {
   local f="$1" v
   for v in $(glibc_needs "$f"); do

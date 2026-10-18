@@ -14,6 +14,10 @@ render_cfg() {
         "-unwindlib=libunwind" \
         "-stdlib=libc++" \
         "-fuse-ld=lld"
+      # Before glibc 2.34, libc++abi/libunwind need libpthread and libdl. `$` lines are link-only.
+      if [ "$(triple_libc "$t")" = gnu ] && version_lt "$GLIBC_FLOOR" 2.34; then
+        printf '%s\n' '$-Wl,--push-state,--as-needed,-lpthread,-ldl,-lrt,--pop-state'
+      fi
       ;;
     darwin)
       printf '%s\n' \

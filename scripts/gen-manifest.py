@@ -56,6 +56,13 @@ def component_info(env, path):
     return {"version": env.get(v + "_VERSION") or env.get(v + "_REF", ""), "revision": env.get(v + "_REV", "")}
 
 
+def components(env, host_os):
+    comps = {p: component_info(env, p) for p in submodules()}
+    if host_os == "linux":
+        comps["glibc"] = {"version": env["GLIBC_VERSION"], "revision": env["GLIBC_RPM_RELEASE"]}
+    return dict(sorted(comps.items()))
+
+
 def libc_of(triple):
     if triple.endswith("-linux-musl"):
         return "musl"
@@ -70,7 +77,7 @@ def target_entry(env, triple):
     if libc == "musl":
         entry.update(libcVersion=env["MUSL_VERSION"], libcRevision=env.get("MUSL_REV", ""))
     elif libc == "glibc":
-        entry.update(libcVersion=env["GLIBC_FLOOR"], libcRevision=env.get("GLIBC_REV", ""))
+        entry.update(libcVersion=env["GLIBC_FLOOR"], libcRevision=env.get("GLIBC_RPM_RELEASE", ""))
     else:
         entry["macosMin"] = env["MACOS_MIN"]
     if libc != "darwin":
@@ -145,7 +152,7 @@ def manifest(env):
         "llvmMajor": env["LLVM_VERSION"].split(".")[0],
         "targets": [target_entry(env, t) for t in triples],
         "enabledComponents": os.environ.get("ENABLED_COMPONENTS", "").split(),
-        "components": {p: component_info(env, p) for p in sorted(submodules())},
+        "components": components(env, host_os),
         "cflagsProfile": f"{host_os}-{host_arch}",
         "features": features(env, host_os, triples),
         **sanitizer_info(),
@@ -160,6 +167,8 @@ def sanitizer_info():
 
 
 def purl(url, name, version, rev):
+    if name == "glibc":
+        return f"pkg:rpm/centos/glibc@{version}-{rev}?distro=centos-7.9.2009"
     m = re.match(r"https://github\.com/([^/]+)/([^/.]+)(\.git)?$", url)
     if m:
         return f"pkg:github/{m.group(1)}/{m.group(2)}@{rev or version}"

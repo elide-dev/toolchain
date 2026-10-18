@@ -37,7 +37,8 @@ v="$(glibc_floor_violations x)"
 assert_contains "$v" "GLIBC_2.38"
 assert_contains "$v" "GLIBC_ABI_DT_RELR"
 assert_contains "$v" "GLIBC_ABI_DT_X86_64_PLT"
-assert_not_contains "$v" "GLIBC_2.34"
+assert_not_contains "$v" "GLIBC_2.2.5"
+if version_lt "$GLIBC_FLOOR" 2.34; then assert_contains "$v" "GLIBC_2.34"; else assert_not_contains "$v" "GLIBC_2.34"; fi
 assert_eq "$(needed_libs x | xargs)" "libc.so.6 libstdc++.so.6"
 assert_eq "$(interp_of x)" "/lib64/ld-linux-x86-64.so.2"
 

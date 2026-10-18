@@ -56,32 +56,14 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
       - name: "Setup: Submodules"
-        # glibc's gitlink is the tip of release/2.34/master on sourceware.org (canonical, kept in
-        # .gitmodules). sourceware returns HTTP 403 to some CI IPs, so the order is: sourceware by SHA,
-        # GitHub mirror by SHA, then a mirror branch fetch. The final HEAD == gitlink assertion (and
-        # stage 00's scripts/check-versions.sh) keeps the mirror honest. Must stay bash 3.2-safe.
+        # Must stay bash 3.2-safe.
         run: |
           # Self-hosted runners keep .git/modules across jobs; a git process killed by a cancelled run
           # leaves *.lock files that make every later fetch fail. This job owns the workspace.
           if [ -d .git/modules ]; then find .git/modules -name '*.lock' -type f -print -delete; fi
-          subs="$(git config -f .gitmodules --get-regexp '^submodule\..*\.path$' | awk '$2 != "glibc" {print $2}')"
-          # shellcheck disable=SC2086 # submodule paths contain no spaces
-          git submodule update --quiet --init --depth=1 --recursive --jobs 8 -- $subs
-          rev="$(git ls-tree HEAD glibc | awk '{print $3}')"
-          branch="$(git config -f .gitmodules submodule.glibc.branch)"
-          mirror="https://github.com/bminor/glibc.git"
-          if ! git submodule update --quiet --init --depth=1 glibc; then
-            echo "::warning::glibc fetch from sourceware failed; trying $mirror"
-            rm -rf glibc ".git/modules/glibc"
-            mkdir glibc
-            git -C glibc init -q
-            if ! { git -C glibc fetch --quiet --depth=1 "$mirror" "$rev" && git -C glibc checkout -q --detach FETCH_HEAD; }; then
-              echo "::warning::glibc fetch by SHA from mirror failed; fetching $branch from mirror"
-              git -C glibc fetch --quiet --depth=50 "$mirror" "$branch"
-              git -C glibc checkout -q --detach "$rev"
-            fi
-          fi
-          test "$(git -C glibc rev-parse HEAD)" = "$rev"
+          # Persistent runners may still hold the retired glibc submodule's work tree.
+          rm -rf glibc .git/modules/glibc
+          git submodule update --quiet --init --depth=1 --recursive --jobs 8
           # Persistent runners may hold submodule work trees damaged by earlier jobs (tracked files
           # deleted or modified); `submodule update` does not repair them when HEAD already matches.
           git submodule foreach --recursive --quiet 'git reset -q --hard && git clean -qffdx'

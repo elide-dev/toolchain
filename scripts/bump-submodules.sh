@@ -20,7 +20,6 @@ brotli|tag|v[0-9]+\.[0-9]+\.[0-9]+
 capnp|tag|v1\.[0-9]+\.[0-9]+
 cflags|branch|main
 crc32c|tag|[0-9]+\.[0-9]+\.[0-9]+
-glibc|branch|release/2.34/master
 hiredis|tag|v[0-9]+\.[0-9]+\.[0-9]+
 leveldb|tag|[0-9]+\.[0-9]+
 llvm|tag|llvmorg-23\.[0-9]+\.[0-9]+
