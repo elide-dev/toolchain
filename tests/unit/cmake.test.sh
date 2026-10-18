@@ -69,6 +69,10 @@ for f in 10-llvm-stage1 30-runtimes 40-llvm-stage2; do
 done
 assert_contains "$(sed -n '/^san_runtimes_base_args()/,/^}/p' "$ROOT_DIR/scripts/lib/sanitizers.sh")" "llvm_link_jobs_args" "stages 31/60 cap links"
 assert_contains "$(cat "$ROOT_DIR/scripts/stages/45-propeller.sh")" "cmake_link_pool_args" "propeller uses a link pool"
+assert_eq "$(libcxxabi_libc_args x86_64-unknown-linux-musl)" "-DLIBCXXABI_HAS_CXA_THREAD_ATEXIT_IMPL=OFF" "musl lacks __cxa_thread_atexit_impl"
+assert_eq "$(GLIBC_FLOOR=2.17 libcxxabi_libc_args x86_64-unknown-linux-gnu)" "-DLIBCXXABI_HAS_CXA_THREAD_ATEXIT_IMPL=OFF" "glibc 2.17 lacks it"
+assert_eq "$(GLIBC_FLOOR=2.18 libcxxabi_libc_args x86_64-unknown-linux-gnu)" "" "glibc 2.18 has it"
+assert_contains "$(san_cxx_args x86_64-unknown-linux-musl | xargs)" "-DLIBCXXABI_HAS_CXA_THREAD_ATEXIT_IMPL=OFF" "variant libc++abi too"
 
 rm -rf "$T"
 

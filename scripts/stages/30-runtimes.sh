@@ -60,7 +60,7 @@ build_builtins() {
 build_cxx_runtimes() {
   local t="$1" b="$BUILD_DIR/runtimes/$1/cxx" args=() musl=OFF
   if [ "$(triple_libc "$t")" = musl ]; then musl=ON; fi
-  mapfile -t args < <(runtimes_common_args "$t")
+  mapfile -t args < <(runtimes_common_args "$t"; libcxxabi_libc_args "$t")
   # MemProf runtime (x86_64 gnu only). Later -D options override runtimes_common_args'
   # MEMPROF=OFF. The always-built libclang_rt.memprof.so must link against our sysroot: no
   # libstdc++ (SANITIZER_CXX_ABI=none), and lld + compiler-rt crt instead of the host ld.

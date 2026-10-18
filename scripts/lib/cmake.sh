@@ -52,6 +52,16 @@ cmake_link_pool_args() {
   printf '%s\n' "-DCMAKE_JOB_POOLS=link=${LINK_JOBS:-2}" -DCMAKE_JOB_POOL_LINK=link
 }
 
+# libcxxabi_libc_args TRIPLE — STATIC_LIBRARY try-compiles make check_library_exists always pass,
+# so state what the libc lacks: __cxa_thread_atexit_impl (musl; glibc < 2.18). Without this,
+# libc++abi references it strongly and thread_local objects with destructors fail to link.
+libcxxabi_libc_args() {
+  case "$(triple_libc "$1")" in
+    musl) echo -DLIBCXXABI_HAS_CXA_THREAD_ATEXIT_IMPL=OFF ;;
+    gnu) if version_lt "$GLIBC_FLOOR" 2.18; then echo -DLIBCXXABI_HAS_CXA_THREAD_ATEXIT_IMPL=OFF; fi ;;
+  esac
+}
+
 # cmake_target TRIPLE SRC BUILD PREFIX [ARGS...] — configure, build and install.
 cmake_target() {
   local t="$1" src="$2" build="$3" prefix="$4"

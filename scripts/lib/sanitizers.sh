@@ -261,6 +261,7 @@ san_cxx_args() {
     -DLIBCXX_INSTALL_LIBRARY_DIR="lib/$t" \
     -DLIBCXXABI_INSTALL_LIBRARY_DIR="lib/$t" \
     -DLIBUNWIND_INSTALL_LIBRARY_DIR="lib/$t"
+  libcxxabi_libc_args "$t"
 }
 
 # prune_sanitizer_runtimes PREFIX TRIPLE — keep only the runtimes the matrix ships (compiler-rt
