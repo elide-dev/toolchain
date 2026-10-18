@@ -68,7 +68,7 @@ export ELIDE_TOOLCHAIN_HOME=$PWD/elide-toolchain PATH=$PWD/elide-toolchain/bin:$
 
 ## Use
 
-Invoke `<triple>-clang` / `<triple>-clang++`; clang loads `bin/<triple>.cfg`, which supplies `--target`, `--sysroot`, `-rtlib=compiler-rt`, `-unwindlib=libunwind`, `-stdlib=libc++` and `-fuse-ld=lld`. On gnu triples it also links `libpthread`, `libdl` and `librt` `--as-needed` (glibc 2.17 keeps them out of `libc`); these are link-only options. Plain `bin/clang` (and `clang --target=<triple>`) auto-loads the cfg too: plain `clang` loads the host's default-triple cfg, which is the gnu triple on Linux and the darwin triple on macOS. Pass `--no-default-config` for a bare clang. The bundle is relocatable. For fully static output use the musl triple with `-static`; static linking of the gnu triple is unsupported.
+Invoke `<triple>-clang` / `<triple>-clang++`; clang loads `bin/<triple>.cfg`, which supplies `--target`, `--sysroot`, `-rtlib=compiler-rt`, `-unwindlib=libunwind`, `-stdlib=libc++` and `-fuse-ld=lld`. glibc 2.17 keeps `libpthread`, `libdl` and `librt` out of `libc`: libc++, libc++abi and libunwind name the ones they need in `.deplibs` (lld adds them), but C code calling `pthread_create`, `dlopen`, `shm_open` and the like must link `-pthread`, `-ldl` or `-lrt` itself, as on any pre-2.34 system. Plain `bin/clang` (and `clang --target=<triple>`) auto-loads the cfg too: plain `clang` loads the host's default-triple cfg, which is the gnu triple on Linux and the darwin triple on macOS. Pass `--no-default-config` for a bare clang. The bundle is relocatable. For fully static output use the musl triple with `-static`; static linking of the gnu triple is unsupported.
 
 ```sh
 x86_64-unknown-linux-musl-clang hello.c -static -o hello
