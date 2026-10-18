@@ -18,6 +18,8 @@ newer="$("$nm" -D --defined-only "$s/usr/lib/libc.so.6" | awk '{print $NF}' | gr
   | grep -v '^GLIBC_' | grep -v '^_mcount@' | while IFS= read -r sym; do
     v="${sym##*GLIBC_}"; if version_lt "$GLIBC_FLOOR" "$v"; then echo "$sym"; fi; done)"
 assert_eq "$newer" "" "libc.so.6 defines nothing above the floor"
+assert_contains "$(cat "$s/usr/lib/libc.so")" "AS_NEEDED ( /usr/lib/libpthread.so.0 /usr/lib/libdl.so.2 )" "-lc provides libpthread/libdl"
+assert_not_contains "$(cat "$s/usr/lib/libc.so" "$s/usr/lib/libpthread.so")" "lib64" "linker scripts use /usr/lib"
 loader_target="$(readlink "$s/$(glibc_loader "$cpu")" || true)"
 assert_not_contains "x$loader_target" "x/" "loader link is relative"
 assert_file "$OUT_DIR/glibc-files.txt"

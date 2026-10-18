@@ -71,6 +71,11 @@ flatten_glibc() {
       sed -i -E 's#(/usr)?/lib(64)?/#/usr/lib/#g' "$f"
     fi
   done
+  # Like glibc >= 2.34, -lc also provides libpthread and libdl (as needed, ahead of libc as with
+  # an explicit -lpthread): libc++abi/libunwind need them, and their .deplibs are lost under LTO.
+  sed -i -E 's#^GROUP \( (/usr/lib/libc\.so\.6 )#GROUP ( AS_NEEDED ( /usr/lib/libpthread.so.0 /usr/lib/libdl.so.2 ) /usr/lib/libpthread_nonshared.a \1#' \
+    "$staging/usr/lib/libc.so"
+  grep -q 'libpthread.so.0' "$staging/usr/lib/libc.so" || die "could not extend libc.so with libpthread/libdl"
 }
 
 # ensure_loader_link SYSROOT CPU — the canonical PT_INTERP path must exist inside the sysroot
