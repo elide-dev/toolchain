@@ -74,7 +74,40 @@ check_components() {
   fi
   rm -rf "$tmp"
   case " ${defs[*]} " in *" -DHAVE_CRYPTO "*) [ "$(triple_os "$t")" = linux ] && check_components_shared "$root" "$t" ;; esac
+  if [ "$(triple_os "$t")" = linux ]; then check_components_pic "$root" "$t"; fi
   return 0
+}
+
+# check_components_pic ROOT TRIPLE — each component's primary archive links whole into a shared object,
+# as machine code and through its bitcode (--fat-lto-objects, as cross-language LTO links do).
+check_components_pic() {
+  local root="$1" t="$2" prefix="$1/sysroot/$2/usr" c a lib mode tmp bad=""
+  tmp="$(mktemp -d)"
+  if ! "$root/bin/$t-clang" -fPIC -flto=thin -c "$ROOT_DIR/tests/fixtures/shared-tls.c" \
+      -o "$tmp/tls.o" 2>"$tmp/err"; then
+    fail "components pic $t" "TLS fixture: $(head -3 "$tmp/err")"
+    rm -rf "$tmp"
+    return
+  fi
+  for c in $(enabled_components); do
+    lib=""
+    for a in $(tr '|' ' ' <<< "$(component_artifact "$c")"); do
+      if [ -f "$prefix/$a" ]; then lib="$prefix/$a"; break; fi
+    done
+    if [ -z "$lib" ]; then
+      bad="$bad $c: missing archive;"
+      continue
+    fi
+    for mode in "" -Wl,--fat-lto-objects; do
+      # shellcheck disable=SC2086
+      if ! "$root/bin/$t-clang" -shared -nostdlib $mode -o "$tmp/pic.so" -Wl,--unresolved-symbols=ignore-all \
+          "$tmp/tls.o" -Wl,--whole-archive "$lib" -Wl,--no-whole-archive 2>"$tmp/err"; then
+        bad="$bad $c${mode:+ (bitcode)}: $(grep -m1 error "$tmp/err")"
+      fi
+    done
+  done
+  rm -rf "$tmp"
+  if [ -n "$bad" ]; then fail "components pic $t" "${bad# }"; else pass "components pic $t"; fi
 }
 
 # check_components_shared ROOT TRIPLE — R23: ACCP/JNI link libssl.a/libcrypto.a into a -shared

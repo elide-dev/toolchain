@@ -9,7 +9,6 @@ build_hiredis() {
     cd "$src" || exit 1
     target_env "$t" "$prefix"
     LDFLAGS="$(target_ldflags "$t")"
-    CFLAGS="${CFLAGS//-fPIE/}" # install also links shared libs; -fPIE breaks them
     make -j"$JOBS" USE_SSL=1 USE_WERROR=0 CC="$CC" AR="$AR" CFLAGS="$CFLAGS" LDFLAGS="$LDFLAGS" \
       PREFIX="$prefix" OPTIMIZATION=-O3 static pkgconfig install
   )

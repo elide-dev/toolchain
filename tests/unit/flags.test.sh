@@ -22,6 +22,13 @@ darwin="$(target_cflags arm64-apple-darwin)"
 assert_contains "$darwin" "-mcpu=apple-m1" "darwin uses the profile's cpu flag"
 assert_not_contains "$darwin" "-march=x86-64" "no linux arch override on darwin"
 
+for flags in "$gnu" "$musl" "$darwin"; do
+  assert_contains "$flags" "-fPIC" "components use shared-library-safe codegen"
+  assert_not_contains "$flags" "-fPIE" "PIE must not override PIC"
+  assert_not_contains "$flags" "-fpie" "small PIE must not override PIC"
+done
+assert_eq "$(drop_pie_codegen -O3 -fPIC -fPIE -fpie -flto=thin)" "-O3 -fPIC -flto=thin"
+
 # The filter only knows the standalone spelling; guard against the profile changing it.
 others="$(grep -h 'pack-relative-relocs' "$ROOT_DIR"/cflags/*.txt | sed 's/#.*//' | grep -v '^[[:space:]]*$' | grep -vx -- '-Wl,-z,pack-relative-relocs' || true)"
 assert_eq "$others" "" "cflags profile spells DT_RELR only as a standalone token"

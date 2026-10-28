@@ -40,7 +40,20 @@ target_cflags() {
   # sanitizer_layer_flags (scripts/lib/sanitizers.sh) is empty unless stage 60 sets SANITIZER_LAYER.
   # shellcheck disable=SC2046
   printf '%s%s %s\n' "$(sanitizer_layer_flags "$t")" \
-    "$(filter_flags_for_triple "$t" $(profile_flags "$os" "$arch"))" "$(arch_flags "$t")"
+    "$(drop_pie_codegen $(filter_flags_for_triple "$t" $(profile_flags "$os" "$arch")))" \
+    "$(arch_flags "$t")"
+}
+
+# drop_pie_codegen FLAG... — components are libraries that consumers link into shared objects
+# too. The profile passes -fPIC then -fPIE, and clang keeps the last, so drop -fPIE: PIC objects
+# still link into PIE executables (the driver's default).
+drop_pie_codegen() {
+  local f out=""
+  for f in "$@"; do
+    case "$f" in -fPIE|-fpie) continue ;; esac
+    out="$out $f"
+  done
+  printf '%s\n' "${out# }"
 }
 
 target_cxxflags() { target_cflags "$1"; }
