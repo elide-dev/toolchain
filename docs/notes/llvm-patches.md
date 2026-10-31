@@ -34,7 +34,7 @@ and 45 (llvm-propeller). Stage 00's `unapply_patches` reverses it before the cle
    Rebase `0001`–`0004`, then run stage 45 and its check.
 4. Run `tests/run.sh` (series re-apply and unapply tests), then post a comment on #4.
 
-## 2026-10-31: LLVM 23.1.4 / toolchain 2026.10.4
+## 2026-10-31: LLVM 23.1.4 / toolchain 2026.10.5
 
 Upgraded from 23.1.2 for Xcode 27 SDK `arm64e.x1` TAPI support
 ([upstream backport #224185](https://github.com/llvm/llvm-project/pull/224185)).
@@ -49,3 +49,7 @@ linker against the installed macOS 27.2 SDK, CoreFoundation, libiconv, and
 libSystem and ran successfully. Rust LLD was invoked directly with its toolchain
 `lib` directory in `DYLD_LIBRARY_PATH` for this probe; consumers should continue
 to use the bundle clang/lld wrappers.
+
+The initial 2026.10.4 release attempt stopped at submodule checkout because
+persistent CI worktrees still contained the previous LLVM patches. 2026.10.5
+forces checkout of the pinned submodule revisions before the existing cleanup.
