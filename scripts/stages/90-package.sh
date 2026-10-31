@@ -6,6 +6,7 @@ stage_main() {
   local name archive meta="$BUNDLE_DIR/share/elide-toolchain" t
   install_frontends "$BUNDLE_DIR"
   install -m 0755 "$ROOT_DIR/src/elide-toolchain" "$BUNDLE_DIR/bin/elide-toolchain"
+  install -m 0644 "$ROOT_DIR/rustversion" "$BUNDLE_DIR/rustversion"
   mkdir -p "$meta"
   printf '%s\n' "$TOOLCHAIN_VERSION" > "$meta/VERSION"
   for t in $ALL_TARGETS; do relocate_prefix "$t"; done

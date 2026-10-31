@@ -14,9 +14,10 @@ assert_eq "$(awk '{print $1}' "$a.sha256")" "$(sha256_of "$a")" "checksum matche
 assert_eq "$(awk '{print $2}' "$a.sha256")" "$name.tar.xz" "checksum names the file"
 listing="$(tar -tJf "$a")"
 assert_eq "$(printf '%s\n' "$listing" | cut -d/ -f1 | sort -u)" "$TOOLCHAIN_NAME" "single top-level dir"
-for f in bin/elide-toolchain share/elide-toolchain/manifest.json share/elide-toolchain/VERSION share/elide-toolchain/sbom.cdx.json; do
+for f in rustversion bin/elide-toolchain share/elide-toolchain/manifest.json share/elide-toolchain/VERSION share/elide-toolchain/sbom.cdx.json; do
   assert_contains "$listing" "$TOOLCHAIN_NAME/$f"
 done
+assert_eq "$(tar -xJOf "$a" "$TOOLCHAIN_NAME/rustversion")" "$(cat "$ROOT_DIR/rustversion")" "packaged Rust toolchain pin matches"
 for t in $ALL_TARGETS; do
   assert_contains "$listing" "$TOOLCHAIN_NAME/bin/$t.cfg"
   assert_contains "$listing" "$TOOLCHAIN_NAME/share/elide-toolchain/cmake/$t.cmake"

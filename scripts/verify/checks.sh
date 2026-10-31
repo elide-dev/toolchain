@@ -413,6 +413,9 @@ PY
   if [ "$("$root/bin/elide-toolchain" version 2>/dev/null || true)" != "$TOOLCHAIN_VERSION" ]; then
     problems="${problems}elide-toolchain version does not report $TOOLCHAIN_VERSION"
   fi
+  if ! cmp -s "$ROOT_DIR/rustversion" "$root/rustversion"; then
+    problems="${problems}packaged rustversion does not match the Rust toolchain pin"
+  fi
   if [ -z "$problems" ]; then pass "manifest"; else fail "manifest" "$(head -5 <<< "$problems")"; fi
 }
 

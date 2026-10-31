@@ -2,11 +2,11 @@
 
 # Title
 
-Track LLVM 23.1.2 local patches: MemProf backports (#222126, #208911) and vendored DeduBB
+Track LLVM 23.1.4 local patches: MemProf backports (#222126, #208911) and vendored DeduBB
 
 # Body
 
-The elide-toolchain LLVM is `llvmorg-23.1.2` (`85ac560262434c9ccfc0c183ec22d4138ed647fb`) plus the
+The elide-toolchain LLVM is `llvmorg-23.1.4` (`7a941dfb2877a0b8cf30323fefa85ad019e0b0f5`) plus the
 patches in `src/patches/llvm/`. `apply_patches llvm` applies them to the `llvm` submodule at the start
 of stages 10, 30 and 40. This issue records each patch: what it is, why we carry it, how it
 changes behaviour relative to stock 23.1.2, and when to drop it. Design:
@@ -66,3 +66,10 @@ For each bump of the `llvm` submodule (23.1.x or 24.x):
 4. Update this issue: one comment per bump listing kept, dropped and rebased patches.
 
 Owners: toolchain maintainers. Labels: `llvm`, `patches`.
+
+## 2026-10-31 upgrade
+
+LLVM 23.1.4 adds Xcode 27 `arm64e.x1` SDK support. All three local LLVM
+patches are retained and apply cleanly, with no rebase edits. Propeller and
+quipper pins and patches are unchanged. The earlier validation entries above
+record the original 23.1.2 experiments; release CI validates the new build.

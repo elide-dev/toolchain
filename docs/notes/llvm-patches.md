@@ -6,7 +6,7 @@ feature or backport; patches of one component never overlap hunks; a `# requires
 line gates a patch on a `vars.sh` knob. `apply_patches` applies a series in stages 10/30/40 (llvm)
 and 45 (llvm-propeller). Stage 00's `unapply_patches` reverses it before the clean-tree check.
 
-## `src/patches/llvm` (base `llvmorg-23.1.2`)
+## `src/patches/llvm` (base `llvmorg-23.1.4`)
 
 | Patch | Origin | Files | Why | Default | Drop when |
 |---|---|---|---|---|---|
@@ -33,3 +33,19 @@ and 45 (llvm-propeller). Stage 00's `unapply_patches` reverses it before the cle
 3. Propeller: on a submodule bump, re-read the dep versions in `CMake/*` and update `versions.env`.
    Rebase `0001`–`0004`, then run stage 45 and its check.
 4. Run `tests/run.sh` (series re-apply and unapply tests), then post a comment on #4.
+
+## 2026-10-31: LLVM 23.1.4 / toolchain 2026.10.4
+
+Upgraded from 23.1.2 for Xcode 27 SDK `arm64e.x1` TAPI support
+([upstream backport #224185](https://github.com/llvm/llvm-project/pull/224185)).
+All three LLVM patches apply in order without changes to the 23.1.4 sources;
+both MemProf backports are still needed. Propeller and quipper pins and patches
+are unchanged; their complete patch series also apply cleanly. Full compilation,
+DeduBB checks, and platform smoke tests run in the release workflow.
+
+The distribution root now carries `rustversion`: `nightly-2026-10-09`
+(rustc `a30aa9064`, LLVM 23.1.3). A native arm64 program linked with that Rust
+linker against the installed macOS 27.2 SDK, CoreFoundation, libiconv, and
+libSystem and ran successfully. Rust LLD was invoked directly with its toolchain
+`lib` directory in `DYLD_LIBRARY_PATH` for this probe; consumers should continue
+to use the bundle clang/lld wrappers.

@@ -85,7 +85,7 @@ eval "$(elide-toolchain env --target x86_64-unknown-linux-gnu)"
 
 **pkg-config.** `PKG_CONFIG_LIBDIR=<sysroot>/usr/lib/pkgconfig` and `PKG_CONFIG_SYSROOT_DIR=<sysroot>` (set by `env --target`); every component installs its `.pc` file there.
 
-**Rust.** Link through the bundle for cross-language LTO: `CARGO_TARGET_<TRIPLE>_LINKER=<triple>-clang` (printed by `env --target`) with `-Clink-arg=-fuse-ld=lld`. rustc's LLVM major must be <= the bundle's. The gnu std always passes `-lgcc_s`; the gnu sysroot's `usr/lib/libgcc_s.so` is a linker script (`INPUT(-lunwind)`) that resolves it to the static libunwind, so outputs never need `libgcc_s.so.1`. For musl, add `-C target-feature=+crt-static`.
+**Rust.** The bundle root includes `rustversion`, the recommended Rust toolchain pin (`nightly-2026-10-09`, LLVM 23.1.3), paired with this bundle’s LLVM 23.1.4. Consumers can install it with `rustup toolchain install "$(cat /path/to/elide-toolchain/rustversion)"`. Link through the bundle for cross-language LTO: `CARGO_TARGET_<TRIPLE>_LINKER=<triple>-clang` (printed by `env --target`) with `-Clink-arg=-fuse-ld=lld`. rustc's LLVM major must be <= the bundle's. The gnu std always passes `-lgcc_s`; the gnu sysroot's `usr/lib/libgcc_s.so` is a linker script (`INPUT(-lunwind)`) that resolves it to the static libunwind, so outputs never need `libgcc_s.so.1`. For musl, add `-C target-feature=+crt-static`.
 
 **GraalVM native-image.** Linux bundles ship `<cpu>-linux-musl-gcc` / `-g++` (and `cc`, `c++`, `ar`, `ranlib`, `nm`, `strip`) as shims over clang and the llvm tools, so `native-image --libc=musl` works with `bin/` on `PATH`. The shims never add `-static`.
 
