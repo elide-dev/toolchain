@@ -7,13 +7,14 @@ source "$ROOT_DIR/scripts/lib/env.sh"
 source "$ROOT_DIR/tests/lib/assert.sh"
 [ "$HOST_OS" = linux ] || { echo "skip: linux only"; exit 0; }
 b="$BUNDLE_DIR/bin"
-for f in clang clang++ ld.lld llvm-ar llvm-nm llvm-ranlib llvm-objcopy llvm-strip llvm-readelf \
+for f in clang clang++ clangd ld.lld llvm-ar llvm-nm llvm-ranlib llvm-objcopy llvm-strip llvm-readelf \
          llvm-bolt perf2bolt merge-fdata llvm-profgen llvm-profdata llvm-dwarfdump llvm-dwp; do
   assert_file "$b/$f"
 done
 assert_fails test -e "$b/lldb"
 assert_contains "$("$b/clang" --version)" "clang version $LLVM_VERSION"
-for f in "$b/clang" "$b/ld.lld" "$b/llvm-bolt"; do
+assert_contains "$("$b/clangd" --version)" "clangd version $LLVM_VERSION"
+for f in "$b/clang" "$b/clangd" "$b/ld.lld" "$b/llvm-bolt"; do
   assert_eq "$(glibc_floor_violations "$(readlink -f "$f")")" "" "$f within glibc floor"
   libs="$(needed_libs "$(readlink -f "$f")")"
   assert_not_contains "$libs" "libstdc++" "$f has no libstdc++"

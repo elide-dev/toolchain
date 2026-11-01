@@ -1,6 +1,6 @@
 # Elide Toolchain
 
-A self-contained native toolchain: LLVM 23 (clang, lld, BOLT, Polly), libc++ / libc++abi / libunwind, compiler-rt, and a full tree of pre-built static libraries (zlib-ng, zstd, brotli, snappy, lz4, crc32c, AWS-LC, mimalloc, libsqlite3elide, and optionally OpenSSL, zlib, SQLite, SQLCipher, Cap'n Proto, hiredis, LevelDB), all compiled with one consistent flags profile. Linux bundles carry two sysroots, fully static **musl** (with mimalloc built into `libc.a`) and **glibc 2.17**; macOS bundles carry a component overlay on top of the system SDK. It is built from source, one bundle per host OS/arch, and is used by Elide, Komodo, Bali (crema-jit) and GraalVM `native-image` builds (`--libc=musl`).
+A self-contained native toolchain: LLVM 23 (clang, clangd, lld, BOLT, Polly), libc++ / libc++abi / libunwind, compiler-rt, and a full tree of pre-built static libraries (zlib-ng, zstd, brotli, snappy, lz4, crc32c, AWS-LC, mimalloc, libsqlite3elide, and optionally OpenSSL, zlib, SQLite, SQLCipher, Cap'n Proto, hiredis, LevelDB), all compiled with one consistent flags profile. Linux bundles carry two sysroots, fully static **musl** (with mimalloc built into `libc.a`) and **glibc 2.17**; macOS bundles carry a component overlay on top of the system SDK. It is built from source, one bundle per host OS/arch, and is used by Elide, Komodo, Bali (crema-jit) and GraalVM `native-image` builds (`--libc=musl`).
 
 Releases are `elide-toolchain-<version>-<os>-<arch>.tar.xz`, each with a `.sha256` and a CycloneDX SBOM, on [GitHub Releases](https://github.com/elide-dev/toolchain/releases) (tags `vYYYY.M.N`; the month is not zero-padded, e.g. `v2026.9.0`), mirrored to `https://static.elideusercontent.com/toolchain/<version>/`.
 
@@ -178,7 +178,7 @@ elide-toolchain doctor --sanitizers   # clean program + known bug through every 
 ```
 elide-toolchain/
   bin/
-    clang clang++ clang-cpp ld.lld lld llvm-ar llvm-nm llvm-ranlib llvm-objcopy llvm-strip ...
+    clang clang++ clang-cpp clangd ld.lld lld llvm-ar llvm-nm llvm-ranlib llvm-objcopy llvm-strip ...
     llvm-bolt perf2bolt merge-fdata llvm-profgen llvm-profdata llvm-dwarfdump llvm-dwp   (Linux)
     generate_propeller_profiles           # Propeller layout profiles + DeduBB directives (Linux)
     elide-toolchain                       # helper CLI (POSIX sh)
@@ -274,7 +274,7 @@ Stages:
 | 31 | `sanitizer-runtimes` | compiler-rt sanitizer runtimes and libFuzzer per Linux triple (matrix in `versions.env`) |
 | 35 | `mimalloc` | musl: mimalloc into musl phase 2; gnu/macOS: standalone `libmimalloc.a`; `libelidealloc-shim.a` for every triple |
 | 36 | `llvm-deps` | Static zlib-ng and zstd for the stage-2 LLVM build (Linux, not shipped) |
-| 40 | `llvm-stage2` | Rebuild clang/lld/bolt/polly against the gnu 2.17 sysroot with static libc++ (Linux); these are the shipped tools |
+| 40 | `llvm-stage2` | Rebuild clang/clangd/lld/bolt/polly against the gnu 2.17 sysroot with static libc++ (Linux); these are the shipped tools |
 | 45 | `propeller` | `generate_propeller_profiles` (with DeduBB) linked against the stage-2 LLVM build tree, offline from cached deps (Linux) |
 | 50 | `components` | Build each enabled component per triple with the bundle's own `<triple>-clang`, installing `.pc` files |
 | 60 | `sanitizer-addons` | With `BUILD_SANITIZER_VARIANTS=yes`: per sanitizer (asan/tsan/msan, gnu), instrumented libc++ and components and the `sysroot/<triple>+<san>` farm |

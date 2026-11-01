@@ -15,6 +15,7 @@ if [ "$HOST_OS" = linux ]; then
 else
   t="$ALL_TARGETS"
   assert_contains "$("$BUNDLE_DIR/bin/clang" --version)" "clang version $LLVM_VERSION"
+  assert_contains "$("$BUNDLE_DIR/bin/clangd" --version)" "clangd version $LLVM_VERSION"
   assert_file "$BUNDLE_DIR/lib/clang/$LLVM_MAJOR/lib/darwin/libclang_rt.osx.a"
   assert_file "$BUNDLE_DIR/lib/clang/$LLVM_MAJOR/lib/darwin/libclang_rt.profile_osx.a"
   assert_file "$BUNDLE_DIR/bin/ld64.lld"

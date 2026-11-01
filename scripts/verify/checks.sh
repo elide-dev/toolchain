@@ -205,6 +205,7 @@ check_containers() {
     return
   fi
   cmd="/smoke-gnu/hello-c && /smoke-gnu/hello-cxx && /smoke-musl/hello-c && /tc/bin/clang --version >/dev/null \
+    && /tc/bin/clangd --version >/dev/null \
     && /tc/bin/$gnu-clang /src/hello.c -o /tmp/h && /tmp/h"
   for image in centos:7 amazonlinux:2 ubuntu:20.04; do
     if docker run --rm -v "$root:/tc:ro" -v "$(smoke_dir "$gnu"):/smoke-gnu:ro" -v "$(smoke_dir "$musl"):/smoke-musl:ro" \
@@ -469,6 +470,7 @@ run_all_checks() {
     if [ -z "$re" ] || [ ! -x "$re" ]; then fail "readelf" "no usable readelf/llvm-readelf found"; fi
   fi
   check_manifest "$root"
+  if "$root/bin/clangd" --version >/dev/null; then pass "clangd"; else fail "clangd" "bundled language server does not run"; fi
   check_no_build_paths "$root"
   for t in $ALL_TARGETS; do
     check_smoke "$root" "$t"
