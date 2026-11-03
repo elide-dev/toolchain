@@ -22,12 +22,18 @@ profile_flags() {
 
 # filter_flags_for_triple TRIPLE FLAG... — drop flags that would raise the triple's floor.
 filter_flags_for_triple() {
-  local triple="$1" f out="" drop_relr=no
+  local triple="$1" f out="" drop_relr=no drop_extra_isa=no
   shift
   if [ "$(triple_libc "$triple")" = gnu ] && version_lt "$GLIBC_FLOOR" 2.36; then drop_relr=yes; fi
+  if [ "$(triple_os "$triple")" = linux ] && [ "$(triple_cpu "$triple")" = x86_64 ]; then drop_extra_isa=yes; fi
   for f in "$@"; do
     # DT_RELR makes lld emit a GLIBC_ABI_DT_RELR version need (glibc >= 2.36).
     if [ "$drop_relr" = yes ] && [ "$f" = "-Wl,-z,pack-relative-relocs" ]; then continue; fi
+    # Explicit -m extensions survive a later -march. The shared profile opts into
+    # Ice Lake/Zen 4 instructions, but this bundle promises the configured ISA.
+    if [ "$drop_extra_isa" = yes ]; then
+      case "$f" in -maes|-mpclmul|-msha|-mvaes|-mgfni|-mrdrnd) continue ;; esac
+    fi
     out="$out $f"
   done
   printf '%s\n' "${out# }"
@@ -45,7 +51,7 @@ target_cflags() {
 }
 
 # drop_pie_codegen FLAG... — components are libraries that consumers link into shared objects
-# too. The profile passes -fPIC then -fPIE, and clang keeps the last, so drop -fPIE: PIC objects
+# too. Defensively drop any overlay -fPIE (which overrides -fPIC): PIC objects
 # still link into PIE executables (the driver's default).
 drop_pie_codegen() {
   local f out=""

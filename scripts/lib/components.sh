@@ -22,8 +22,8 @@ check_component_conflicts() {
   if component_enabled openssl && component_enabled aws-lc; then
     die "BUILD_OPENSSL and BUILD_AWS_LC both install libcrypto/libssl; enable only one"
   fi
-  if component_enabled sqlcipher && ! component_enabled openssl && ! component_enabled aws-lc; then
-    die "BUILD_SQLCIPHER needs BUILD_OPENSSL or BUILD_AWS_LC"
+  if component_enabled sqlcipher && ! component_enabled openssl; then
+    die "SQLCipher 4.20 requires BUILD_OPENSSL=yes and BUILD_AWS_LC=no (OpenSSL EVP_MAC API)"
   fi
   return 0
 }

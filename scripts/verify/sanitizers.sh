@@ -356,6 +356,26 @@ check_rust_sanitizer() {
     printf 'note  %s: no nightly std for %s; skipped\n' "$name" "$rt"; return 0
   fi
   tmp="$(mktemp -d)"
+  # TSAN changes Rust's ABI, so rebuild std instead of mixing instrumented and
+  # uninstrumented crates. Only the link is required (some hosts cannot run TSAN).
+  if [ "$(triple_libc "$t")" = gnu ]; then
+    local rust_home encoded
+    rust_home="$("${rustc[@]}" --print sysroot)"
+    if [ -x "$rust_home/bin/cargo" ] && [ -d "$rust_home/lib/rustlib/src/rust/library" ]; then
+      cp -R "$SAN_FIXTURES/rust/tsan" "$tmp/tsan-src"
+      encoded=$'-Zsanitizer=thread\x1f-Zexternal-clangrt\x1f-Clinker='"$root/bin/$t-tsan-clang"
+      if RUSTC="$rust_home/bin/rustc" CARGO_ENCODED_RUSTFLAGS="$encoded" \
+          "$rust_home/bin/cargo" build --manifest-path "$tmp/tsan-src/Cargo.toml" \
+          --target "$rt" --target-dir "$tmp/tsan-target" -Zbuild-std \
+          >"$tmp/tsan.log" 2>&1; then
+        pass "rust TSAN personality link $t"
+      else
+        fail "rust TSAN personality link $t" "$(tail -8 "$tmp/tsan.log")"
+      fi
+    else
+      printf 'note  rust TSAN %s: cargo/rust-src unavailable; skipped\n' "$t"
+    fi
+  fi
   if "$root/bin/$t-asan-clang" -g -c "$SAN_FIXTURES/rust/c_part.c" -o "$tmp/c_part.o" 2>"$tmp/err" \
      && "$root/bin/llvm-ar" rcs "$tmp/libcpart.a" "$tmp/c_part.o" \
      && "${rustc[@]}" --edition 2021 -g --target "$rt" -Zsanitizer=address -Zexternal-clangrt \

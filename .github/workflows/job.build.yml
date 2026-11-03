@@ -46,11 +46,11 @@ jobs:
       BUILD_SANITIZER_VARIANTS: ${{ inputs.sanitizer-addons && 'yes' || 'no' }}
     steps:
       - name: "Setup: Harden Runner"
-        uses: step-security/harden-runner@c6295a65d1254861815972266d5933fd6e532bdf # v2.11.1
+        uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
         with:
           egress-policy: audit
       - name: "Setup: Checkout"
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: false
           fetch-depth: 1
@@ -127,7 +127,7 @@ jobs:
         run: |
           if command -v ccache >/dev/null 2>&1; then ccache --show-stats; else echo "ccache not installed"; fi
       - name: "Artifact: Bundle"
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: elide-toolchain-${{ matrix.os }}-${{ matrix.arch }}
           compression-level: 0
@@ -135,7 +135,7 @@ jobs:
           path: dist/*
       - name: "Artifact: Build logs"
         if: always()
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: build-logs-${{ matrix.os }}-${{ matrix.arch }}
           overwrite: true

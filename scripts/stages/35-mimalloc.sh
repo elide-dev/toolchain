@@ -85,6 +85,10 @@ build_musl_phase2() {
     mi_src="$(stage_source mimalloc "$t")"
     mi_build="$(component_build_dir mimalloc "$t")"
     mapfile -t args < <(mimalloc_args OFF)   # glue code provides the libc entry points
+    # mimalloc 3.6 enables heap profiling by default. Its backtracer needs an
+    # external unwinder, which cannot be a dependency of the allocator inside
+    # libc.so. Keep standalone profiling unchanged; disable it only for musl.
+    args+=(-DMI_PROFILE=OFF)
     cmake -S "$mi_src" -B "$mi_build" -G Ninja \
       -DCMAKE_TOOLCHAIN_FILE="$(toolchain_file "$t")" -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \

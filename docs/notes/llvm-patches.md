@@ -1,6 +1,7 @@
 # Local patch ledger (LLVM and llvm-propeller)
 
-All local patches are tracked in [elide-dev/toolchain#4](https://github.com/elide-dev/toolchain/issues/4)
+This file is the maintained patch ledger, superseding the original
+[elide-dev/toolchain#4](https://github.com/elide-dev/toolchain/issues/4) tracker
 (source text: `docs/notes/llvm-backports-issue.md`). Rules (spec D2): one self-contained patch per
 feature or backport; patches of one component never overlap hunks; a `# requires: VAR` first
 line gates a patch on a `vars.sh` knob. `apply_patches` applies a series in stages 10/30/40 (llvm)
@@ -14,7 +15,7 @@ and 45 (llvm-propeller). Stage 00's `unapply_patches` reverses it before the cle
 | `0002-memprof-histogram-tail-granule.patch` | llvm/llvm-project#208911 (`c0b8c59b65af`) | `compiler-rt/lib/memprof/memprof_allocator.cpp` + tests | Correct histogram profiles | on | the new tag contains `c0b8c59b65af` |
 | `0100-dedubb-codegen.patch` | chaitanyaupp18/DeduBB@`07d730d` `patches/llvm-project-dedubb.patch` | CodeGen (DeduBB passes, hooks), X86/AArch64 InstrInfo, lld LinkerScript, clang driver CMake, 6 lit tests | DeduBB folding (`-mllvm -dedubb-directives=`) | on (`LLVM_DEDUBB`), inert without directives | DeduBB lands upstream |
 
-## `src/patches/llvm-propeller` (base `google/llvm-propeller@ddfb8b7`)
+## `src/patches/llvm-propeller` (base `google/llvm-propeller@ea240c1`)
 
 | Patch | Why |
 |---|---|
@@ -32,7 +33,7 @@ and 45 (llvm-propeller). Stage 00's `unapply_patches` reverses it before the cle
    lines, then run stage 95 (`check_dedubb_*`).
 3. Propeller: on a submodule bump, re-read the dep versions in `CMake/*` and update `versions.env`.
    Rebase `0001`–`0004`, then run stage 45 and its check.
-4. Run `tests/run.sh` (series re-apply and unapply tests), then post a comment on #4.
+4. Run `tests/run.sh` (series re-apply and unapply tests), then update this ledger in the same change.
 
 ## 2026-10-31: LLVM 23.1.4 / toolchain 2026.10.5
 
@@ -53,3 +54,15 @@ to use the bundle clang/lld wrappers.
 The initial 2026.10.4 release attempt stopped at submodule checkout because
 persistent CI worktrees still contained the previous LLVM patches. 2026.10.5
 forces checkout of the pinned submodule revisions before the existing cleanup.
+
+## 2026-11 refresh
+
+LLVM remains at the latest published release, 23.1.4. All three LLVM patches still
+apply and remain necessary. Propeller advances to `ea240c1`; patch 0001 now replaces
+its updated LLVM snapshot `260f2eb1`, and patches 0002–0004 apply without changes.
+Propeller's CMake dependency versions remain unchanged.
+
+The SQLite JNI shim now carries `src/patches/sqlite-jni/0001-jdbc-3.54.1-jni-lifetime.patch`,
+backporting the two NativeDB.c fixes from sqlite-jdbc 3.54.1.0: keep an already-open
+handle valid on duplicate open, and pass the pinned Java-array pointer to
+`ReleasePrimitiveArrayCritical`. Drop it when a new sqlite-jni pin includes both fixes.

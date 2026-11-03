@@ -30,8 +30,10 @@ stage_main() {
   cp -a "$staging"/. "$sysroot"/
   ensure_loader_link "$sysroot" "$cpu"
   # After the snapshot, so it is checked as ours, not exempted as a glibc file: rustc's gnu std
-  # always passes -lgcc_s; there is no libgcc in this toolchain, so redirect it to libunwind.
-  printf 'INPUT(-lunwind)\n' > "$sysroot/usr/lib/libgcc_s.so"
+  # always passes -lgcc_s; there is no libgcc in this toolchain, so provide both unwinding and the C personality from compiler-rt.
+  # GROUP rescans the archives for mutual references even under -nodefaultlibs.
+  # Stage 30 installs the relative builtins symlink in this sysroot.
+  printf 'GROUP(-lunwind -lclang_rt.builtins)\n' > "$sysroot/usr/lib/libgcc_s.so"
 }
 
 # fetch_glibc_rpm PKG CPU — download (cached, sha256-checked) one pinned RPM; prints its path.

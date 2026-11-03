@@ -31,6 +31,7 @@ build_sqlite3elide() {
   local t="$1" prefix="$2" src defs=()
   src="$(stage_source sqlite "$t")"
   fetch_sqlite3elide_inputs "$src"
+  apply_patches sqlite-jni "$src"
   mapfile -t defs < <(sqlite3elide_defines)
   (
     cd "$src" || exit 1

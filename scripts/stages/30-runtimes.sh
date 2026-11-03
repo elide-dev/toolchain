@@ -55,6 +55,10 @@ build_builtins() {
     -DCOMPILER_RT_BUILD_BUILTINS=ON -DCOMPILER_RT_BUILD_CRT=ON -DCOMPILER_RT_BUILD_PROFILE=OFF
   cmake --build "$b" -j "$JOBS"
   install_both "$b"
+  if [ "$(triple_libc "$t")" = gnu ]; then
+    ln -sfn "../../../../lib/clang/$LLVM_MAJOR/lib/$t/libclang_rt.builtins.a" \
+      "$(sysroot_of "$t")/usr/lib/libclang_rt.builtins.a"
+  fi
 }
 
 build_cxx_runtimes() {

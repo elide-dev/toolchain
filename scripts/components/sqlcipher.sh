@@ -6,8 +6,8 @@ build_sqlcipher() {
   (
     cd "$src" || exit 1
     target_env "$t" "$prefix"
-    CFLAGS="$CFLAGS -DSQLITE_HAS_CODEC -DSQLITE_EXTRA_INIT=sqlcipher_extra_init -DSQLITE_EXTRA_SHUTDOWN=sqlcipher_extra_shutdown"
-    LDFLAGS="$LDFLAGS -lcrypto"
+    CFLAGS="$CFLAGS -I$prefix/include -DSQLITE_HAS_CODEC -DSQLITE_EXTRA_INIT=sqlcipher_extra_init -DSQLITE_EXTRA_SHUTDOWN=sqlcipher_extra_shutdown"
+    LDFLAGS="$LDFLAGS -L$prefix/lib -lcrypto"
     export CFLAGS LDFLAGS
     ./configure --prefix="$prefix/sqlcipher" --enable-all --enable-static --disable-shared \
       --enable-fts5 --enable-threadsafe --with-tempstore=yes --disable-tcl

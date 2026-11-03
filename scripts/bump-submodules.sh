@@ -6,23 +6,29 @@ set -euo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$ROOT_DIR"
 
+# LLVM must move together with the published bootstrap assets and their checksums.
+# Tags may appear before release assets (e.g. 23.1.5); do not select those automatically.
+# shellcheck source=versions.env
+source "$ROOT_DIR/versions.env"
+
 # path|mode|selector
 #   tag:     newest tag matching the ERE selector (prereleases excluded)
 #   branch:  tip of the named branch
 #   default: tip of the remote's default branch
+#   release: pinned published LLVM release (bootstrap assets updated separately)
 # Held to an exact tag (change in lockstep with the consumer pin named beside it):
-#   aws-lc  v5.11.0       = the aws-lc vendored by aws-lc-sys 0.46.0 (Elide's Cargo.lock); ACCP
-#                           is built against the same symbols (AWS_LC_SYS_NO_PREFIX)
-#   sqlite  version-3.53.4 = org.xerial:sqlite-jdbc 3.53.4.0 (Elide)
+#   aws-lc  v5.12.0       = the aws-lc vendored by aws-lc-sys 0.47.0 (consumer requirement); ACCP
+#                           must be rebuilt against the same symbols (AWS_LC_SYS_NO_PREFIX)
+#   sqlite  version-3.54.1 = org.xerial:sqlite-jdbc 3.54.1.0 (Elide)
 SPEC='
-aws-lc|tag|v5\.11\.0
+aws-lc|tag|v5\.12\.0
 brotli|tag|v[0-9]+\.[0-9]+\.[0-9]+
 capnp|tag|v1\.[0-9]+\.[0-9]+
 cflags|branch|main
 crc32c|tag|[0-9]+\.[0-9]+\.[0-9]+
 hiredis|tag|v[0-9]+\.[0-9]+\.[0-9]+
 leveldb|tag|[0-9]+\.[0-9]+
-llvm|tag|llvmorg-23\.[0-9]+\.[0-9]+
+llvm|release|
 llvm-propeller|default|
 lz4|tag|v[0-9]+\.[0-9]+\.[0-9]+
 mimalloc|tag|v3\.[0-9]+\.[0-9]+
@@ -30,7 +36,7 @@ musl|branch|elide-v1.2.5
 openssl|tag|openssl-[0-9]+\.[0-9]+\.[0-9]+
 snappy|tag|[0-9]+\.[0-9]+\.[0-9]+
 sqlcipher|tag|v[0-9]+\.[0-9]+\.[0-9]+
-sqlite|tag|version-3\.53\.4
+sqlite|tag|version-3\.54\.1
 zlib|default|
 zlib-ng|tag|[0-9]+\.[0-9]+\.[0-9]+
 zstd|tag|v[0-9]+\.[0-9]+\.[0-9]+
@@ -46,6 +52,11 @@ while IFS='|' read -r path mode sel; do
   [ -e "$path/.git" ] || { echo "submodule $path is not initialized" >&2; exit 1; }
   v="$(var_of "$path")"
   case "$mode" in
+    release)
+      tag="llvmorg-$LLVM_VERSION"
+      git -C "$path" fetch -q --depth 1 origin "refs/tags/$tag:refs/tags/$tag"
+      git -C "$path" checkout -q "refs/tags/$tag"
+      line="${v}_VERSION=$LLVM_VERSION" ;;
     tag)
       tag="$(git ls-remote --tags --refs "$(url_of "$path")" | awk '{sub("refs/tags/","",$2); print $2}' \
         | grep -E "^${sel}\$" | grep -viE 'rc|alpha|beta|pre|dev' | sort -V | tail -1)"

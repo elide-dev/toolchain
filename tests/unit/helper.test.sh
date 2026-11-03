@@ -5,7 +5,7 @@ ROOT_DIR="${ROOT_DIR:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -
 source "$ROOT_DIR/tests/lib/assert.sh"
 
 T="$(mktemp -d)"
-B="$T/with space/elide-toolchain"
+B="$T/with space/toolchain-renamed"
 mkdir -p "$B/bin" "$B/share/elide-toolchain/cmake"
 cp "$ROOT_DIR/src/elide-toolchain" "$B/bin/elide-toolchain"
 chmod +x "$B/bin/elide-toolchain"
@@ -147,6 +147,7 @@ assert_fails "$H" addon install sanitizer-tsan --from "$T/tsan.tar.xz"     # no 
 (cd "$T" && sha256sum tsan.tar.xz > tsan.tar.xz.sha256)
 assert_ok "$H" addon install sanitizer-tsan --from "$T/tsan.tar.xz"
 assert_file "$SD/$G-tsan.addon.cfg"
+assert_fails test -e "$B/../elide-toolchain"
 assert_eq "$(q2() { "$H" env --target $G --sanitizer tsan --format json | python3 -c 'import json,sys; print(json.load(sys.stdin)["PKG_CONFIG_SYSROOT_DIR"])'; }; q2)" "$root/sysroot/$G+tsan"
 printf '{"sanitizer": "tsan", "version": "1999.1.0"}\n' > "$A/elide-toolchain/share/elide-toolchain/sanitizers/tsan.addon.json"
 tar -C "$A" -cJf "$T/old.tar.xz" elide-toolchain

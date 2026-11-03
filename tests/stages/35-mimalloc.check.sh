@@ -13,6 +13,10 @@ for t in $ALL_TARGETS; do
   case "$(triple_libc "$t")" in
     musl)
       assert_file "$p/lib/libc.so"
+      # Embedded mimalloc must not make libc depend on an external unwinder.
+      # Check the shared object too: a static executable can mask this dependency.
+      assert_not_contains "$("$nm" --dynamic --undefined-only "$p/lib/libc.so")" \
+        "_Unwind_" "musl libc has no external unwinder dependency"
       ld="$(sysroot_of "$t")/$(musl_loader "$(triple_cpu "$t")")"
       assert_eq "$(readlink "$ld")" "../usr/lib/libc.so" "relative musl loader link"
       if is_yes "$MUSL_USE_MIMALLOC"; then

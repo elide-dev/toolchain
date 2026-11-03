@@ -1,5 +1,5 @@
 # local: elide-toolchain. Link the stage-2 LLVM build tree via find_package(LLVM CONFIG)
-#   instead of downloading and building LLVM db9b595 (propeller's pin; an ancestor of llvmorg-23.1.2).
+#   instead of downloading and building propeller's pinned LLVM snapshot.
 diff --git a/CMake/LLVM/LLVM.cmake b/CMake/LLVM/LLVM.cmake
 index 11db842..9bf7311 100644
 --- a/CMake/LLVM/LLVM.cmake
@@ -13,7 +13,7 @@ index 11db842..9bf7311 100644
 +# via find_package(LLVM CONFIG) instead of downloading and building a pinned LLVM snapshot.
  
 -# LINT.IfChange(commit_hash)
--set(_LLVM_HASH db9b595ae3b30d67bd4068f80c651f97eb4dea2d)
+-set(_LLVM_HASH 260f2eb1e4c2bc8dc996adba1170bb58a2f66177)
 -# LINT.ThenChange(../../MODULE.bazel:llvm_commit_hash)
 -
 -set(propeller_llvm_build_dir ${CMAKE_BINARY_DIR}/llvm-build)
