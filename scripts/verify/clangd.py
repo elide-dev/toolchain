@@ -13,7 +13,11 @@ import threading
 def check(root, target):
     root = Path(root).resolve()
     with tempfile.TemporaryDirectory(prefix="clangd smoke ") as directory:
-        work = Path(directory)
+        # clangd canonicalizes definition/rename URIs. macOS's temporary
+        # directory can use /var while its canonical path starts with /private/var.
+        # Use the same physical path for the compilation database and all LSP URIs.
+        work = Path(directory).resolve()
+        directory = str(work)
         source = work / "main.cpp"
         code = ("#include <vector>\n#include <stddef.h>\n"
                 "#ifndef _LIBCPP_VERSION\n#error expected libc++ from the target toolchain\n#endif\n"
