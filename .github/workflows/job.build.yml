@@ -3,6 +3,11 @@ name: "Job - Build"
 on:
   workflow_dispatch:
     inputs:
+      platform:
+        description: "Platform subset for build qualification"
+        type: choice
+        default: all
+        options: [all, linux-amd64, linux-arm64, darwin-arm64]
       version:
         description: "Toolchain version (YYYY.MM.N or vYYYY.MM.N); empty = dev build"
         required: false
@@ -19,6 +24,10 @@ on:
         required: false
         type: boolean
         default: false
+      platform:
+        required: false
+        type: string
+        default: all
       version:
         required: false
         type: string
@@ -44,6 +53,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        exclude: ${{ fromJSON(inputs.platform == 'darwin-arm64' && '[{"os":"linux"}]' || inputs.platform == 'linux-amd64' && '[{"os":"darwin"},{"arch":"arm64"}]' || inputs.platform == 'linux-arm64' && '[{"os":"darwin"},{"arch":"amd64"}]' || '[]') }}
         include:
           - { os: linux, arch: amd64, runner: linux-amd64-cipool, release-runner: linux-amd64-toolchain-release, timeout: 720 }
           - { os: linux, arch: arm64, runner: linux-arm64-cipool, release-runner: linux-arm64-toolchain-release, timeout: 720 }
@@ -74,7 +84,10 @@ jobs:
           rm -rf glibc .git/modules/glibc
           # Discard patches from the previous build while switching revisions.
           # A reset after update alone is too late when a patched file changed upstream.
-          git submodule update --force --quiet --init --depth=1 --recursive --jobs 8
+          # Nested shallow repositories can race their shared shallow metadata.
+          # Retry serially with exactly the same pinned commits after that failure.
+          git submodule update --force --quiet --init --depth=1 --recursive --jobs 8 ||
+            git submodule update --force --quiet --init --depth=1 --recursive --jobs 1
           # Persistent runners may hold submodule work trees damaged by earlier jobs (tracked files
           # deleted or modified); `submodule update` does not repair them when HEAD already matches.
           git submodule foreach --recursive --quiet 'git reset -q --hard && git clean -qffdx'
