@@ -3,6 +3,10 @@ name: "Job - Build"
 on:
   workflow_dispatch:
     inputs:
+      runner:
+        description: "Optional runner override for a single-platform qualification"
+        type: string
+        default: ""
       platform:
         description: "Platform subset for build qualification"
         type: choice
@@ -19,6 +23,10 @@ on:
         default: false
   workflow_call:
     inputs:
+      runner:
+        required: false
+        type: string
+        default: ""
       platform:
         required: false
         type: string
@@ -40,7 +48,7 @@ permissions:
 jobs:
   build:
     name: "Bundle (${{ matrix.os }}-${{ matrix.arch }})"
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ inputs.platform != 'all' && inputs.runner || matrix.runner }}
     timeout-minutes: ${{ matrix.timeout }}
     strategy:
       fail-fast: false
