@@ -43,6 +43,11 @@ stage_main() {
   cp "$meta/sbom.cdx.json" "$DIST_DIR/$name.sbom.cdx.json"
   log "wrote $archive"
   package_sanitizer_addons
+  # Inspect exact shipped archives after stripping, including every sanitizer add-on.
+  local coverage_archives=("$archive") s
+  for s in $(all_variants); do coverage_archives+=("$DIST_DIR/$(addon_asset_name "$s")"); done
+  BUNDLE_DIR="$BUNDLE_DIR" TOOLCHAIN_VERSION="$TOOLCHAIN_VERSION" HOST_OS="$HOST_OS" HOST_ARCH="$HOST_ARCH" \
+    python3 "$ROOT_DIR/scripts/symbol-coverage.py" "${coverage_archives[@]}"
 }
 
 # relocate_prefix TRIPLE — make a sysroot's metadata location-independent: .pc files use
