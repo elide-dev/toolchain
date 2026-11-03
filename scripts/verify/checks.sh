@@ -454,13 +454,35 @@ check_rust() {
 # check_relocatable ROOT — copy the bundle under a path containing a space and rerun the smoke tests.
 check_relocatable() {
   local root="$1" moved t
-  moved="$VERIFY_DIR/reloc test/$TOOLCHAIN_NAME"
+  moved="$VERIFY_DIR/reloc test/renamed-toolchain"
   rm -rf "$VERIFY_DIR/reloc test"; mkdir -p "$VERIFY_DIR/reloc test"
   cp -a "$root" "$moved"
   for t in $ALL_TARGETS; do check_smoke "$moved" "$t" relocated; done
   if "$moved/bin/elide-toolchain" doctor >/dev/null; then pass "doctor (relocated)"; else fail "doctor (relocated)" "see elide-toolchain doctor"; fi
+  for t in $ALL_TARGETS; do
+    if python3 "$ROOT_DIR/scripts/verify/clangd.py" "$moved" "$t"; then
+      pass "clangd LSP (relocated) $t"
+    else
+      fail "clangd LSP (relocated) $t" "diagnostics, definition or rename failed"
+    fi
+  done
   run_sanitizer_relocated_checks "$moved"
   rm -rf "$VERIFY_DIR/reloc test"
+}
+
+# The Xcode 27 TAPI parser regression can be checked on either host OS without an SDK.
+check_xcode27_tapi() {
+  local root="$1" tmp
+  tmp="$(mktemp -d)"
+  if "$root/bin/clang" --no-default-config --target=arm64-apple-macos12 \
+      -x c -c /dev/null -o "$tmp/empty.o" \
+      && "$root/bin/ld64.lld" -dylib -arch arm64 -platform_version macos 12 27 \
+        -syslibroot "$ROOT_DIR/tests/fixtures/xcode27-sdk" -lSystem "$tmp/empty.o" -o "$tmp/probe.dylib"; then
+    pass "Xcode 27 arm64e.x1 TAPI"
+  else
+    fail "Xcode 27 arm64e.x1 TAPI" "Mach-O linker rejected SDK architecture variants"
+  fi
+  rm -rf "$tmp"
 }
 
 run_all_checks() {
@@ -470,6 +492,7 @@ run_all_checks() {
     if [ -z "$re" ] || [ ! -x "$re" ]; then fail "readelf" "no usable readelf/llvm-readelf found"; fi
   fi
   check_manifest "$root"
+  check_xcode27_tapi "$root"
   if "$root/bin/clangd" --version >/dev/null; then pass "clangd"; else fail "clangd" "bundled language server does not run"; fi
   check_no_build_paths "$root"
   for t in $ALL_TARGETS; do
@@ -478,6 +501,17 @@ run_all_checks() {
     check_components "$root" "$t"
     check_bitcode "$root" "$t"
     check_rust "$root" "$t"
+    if [ "$(triple_libc "$t")" = gnu ]; then
+      local personality_dir
+      personality_dir="$(mktemp -d)"
+      if "$root/bin/$t-clang" -nodefaultlibs "$ROOT_DIR/tests/fixtures/gcc-personality.c" \
+          -lgcc_s -lc -o "$personality_dir/probe" && "$personality_dir/probe"; then
+        pass "Rust C personality (-nodefaultlibs) $t"
+      else
+        fail "Rust C personality (-nodefaultlibs) $t" "libgcc_s shim lacks compiler-rt builtins"
+      fi
+      rm -rf "$personality_dir"
+    fi
     run_sanitizer_checks "$root" "$t"
     case "$(triple_libc "$t")" in
       gnu) check_glibc_floor "$root" "$t"; check_interp "$root" "$t" ;;

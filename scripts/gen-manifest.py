@@ -190,6 +190,12 @@ def sbom(env):
             "purl": purl(url, name, info["version"], info["revision"]),
             "externalReferences": [{"type": "vcs", "url": url}] if url else [],
         })
+    llvm = m["components"]["llvm"]
+    comps.append({
+        "type": "application", "name": "clangd", "version": llvm["version"],
+        "purl": purl(urls["llvm"], "llvm", llvm["version"], llvm["revision"]) + "#clang-tools-extra/clangd",
+        "licenses": [{"expression": "Apache-2.0 WITH LLVM-exception"}],
+    })
     return {
         "$schema": "http://cyclonedx.org/schema/bom-1.6.schema.json",
         "bomFormat": "CycloneDX",

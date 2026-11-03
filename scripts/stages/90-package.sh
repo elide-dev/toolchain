@@ -7,7 +7,9 @@ stage_main() {
   install_frontends "$BUNDLE_DIR"
   install -m 0755 "$ROOT_DIR/src/elide-toolchain" "$BUNDLE_DIR/bin/elide-toolchain"
   install -m 0644 "$ROOT_DIR/rustversion" "$BUNDLE_DIR/rustversion"
-  mkdir -p "$meta"
+  mkdir -p "$meta/licenses/llvm"
+  install -m 0644 "$ROOT_DIR/llvm/llvm/LICENSE.TXT" "$meta/licenses/llvm/LICENSE.TXT"
+  install -m 0644 "$ROOT_DIR/llvm/clang-tools-extra/LICENSE.TXT" "$meta/licenses/llvm/clang-tools-extra.txt"
   printf '%s\n' "$TOOLCHAIN_VERSION" > "$meta/VERSION"
   for t in $ALL_TARGETS; do relocate_prefix "$t"; done
   SANITIZER_MANIFEST="$(sanitizer_manifest_json)" ENABLED_COMPONENTS="$(enabled_components | xargs)" \

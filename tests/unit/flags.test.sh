@@ -33,6 +33,14 @@ assert_eq "$(drop_pie_codegen -O3 -fPIC -fPIE -fpie -flto=thin)" "-O3 -fPIC -flt
 others="$(grep -h 'pack-relative-relocs' "$ROOT_DIR"/cflags/*.txt | sed 's/#.*//' | grep -v '^[[:space:]]*$' | grep -vx -- '-Wl,-z,pack-relative-relocs' || true)"
 assert_eq "$others" "" "cflags profile spells DT_RELR only as a standalone token"
 
+for unsafe in -fexperimental-relative-c++-abi-vtables -fmerge-all-constants -mgfni -mvaes -msha -maes -mpclmul -mrdrnd; do
+  assert_not_contains "$gnu" "$unsafe" "portable C++ ABI and advertised x86-64-v3 floor"
+done
+assert_contains "$gnu" "-fstack-protector-strong" "retain strong stack canaries"
+assert_contains "$gnu" "-flto=thin" "retain ThinLTO"
+assert_contains "$gnu" "-Wl,-z,relro" "retain RELRO"
+assert_contains "$gnu" "-Wl,-z,now" "retain eager binding"
+
 GLIBC_FLOOR=2.36
 assert_contains "$(target_cflags x86_64-unknown-linux-gnu)" "pack-relative-relocs" "kept when floor >= 2.36"
 

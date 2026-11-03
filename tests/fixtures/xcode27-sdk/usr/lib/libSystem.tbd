@@ -1,0 +1,6 @@
+--- !tapi-tbd
+tbd-version: 4
+targets: [ arm64-macos, arm64e-macos, arm64e.x1-macos ]
+install-name: '/usr/lib/libSystem.B.dylib'
+current-version: 1.0.0
+...

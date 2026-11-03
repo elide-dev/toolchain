@@ -29,7 +29,8 @@ assert_eq "$(BUILD_PROPELLER=no LLVM_DEDUBB=no MUSL_USE_MIMALLOC=no python3 "$RO
 
 s="$(python3 "$ROOT_DIR/scripts/gen-manifest.py" sbom)"
 names="$(printf '%s' "$s" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["bomFormat"]=="CycloneDX" and d["specVersion"]=="1.6"; print(" ".join(sorted(c["name"] for c in d["components"])))')"
-assert_eq "$names" "aws-lc glibc llvm mimalloc musl zlib-ng zstd"
+assert_eq "$names" "aws-lc clangd glibc llvm mimalloc musl zlib-ng zstd"
+assert_eq "$(printf '%s' "$s" | python3 -c 'import json,sys; c=next(c for c in json.load(sys.stdin)["components"] if c["name"]=="clangd"); print(c["version"], c["licenses"][0]["expression"])')" "$LLVM_VERSION Apache-2.0 WITH LLVM-exception"
 
 ELIDE_HOST_OS=darwin ELIDE_HOST_ARCH=arm64 ALL_TARGETS=arm64-apple-darwin HOST_OS=darwin HOST_ARCH=arm64 \
   python3 "$ROOT_DIR/scripts/gen-manifest.py" sbom | python3 -c 'import json,sys; n={c["name"] for c in json.load(sys.stdin)["components"]}; assert "glibc" not in n and "musl" not in n' \

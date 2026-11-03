@@ -352,7 +352,9 @@ cmd_addon() {
     || die "$asset is not a sanitizer add-on (no $s.addon.json)"
   v=$(printf '%s' "$meta" | sed -n 's/.*"version": *"\([^"]*\)".*/\1/p')
   [ "$v" = "$ver" ] || die "$asset is version '$v' but this bundle is $ver"
-  tar -xJf "$archive" -C "$ROOT/.."
+  tar -xJf "$archive" -C "$ROOT" --strip-components=1
+  [ "$(addon_state x86_64-unknown-linux-gnu "$s")" = installed ] \
+    || die "$asset did not install the $s add-on configuration"
   echo "installed sanitizer-$s add-on into $ROOT"
 }
 

@@ -349,4 +349,24 @@ Unit tests and shellcheck: `tests/run.sh`. Per-stage checks: `tests/stages/*.che
 
 Component and consumer flags come from the `cflags/` submodule profiles: `cflags/cli/cflags.sh <os> <arch>`, then the `cflags.local/` overlay, then `-march`/`-mtune` from `versions.env`. Compile profiles (`base`, `linux`, `linux-amd64`, ...) apply to every compilation unit and intermediate link; binary profiles (`*-bin`) apply only to a consumer's final link. Both Linux libcs use the `linux-<arch>` profile. The toolchain layer (libc, runtimes, LLVM, mimalloc) keeps its own tuned flags.
 
+The shared profiles enable strong stack canaries while retaining `-O3`, ThinLTO, PIC,
+unwind information and full RELRO. Linux x86-64 follows `MARCH_AMD64` without extra
+crypto/GFNI/RNG ISA switches; crypto libraries may still select optimized implementations
+at runtime. Relative C++ vtables and aggressive constant merging are disabled. Rebuild
+all component archives when adopting the 2026.11 profiles; do not reuse archives compiled
+with the previous C++ ABI settings.
+
+The GNU `libgcc_s.so` compatibility script groups libunwind with compiler-rt builtins,
+so Rust's `-nodefaultlibs` links also resolve `__gcc_personality_v0` (including TSAN).
+For TSAN hosted inside a JVM, set `TSAN_OPTIONS=ignore_noninstrumented_modules=1` to
+avoid reports from the uninstrumented VM; this reduces coverage of those modules.
+
+`clangd` comes from the same LLVM revision as clang. Stage 95 runs a real LSP session
+from a renamed bundle under a path containing spaces, checking standard-library header
+resolution, diagnostics, definition and rename for each target. LLVM license notices and
+an explicit clangd SBOM entry accompany it.
+
+See [2026.11 dependency migration](docs/notes/2026-11-dependency-migration.md) for the
+required Elide consumer updates (AWS-LC, ACCP and SQLite).
+
 **glibc and DT_RELR.** `cflags/linux.txt` carries `-Wl,-z,pack-relative-relocs`, which makes lld emit a `GLIBC_ABI_DT_RELR` version need (glibc 2.36+). The build removes that flag for gnu triples whenever the glibc floor is below 2.36. Consumers applying the cflags profile themselves to gnu targets must drop it too, or their binaries will not load on older glibc.

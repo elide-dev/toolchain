@@ -1,0 +1,11 @@
+[package]
+name = "toolchain-tsan-personality"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[[bin]]
+name = "tsan-personality"
+path = "main.rs"

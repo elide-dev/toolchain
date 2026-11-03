@@ -16,6 +16,8 @@ BUILD_ZSTD=no;  assert_fails component_enabled zstd
 BUILD_ZLIB=yes BUILD_ZLIB_NG=yes assert_fails check_component_conflicts
 BUILD_ZLIB=no BUILD_ZLIB_NG=yes BUILD_OPENSSL=yes BUILD_AWS_LC=yes assert_fails check_component_conflicts
 BUILD_ZLIB=no BUILD_ZLIB_NG=yes BUILD_OPENSSL=no BUILD_AWS_LC=yes BUILD_SQLCIPHER=no assert_ok check_component_conflicts
+BUILD_ZLIB=no BUILD_ZLIB_NG=yes BUILD_OPENSSL=no BUILD_AWS_LC=yes BUILD_SQLCIPHER=yes assert_fails check_component_conflicts
+BUILD_ZLIB=no BUILD_ZLIB_NG=yes BUILD_OPENSSL=yes BUILD_AWS_LC=no BUILD_SQLCIPHER=yes assert_ok check_component_conflicts
 for c in "${COMPONENTS[@]}"; do
   assert_ok test -n "$(component_artifact "$c")"
 done
