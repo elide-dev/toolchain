@@ -3,20 +3,16 @@
 # Preserve an already-open handle, and release the pinned JNI array pointer.
 --- a/sqlite3jni.c
 +++ b/sqlite3jni.c
-@@ -646,7 +646,6 @@
-     db = gethandle(env, this);
+@@ -647,5 +647,4 @@
      if (db) {
          throwex_msg(env, "DB already open");
 -        sqlite3_close(db);
          return;
      }
- 
-@@ -1975,7 +1974,7 @@
-       if (jbuff_pointer!=NULL)
+@@ -1976,5 +1975,5 @@
        {
           memcpy(jbuff_pointer, buff, size);
 -         (*env)->ReleasePrimitiveArrayCritical(env, jbuff, buff, 0);
 +         (*env)->ReleasePrimitiveArrayCritical(env, jbuff, jbuff_pointer, 0);
        }
        else
-       {
