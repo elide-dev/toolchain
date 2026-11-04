@@ -24,6 +24,8 @@ runtimes_common_args() {
   printf '%s\n' \
     -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_C_FLAGS_RELEASE="-O3 -DNDEBUG -g" -DCMAKE_CXX_FLAGS_RELEASE="-O3 -DNDEBUG -g" \
+    -DCMAKE_ASM_FLAGS_RELEASE="-O3 -DNDEBUG -g" \
     -DCMAKE_C_COMPILER="$s/clang" -DCMAKE_CXX_COMPILER="$s/clang++" -DCMAKE_ASM_COMPILER="$s/clang" \
     -DCMAKE_C_COMPILER_TARGET="$t" -DCMAKE_CXX_COMPILER_TARGET="$t" -DCMAKE_ASM_COMPILER_TARGET="$t" \
     -DCMAKE_SYSROOT="$(sysroot_of "$t")" \

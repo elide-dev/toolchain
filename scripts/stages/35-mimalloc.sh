@@ -88,14 +88,14 @@ build_musl_phase2() {
     cmake -S "$mi_src" -B "$mi_build" -G Ninja \
       -DCMAKE_TOOLCHAIN_FILE="$(toolchain_file "$t")" -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
-      -DCMAKE_C_FLAGS="$(arch_flags "$t") $lto" \
+      -DCMAKE_C_FLAGS="$(arch_flags "$t") $lto -g" \
       "${args[@]}" -DMI_LIBC_MUSL=ON -DMI_BUILD_OBJECT=ON
     cmake --build "$mi_build" -j "$JOBS"
     obj="$mi_build/mimalloc.o"
     [ -f "$obj" ] || die "mimalloc.o not produced at $obj"
     glue="$mi_build/mimalloc-musl-glue.o"
     # shellcheck disable=SC2086,SC2046
-    "$s/clang" -c -O3 -fPIC $tflags $lto $(arch_flags "$t") \
+    "$s/clang" -c -O3 -g -fPIC $tflags $lto $(arch_flags "$t") \
       -fno-fast-math -U_FORTIFY_SOURCE -ffunction-sections -fdata-sections \
       -I"$mi_src/include" -I"$prefix/include" \
       "$ROOT_DIR/src/mimalloc-musl-glue.c" -o "$glue"
@@ -105,8 +105,8 @@ build_musl_phase2() {
 
   local src cflags cflags_ldso
   src="$(stage_source musl "$t")"
-  cflags="$(arch_flags "$t") -ffunction-sections -fdata-sections -fno-fast-math -U_FORTIFY_SOURCE -O3 $tflags $lto"
-  cflags_ldso="$(arch_flags "$t") -ffunction-sections -fdata-sections -fno-fast-math -U_FORTIFY_SOURCE -O3 $tflags -fno-lto"
+  cflags="$(arch_flags "$t") -ffunction-sections -fdata-sections -fno-fast-math -U_FORTIFY_SOURCE -O3 -g $tflags $lto"
+  cflags_ldso="$(arch_flags "$t") -ffunction-sections -fdata-sections -fno-fast-math -U_FORTIFY_SOURCE -O3 -g $tflags -fno-lto"
   (
     cd "$src" || exit 1
     unset CFLAGS CXXFLAGS LDFLAGS CC

@@ -51,7 +51,8 @@ metadata = dict(
     },
 )
 coverage = collector.collect(
-    root, archives, [], "elide-dev/toolchain", metadata, ["versions.env", str(bundle)]
+    root, archives, [str(Path(archives[0]).parent / (Path(archives[0]).name.removesuffix('.tar.xz') + '-symbols'))],
+    "elide-dev/toolchain", metadata, ["versions.env", str(bundle)]
 )
 out = Path(archives[0]).with_suffix("").with_suffix(".symbol-coverage.json")
 out.write_text(json.dumps(coverage, indent=2, sort_keys=True) + "\n")
