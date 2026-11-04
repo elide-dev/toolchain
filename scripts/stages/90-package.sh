@@ -102,14 +102,9 @@ PY
 }
 
 strip_tools() {
-  local f s="$BUNDLE_DIR/bin/llvm-strip"
-  for f in "$BUNDLE_DIR"/bin/*; do
-    if [ ! -f "$f" ] || [ -L "$f" ]; then continue; fi
-    if [ "$HOST_OS" = linux ]; then
-      if is_elf "$f"; then "$s" --strip-unneeded "$f"; fi
-    else
-      "$s" -x "$f" 2>/dev/null || true
-    fi
-  done
+  local symbols="$DIST_DIR/$TOOLCHAIN_NAME-$TOOLCHAIN_VERSION-$HOST_OS-$HOST_ARCH-symbols"
+  mkdir -p "$symbols"
+  LLVM_BIN="$BUNDLE_DIR/bin" BUNDLE_DIR="$BUNDLE_DIR" SYMBOLS_DIR="$symbols" \
+    python3 "$ROOT_DIR/scripts/preserve-symbols.py"
   return 0
 }

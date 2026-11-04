@@ -49,7 +49,7 @@ target_cflags() {
   # shellcheck disable=SC2046
   printf '%s%s %s\n' "$(sanitizer_layer_flags "$t")" \
     "$(drop_pie_codegen $(filter_flags_for_triple "$t" $(profile_flags "$os" "$arch")))" \
-    "$(arch_flags "$t")"
+    "$(arch_flags "$t") -g"
 }
 
 # drop_pie_codegen FLAG... — components are libraries that consumers link into shared objects
