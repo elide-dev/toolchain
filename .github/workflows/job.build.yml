@@ -53,7 +53,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(inputs.platform == 'darwin-arm64' && '[{"os":"darwin","arch":"arm64","runner":"darwin-arm64-cipool","timeout":720}]' || inputs.platform == 'linux-amd64' && '[{"os":"linux","arch":"amd64","runner":"linux-amd64-cipool","timeout":720}]' || inputs.platform == 'linux-arm64' && '[{"os":"linux","arch":"arm64","runner":"linux-arm64-cipool","timeout":720}]' || '[{"os":"linux","arch":"amd64","runner":"linux-amd64-cipool","timeout":720},{"os":"linux","arch":"arm64","runner":"linux-arm64-cipool","timeout":720},{"os":"darwin","arch":"arm64","runner":"darwin-arm64-cipool","timeout":720}]') }}
+        include: ${{ fromJSON(inputs.platform == 'darwin-arm64' && '[{"os":"darwin","arch":"arm64","runner":"macos-arm64-cipool","timeout":720}]' || inputs.platform == 'linux-amd64' && '[{"os":"linux","arch":"amd64","runner":"linux-amd64-cipool","timeout":720}]' || inputs.platform == 'linux-arm64' && '[{"os":"linux","arch":"arm64","runner":"linux-arm64-cipool","timeout":720}]' || '[{"os":"linux","arch":"amd64","runner":"linux-amd64-cipool","timeout":720},{"os":"linux","arch":"arm64","runner":"linux-arm64-cipool","timeout":720},{"os":"darwin","arch":"arm64","runner":"macos-arm64-cipool","timeout":720}]') }}
     env:
       REQUIRE_CONTAINER_CHECKS: ${{ matrix.os == 'linux' && 'yes' || 'no' }}
       INPUT_VERSION: ${{ inputs.version }}
