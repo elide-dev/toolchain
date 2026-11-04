@@ -6,9 +6,18 @@ on:
         description: Successful same-repository producer run; blank uses this run
         type: string
         required: false
+      platform:
+        description: Platform to qualify
+        type: choice
+        default: all
+        options: [all, linux-amd64, linux-arm64, darwin-arm64]
+        required: false
   workflow_call:
     inputs:
       source_run:
+        type: string
+        required: false
+      platform:
         type: string
         required: false
 permissions:
@@ -20,7 +29,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [linux-amd64, linux-arm64, darwin-arm64]
+        platform: ${{ fromJSON(inputs.platform == 'linux-amd64' && '["linux-amd64"]' || inputs.platform == 'linux-arm64' && '["linux-arm64"]' || inputs.platform == 'darwin-arm64' && '["darwin-arm64"]' || '["linux-amd64","linux-arm64","darwin-arm64"]') }}
     env:
       SYMBOL_INGEST_PLATFORM: ${{ matrix.platform }}
       DEBUGINFO_DEV_ORG_ID: ${{ vars.DEBUGINFO_DEV_ORG_ID }}
