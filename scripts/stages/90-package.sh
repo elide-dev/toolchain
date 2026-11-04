@@ -98,7 +98,8 @@ PY
 strip_tools() {
   local symbols="$DIST_DIR/$TOOLCHAIN_NAME-$TOOLCHAIN_VERSION-$HOST_OS-$HOST_ARCH-symbols"
   mkdir -p "$symbols"
-  LLVM_BIN="$BUNDLE_DIR/bin" BUNDLE_DIR="$BUNDLE_DIR" SYMBOLS_DIR="$symbols" \
+  local bundle_bin="$BUNDLE_DIR/bin"
+  LLVM_BIN="$bundle_bin" BUNDLE_DIR="$BUNDLE_DIR" SYMBOLS_DIR="$symbols" \
     python3 "$ROOT_DIR/scripts/preserve-symbols.py"
   return 0
 }
