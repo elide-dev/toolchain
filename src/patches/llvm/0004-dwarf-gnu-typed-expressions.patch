@@ -1,0 +1,73 @@
+diff --git a/llvm/include/llvm/BinaryFormat/Dwarf.def b/llvm/include/llvm/BinaryFormat/Dwarf.def
+index 8bb1766..44a23a9 100644
+--- a/llvm/include/llvm/BinaryFormat/Dwarf.def
++++ b/llvm/include/llvm/BinaryFormat/Dwarf.def
+@@ -926,6 +926,13 @@ HANDLE_DW_OP(0xee, WASM_location_int, -1, -1, 0, WASM)
+ // Historic and not implemented in LLVM.
+ HANDLE_DW_OP(0xf0, APPLE_uninit, -1, -1, 0, APPLE)
+ HANDLE_DW_OP(0xf2, GNU_implicit_pointer, 2, 0, 4, GNU)
++// GNU typed stack operations (the pre-DWARF5 encodings).
++HANDLE_DW_OP(0xf4, GNU_const_type, 2, 1, 0, GNU)
++HANDLE_DW_OP(0xf5, GNU_regval_type, 2, 1, 0, GNU)
++HANDLE_DW_OP(0xf6, GNU_deref_type, 2, 1, 0, GNU)
++HANDLE_DW_OP(0xf7, GNU_convert, 1, 1, 0, GNU)
++HANDLE_DW_OP(0xf9, GNU_reinterpret, 1, 1, 0, GNU)
++HANDLE_DW_OP(0xfa, GNU_parameter_ref, 0, 1, 0, GNU)
+ // The GNU entry value extension.
+ HANDLE_DW_OP(0xf3, GNU_entry_value, 2, 0, 0, GNU)
+ HANDLE_DW_OP(0xf8, PGI_omp_thread_num, -1, -1, 0, PGI)
+diff --git a/llvm/lib/DebugInfo/DWARF/DWARFExpressionPrinter.cpp b/llvm/lib/DebugInfo/DWARF/DWARFExpressionPrinter.cpp
+index ac9350b..aa8cdf5 100644
+--- a/llvm/lib/DebugInfo/DWARF/DWARFExpressionPrinter.cpp
++++ b/llvm/lib/DebugInfo/DWARF/DWARFExpressionPrinter.cpp
+@@ -178,10 +178,13 @@ static bool printOp(const DWARFExpression::Operation *Op, raw_ostream &OS,
+         assert(Operand == 0 && "DW_OP SubOp must be the first operand");
+         assert(SubOpcode && "DW_OP SubOp description is inconsistent");
+       } else if (Size == DWARFExpression::Operation::BaseTypeRef && U) {
+-        // For DW_OP_convert the operand may be 0 to indicate that conversion to
+-        // the generic type should be done. The same holds for
+-        // DW_OP_reinterpret, which is currently not supported.
+-        if (Op->getCode() == DW_OP_convert && Op->getRawOperand(Operand) == 0)
++        // Conversion and reinterpretation use zero for the generic type in
++        // both the standard and GNU encodings.
++        if ((Op->getCode() == DW_OP_convert ||
++             Op->getCode() == DW_OP_reinterpret ||
++             Op->getCode() == DW_OP_GNU_convert ||
++             Op->getCode() == DW_OP_GNU_reinterpret) &&
++            Op->getRawOperand(Operand) == 0)
+           OS << " 0x0";
+         else
+           prettyPrintBaseTypeRef(U, OS, DumpOpts, Op->getRawOperands(),
+diff --git a/llvm/lib/DebugInfo/DWARF/LowLevel/DWARFExpression.cpp b/llvm/lib/DebugInfo/DWARF/LowLevel/DWARFExpression.cpp
+index 61bd6fc..dd8ebfd 100644
+--- a/llvm/lib/DebugInfo/DWARF/LowLevel/DWARFExpression.cpp
++++ b/llvm/lib/DebugInfo/DWARF/LowLevel/DWARFExpression.cpp
+@@ -92,11 +92,28 @@ static std::vector<Desc> getOpDescriptions() {
+   Descriptions[DW_OP_addrx] = Desc(Op::Dwarf5, Op::SizeLEB);
+   Descriptions[DW_OP_constx] = Desc(Op::Dwarf5, Op::SizeLEB);
+   Descriptions[DW_OP_entry_value] = Desc(Op::Dwarf5, Op::SizeLEB);
++  Descriptions[DW_OP_const_type] =
++      Desc(Op::Dwarf5, Op::BaseTypeRef, Op::Size1, Op::SizeBlock);
++  Descriptions[DW_OP_deref_type] = Desc(Op::Dwarf5, Op::Size1, Op::BaseTypeRef);
++  Descriptions[DW_OP_xderef_type] =
++      Desc(Op::Dwarf5, Op::Size1, Op::BaseTypeRef);
++  Descriptions[DW_OP_reinterpret] = Desc(Op::Dwarf5, Op::BaseTypeRef);
+   Descriptions[DW_OP_convert] = Desc(Op::Dwarf5, Op::BaseTypeRef);
+   Descriptions[DW_OP_regval_type] =
+       Desc(Op::Dwarf5, Op::SizeLEB, Op::BaseTypeRef);
+   Descriptions[DW_OP_WASM_location] =
+       Desc(Op::Dwarf4, Op::SizeLEB, Op::WasmLocationArg);
++  // GNU_uninit shares 0xf0 with APPLE_uninit and takes no operands.
++  Descriptions[DW_OP_APPLE_uninit] = Desc(Op::Dwarf4);
++  Descriptions[DW_OP_GNU_const_type] =
++      Desc(Op::Dwarf4, Op::BaseTypeRef, Op::Size1, Op::SizeBlock);
++  Descriptions[DW_OP_GNU_regval_type] =
++      Desc(Op::Dwarf4, Op::SizeLEB, Op::BaseTypeRef);
++  Descriptions[DW_OP_GNU_deref_type] =
++      Desc(Op::Dwarf4, Op::Size1, Op::BaseTypeRef);
++  Descriptions[DW_OP_GNU_convert] = Desc(Op::Dwarf4, Op::BaseTypeRef);
++  Descriptions[DW_OP_GNU_reinterpret] = Desc(Op::Dwarf4, Op::BaseTypeRef);
++  Descriptions[DW_OP_GNU_parameter_ref] = Desc(Op::Dwarf4, Op::Size4);
+   Descriptions[DW_OP_GNU_push_tls_address] = Desc(Op::Dwarf3);
+   Descriptions[DW_OP_GNU_addr_index] = Desc(Op::Dwarf4, Op::SizeLEB);
+   Descriptions[DW_OP_GNU_const_index] = Desc(Op::Dwarf4, Op::SizeLEB);

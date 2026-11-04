@@ -35,6 +35,31 @@ check_smoke() {
   pass "$name"
 }
 
+# Check the bytes shipped in the archive, including native assembly in fat-LTO bundles.
+check_aws_lc_ranges() {
+  local root="$1" t="$2" output
+  component_enabled aws-lc || return 0
+  case "$t" in x86_64-*-linux-*) ;; *) return 0 ;; esac
+  if output=$(python3 "$ROOT_DIR/scripts/verify/aws-lc-ranges.py" \
+      "$root/sysroot/$t/usr/lib/libcrypto.a" --ar "$root/bin/llvm-ar" \
+      --readelf "$root/bin/llvm-readelf" 2>&1); then
+    pass "AWS-LC function ranges $t"
+  else
+    fail "AWS-LC function ranges $t" "$output"
+  fi
+}
+
+check_bolt_debug_quality() {
+  local root="$1" output
+  [ "$HOST_OS" = linux ] || return 0
+  if output=$(python3 "$ROOT_DIR/scripts/verify/bolt-debug-quality.py" "$root/bin" \
+      "$ROOT_DIR/tests/fixtures/debug-quality" 2>&1); then
+    pass "BOLT debug quality"
+  else
+    fail "BOLT debug quality" "$output"
+  fi
+}
+
 check_werror() {
   local root="$1" t="$2" tmp
   tmp="$(mktemp -d)"
@@ -476,6 +501,7 @@ run_all_checks() {
     check_smoke "$root" "$t"
     check_werror "$root" "$t"
     check_components "$root" "$t"
+    check_aws_lc_ranges "$root" "$t"
     check_bitcode "$root" "$t"
     check_rust "$root" "$t"
     run_sanitizer_checks "$root" "$t"
@@ -487,6 +513,7 @@ run_all_checks() {
   done
   if [ "$HOST_OS" = linux ]; then check_containers "$root"; else check_darwin_dylibs "$root"; fi
   run_feature_checks "$root"
+  check_bolt_debug_quality "$root"
   check_relocatable "$root"
   run_sanitizer_addon_checks "$root"
   echo "verification: $VERIFY_FAILURES failure(s)"

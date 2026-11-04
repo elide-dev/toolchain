@@ -1,0 +1,467 @@
+diff --git a/llvm/include/llvm/DebugInfo/DWARF/DWARFVerifier.h b/llvm/include/llvm/DebugInfo/DWARF/DWARFVerifier.h
+index 6d2d622..4e40eb9 100644
+--- a/llvm/include/llvm/DebugInfo/DWARF/DWARFVerifier.h
++++ b/llvm/include/llvm/DebugInfo/DWARF/DWARFVerifier.h
+@@ -77,6 +77,20 @@ public:
+     std::set<DieRangeInfo> Children;
+ 
+     DieRangeInfo() = default;
++    DieRangeInfo(const DieRangeInfo &Other)
++        : Die(Other.Die), Ranges(Other.Ranges), Children(Other.Children) {}
++    DieRangeInfo &operator=(const DieRangeInfo &Other) {
++      if (this != &Other) {
++        Die = Other.Die;
++        Ranges = Other.Ranges;
++        Children = Other.Children;
++        ChildIntervals.clear();
++        IndexedChildren = 0;
++      }
++      return *this;
++    }
++    DieRangeInfo(DieRangeInfo &&) = default;
++    DieRangeInfo &operator=(DieRangeInfo &&) = default;
+     DieRangeInfo(DWARFDie Die) : Die(Die) {}
+ 
+     /// Used for unit testing.
+@@ -112,6 +126,10 @@ public:
+     /// Return true if any range in this object intersects with any range in
+     /// RHS. Identical ranges are not considered to be intersecting.
+     LLVM_ABI bool intersects(const DieRangeInfo &RHS) const;
++
++  private:
++    std::map<DWARFAddressRange, die_range_info_iterator> ChildIntervals;
++    size_t IndexedChildren = 0;
+   };
+ 
+ private:
+@@ -329,7 +347,8 @@ private:
+   /// \param U containing DWARFUnit, if any.
+   ///
+   /// returns true if E is a valid expression.
+-  bool verifyExpression(const DWARFExpression &E, DWARFUnit *U);
++  bool verifyExpression(const DWARFExpression &E, DWARFUnit *U,
++                        unsigned Depth = 0);
+ 
+   /// Verify that the the expression operation is valid within the context of
+   /// unit U.
+diff --git a/llvm/lib/DebugInfo/DWARF/DWARFVerifier.cpp b/llvm/lib/DebugInfo/DWARF/DWARFVerifier.cpp
+index 32775f3..2f4d058 100644
+--- a/llvm/lib/DebugInfo/DWARF/DWARFVerifier.cpp
++++ b/llvm/lib/DebugInfo/DWARF/DWARFVerifier.cpp
+@@ -80,32 +80,38 @@ DWARFVerifier::DieRangeInfo::insert(const DieRangeInfo &RI) {
+   if (RI.Ranges.empty())
+     return Children.end();
+ 
+-  // Use lower_bound to find the insertion point in O(log N), then check
+-  // only the immediate neighbors for overlap. Since children are verified
+-  // to be non-overlapping as they are inserted, only adjacent entries in
+-  // the sorted set can intersect with a newly inserted entry.
+-  auto It = Children.lower_bound(RI);
+-
+-  // Check the predecessor for overlap.
+-  if (It != Children.begin()) {
+-    auto Prev = std::prev(It);
+-    if (Prev->intersects(RI))
+-      return Prev;
+-  }
+-
+-  // Check the element at the lower_bound position for overlap or duplicate.
+-  if (It != Children.end()) {
+-    // We only override "smaller than", so "not smaller than" (RI >= It) plus
+-    // the semantics of `lower_bound` (It >= RI) says this is exact duplicate
+-    // (equivalent key), which is allowed and doesn't need reinsertion.
+-    if (!(RI < *It))
+-      return Children.end();
+-    if (It->intersects(RI))
+-      return It;
+-  }
+-
+-  // No overlap — insert with hint for O(1) amortized insertion.
+-  Children.insert(It, RI);
++  // A child's ranges need not be contiguous. Index each interval rather than
++  // only comparing neighbors of the child's lexicographically first range.
++  // Previously A=[0,1)+[10,11), B=[2,3), C=[10,12) missed A/C.
++  if (IndexedChildren != Children.size()) {
++    ChildIntervals.clear();
++    for (auto It = Children.begin(); It != Children.end(); ++It)
++      for (const auto &R : It->Ranges)
++        if (R.LowPC != R.HighPC)
++          ChildIntervals.try_emplace(R, It);
++    IndexedChildren = Children.size();
++  }
++  auto Hint = Children.lower_bound(RI);
++  if (Hint != Children.end() && !(RI < *Hint))
++    return Children.end();
++  for (const auto &R : RI.Ranges) {
++    if (R.LowPC == R.HighPC)
++      continue;
++    auto It = ChildIntervals.lower_bound(R);
++    if (It != ChildIntervals.begin()) {
++      auto Prev = std::prev(It);
++      if (!(Prev->first == R) && Prev->first.intersects(R))
++        return Prev->second;
++    }
++    if (It != ChildIntervals.end() && !(It->first == R) &&
++        It->first.intersects(R))
++      return It->second;
++  }
++  auto Inserted = Children.insert(Hint, RI);
++  for (const auto &R : RI.Ranges)
++    if (R.LowPC != R.HighPC)
++      ChildIntervals.try_emplace(R, Inserted);
++  IndexedChildren = Children.size();
+   return Children.end();
+ }
+ bool DWARFVerifier::DieRangeInfo::contains(const DieRangeInfo &RHS) const {
+@@ -116,6 +122,14 @@ bool DWARFVerifier::DieRangeInfo::contains(const DieRangeInfo &RHS) const {
+ 
+   DWARFAddressRange R = *I2;
+   while (I1 != E1) {
++    // Relocatable objects can have hot/cold ranges with identical numeric
++    // addresses in different sections. Never cover one with another section.
++    if (I1->SectionIndex < R.SectionIndex) {
++      ++I1;
++      continue;
++    }
++    if (I1->SectionIndex > R.SectionIndex && R.LowPC != R.HighPC)
++      return false;
+     bool Covered = I1->LowPC <= R.LowPC;
+     if (R.LowPC == R.HighPC || (Covered && R.HighPC <= I1->HighPC)) {
+       if (++I2 == E2)
+@@ -141,7 +155,7 @@ bool DWARFVerifier::DieRangeInfo::intersects(const DieRangeInfo &RHS) const {
+       if (!(*I1 == *I2))
+         return true;
+     }
+-    if (I1->LowPC < I2->LowPC)
++    if (*I1 < *I2)
+       ++I1;
+     else
+       ++I2;
+@@ -349,17 +363,22 @@ unsigned DWARFVerifier::verifyDebugInfoCallSite(const DWARFDie &Die) {
+ 
+   DWARFDie Curr = Die.getParent();
+   for (; Curr.isValid() && !Curr.isSubprogramDIE(); Curr = Curr.getParent()) {
+-    if (Curr.getTag() == DW_TAG_inlined_subroutine) {
++    // DWARF5 3.4.1 places call sites in the innermost source scope. Walk
++    // lexical/inline scopes, but do not accept arbitrary intervening DIEs.
++    if (Curr.getTag() != DW_TAG_inlined_subroutine &&
++        Curr.getTag() != DW_TAG_lexical_block &&
++        Curr.getTag() != DW_TAG_try_block &&
++        Curr.getTag() != DW_TAG_catch_block) {
+       ErrorCategory.Report(
+-          "Call site nested entry within inlined subroutine", [&]() {
+-            error() << "Call site entry nested within inlined subroutine:";
++          "Call site entry nested within invalid scope", [&]() {
++            error() << "Call site entry nested within invalid source scope:";
+             Curr.dump(OS);
+           });
+       return 1;
+     }
+   }
+ 
+-  if (!Curr.isValid()) {
++  if (!Curr.isValid() || toUnsigned(Curr.find(DW_AT_declaration), 0)) {
+     ErrorCategory.Report(
+         "Call site entry not nested within valid subprogram", [&]() {
+           error() << "Call site entry not nested within a valid subprogram:";
+@@ -368,20 +387,10 @@ unsigned DWARFVerifier::verifyDebugInfoCallSite(const DWARFDie &Die) {
+     return 1;
+   }
+ 
+-  std::optional<DWARFFormValue> CallAttr = Curr.find(
+-      {DW_AT_call_all_calls, DW_AT_call_all_source_calls,
+-       DW_AT_call_all_tail_calls, DW_AT_GNU_all_call_sites,
+-       DW_AT_GNU_all_source_call_sites, DW_AT_GNU_all_tail_call_sites});
+-  if (!CallAttr) {
+-    ErrorCategory.Report(
+-        "Subprogram with call site entry has no DW_AT_call attribute", [&]() {
+-          error()
+-              << "Subprogram with call site entry has no DW_AT_call attribute:";
+-          Curr.dump(OS);
+-          Die.dump(OS, /*indent*/ 1);
+-        });
+-    return 1;
+-  }
++  // Abstract instance trees may share invariant children (DWARF5 3.3.8.1),
++  // so a subprogram need not carry concrete PC ranges here.
++  // DWARF5 3.3.1.3: completeness flags are optional. Partial call-site
++  // information is valid and must not be diagnosed as an absent attribute.
+ 
+   return 0;
+ }
+@@ -680,15 +689,21 @@ unsigned DWARFVerifier::verifyDieRanges(const DWARFDie &Die,
+ 
+ bool DWARFVerifier::verifyExpressionOp(const DWARFExpression::Operation &Op,
+                                        DWARFUnit *U) {
++  if (Op.Opcode == DW_OP_GNU_parameter_ref) {
++    auto Target = U->getDIEForOffset(U->getOffset() + Op.Operands[0]);
++    if (!Target || Target.getTag() != DW_TAG_formal_parameter)
++      return false;
++  }
+   for (unsigned Operand = 0; Operand < Op.Desc.Op.size(); ++Operand) {
+     unsigned Size = Op.Desc.Op[Operand];
+ 
+     if (Size == DWARFExpression::Operation::BaseTypeRef) {
+-      // For DW_OP_convert the operand may be 0 to indicate that conversion to
+-      // the generic type should be done, so don't look up a base type in that
+-      // case. The same holds for DW_OP_reinterpret, which is currently not
+-      // supported.
+-      if (Op.Opcode == DW_OP_convert && Op.Operands[Operand] == 0)
++      // Zero denotes the generic type for conversion and reinterpretation,
++      // in both the standard and GNU encodings.
++      if ((Op.Opcode == DW_OP_convert || Op.Opcode == DW_OP_reinterpret ||
++           Op.Opcode == DW_OP_GNU_convert ||
++           Op.Opcode == DW_OP_GNU_reinterpret) &&
++          Op.Operands[Operand] == 0)
+         continue;
+       auto Die = U->getDIEForOffset(U->getOffset() + Op.Operands[Operand]);
+       if (!Die || Die.getTag() != dwarf::DW_TAG_base_type)
+@@ -699,11 +714,31 @@ bool DWARFVerifier::verifyExpressionOp(const DWARFExpression::Operation &Op,
+   return true;
+ }
+ 
+-bool DWARFVerifier::verifyExpression(const DWARFExpression &E, DWARFUnit *U) {
+-  for (auto &Op : E)
+-    if (!verifyExpressionOp(Op, U))
++bool DWARFVerifier::verifyExpression(const DWARFExpression &E, DWARFUnit *U,
++                                     unsigned Depth) {
++  if (Depth > 64)
++    return false;
++  for (auto It = E.begin(); It != E.end();) {
++    const auto &Op = *It;
++    if (Op.isError() || !verifyExpressionOp(Op, U))
+       return false;
+-
++    if (Op.getCode() != DW_OP_entry_value &&
++        Op.getCode() != DW_OP_GNU_entry_value) {
++      ++It;
++      continue;
++    }
++    uint64_t Begin = Op.getEndOffset();
++    uint64_t Size = Op.getRawOperand(0);
++    if (Begin > E.getData().size() || Size > E.getData().size() - Begin)
++      return false;
++    DataExtractor NestedData(E.getData().slice(Begin, Begin + Size),
++                             U->isLittleEndian());
++    DWARFExpression Nested(NestedData, U->getAddressByteSize(),
++                           U->getFormParams().Format);
++    if (!verifyExpression(Nested, U, Depth + 1))
++      return false;
++    It = It.skipBytes(Size);
++  }
+   return true;
+ }
+ 
+@@ -774,11 +809,7 @@ unsigned DWARFVerifier::verifyDebugInfoAttribute(const DWARFDie &Die,
+         DataExtractor Data(Entry.Expr, DCtx.isLittleEndian());
+         DWARFExpression Expression(Data, U->getAddressByteSize(),
+                                    U->getFormParams().Format);
+-        bool Error =
+-            any_of(Expression, [](const DWARFExpression::Operation &Op) {
+-              return Op.isError();
+-            });
+-        if (Error || !verifyExpression(Expression, U))
++        if (!verifyExpression(Expression, U))
+           ReportError("Invalid DWARF expressions",
+                       "DIE contains invalid DWARF expression:");
+       }
+@@ -804,6 +835,11 @@ unsigned DWARFVerifier::verifyDebugInfoAttribute(const DWARFDie &Die,
+       // This might be reference to a function declaration.
+       if (DieTag == DW_TAG_GNU_call_site && RefTag == DW_TAG_subprogram)
+         break;
++      // The GNU call-site extension identifies the callee's formal parameter
++      // with abstract_origin; DWARF5 instead uses DW_AT_call_parameter.
++      if (DieTag == DW_TAG_GNU_call_site_parameter &&
++          RefTag == DW_TAG_formal_parameter)
++        break;
+       ReportError("Incompatible DW_AT_abstract_origin tag reference",
+                   formatv("DIE with tag {0} has {1} that points to DIE with "
+                           "incompatible tag {2}",
+diff --git a/llvm/test/tools/llvm-dwarfdump/X86/callsite-in-inline-scope.yaml b/llvm/test/tools/llvm-dwarfdump/X86/callsite-in-inline-scope.yaml
+new file mode 100644
+index 0000000..9a54a56
+--- /dev/null
++++ b/llvm/test/tools/llvm-dwarfdump/X86/callsite-in-inline-scope.yaml
+@@ -0,0 +1,117 @@
++## Call sites may be nested in inline scopes, but must still have an
++## enclosing subprogram definition and valid references. Completeness flags are optional.
++# RUN: yaml2obj %s -o %t
++# RUN: llvm-dwarfdump --verify %t | FileCheck %s --check-prefix=GOOD
++# RUN: sed 's/DW_TAG_inlined_subroutine/DW_TAG_structure_type/' %s | yaml2obj -o %t.scope
++# RUN: not llvm-dwarfdump --verify %t.scope 2>&1 | FileCheck %s --check-prefix=SCOPE
++# RUN: sed 's/DW_AT_call_all_calls/DW_AT_artificial/' %s | yaml2obj -o %t.coverage
++# RUN: llvm-dwarfdump --verify %t.coverage 2>&1 | FileCheck %s --check-prefix=GOOD
++# RUN: sed 's/0x0000000000000015/0x000000000000ffff/g' %s | yaml2obj -o %t.ref
++# RUN: not llvm-dwarfdump --verify %t.ref 2>&1 | FileCheck %s --check-prefix=REFERENCE
++# RUN: sed 's/DW_AT_call_all_calls/DW_AT_declaration/' %s | yaml2obj -o %t.decl
++# RUN: not llvm-dwarfdump --verify %t.decl 2>&1 | FileCheck %s --check-prefix=DECL
++# RUN: sed -e 's/DW_AT_low_pc/DW_AT_entry_pc/g' -e 's/DW_AT_high_pc/DW_AT_byte_size/g' %s | yaml2obj -o %t.no-ranges
++# RUN: llvm-dwarfdump --verify %t.no-ranges | FileCheck %s --check-prefix=GOOD
++# DECL: error: Call site entry not nested within a valid subprogram:
++# GOOD: No errors.
++# SCOPE: error: Call site entry nested within invalid source scope:
++# REFERENCE: error:
++# REFERENCE: Errors detected.
++
++--- !ELF
++FileHeader:
++  Class:   ELFCLASS64
++  Data:    ELFDATA2LSB
++  Type:    ET_EXEC
++  Machine: EM_X86_64
++DWARF:
++  debug_str:
++    - "callee"
++    - "caller"
++
++  debug_abbrev:
++    - Table:
++      - Code:            0x00000001
++        Tag:             DW_TAG_compile_unit
++        Children:        DW_CHILDREN_yes
++        Attributes:
++          - Attribute:       DW_AT_low_pc
++            Form:            DW_FORM_addr
++      - Code:            0x00000002
++        Tag:             DW_TAG_subprogram
++        Children:        DW_CHILDREN_no
++        Attributes:
++          - Attribute:       DW_AT_name
++            Form:            DW_FORM_strp
++          - Attribute:       DW_AT_low_pc
++            Form:            DW_FORM_addr
++          - Attribute:       DW_AT_high_pc
++            Form:            DW_FORM_data4
++      - Code:            0x00000003
++        Tag:             DW_TAG_subprogram
++        Children:        DW_CHILDREN_yes
++        Attributes:
++          - Attribute:       DW_AT_name
++            Form:            DW_FORM_strp
++          - Attribute:       DW_AT_low_pc
++            Form:            DW_FORM_addr
++          - Attribute:       DW_AT_high_pc
++            Form:            DW_FORM_data4
++          - Attribute:       DW_AT_call_all_calls
++            Form:            DW_FORM_flag_present
++      - Code:            0x00000004
++        Tag:             DW_TAG_inlined_subroutine
++        Children:        DW_CHILDREN_yes
++        Attributes:
++          - Attribute:       DW_AT_low_pc
++            Form:            DW_FORM_addr
++          - Attribute:       DW_AT_high_pc
++            Form:            DW_FORM_data4
++          - Attribute:       DW_AT_abstract_origin
++            Form:            DW_FORM_ref4
++      - Code:            0x00000005
++        Tag:             DW_TAG_call_site
++        Children:        DW_CHILDREN_no
++        Attributes:
++          - Attribute:       DW_AT_call_origin
++            Form:            DW_FORM_ref4
++
++  debug_info:
++    - Version:         5
++      UnitType:        DW_UT_compile
++      AbbrOffset:      0x00000000
++      AddrSize:        8
++      Entries:
++        # DW_TAG_compile_unit
++        - AbbrCode:    0x00000001
++          Values:
++            - Value:   0x0000000000000000   # DW_AT_low_pc
++        # DW_TAG_subprogram (callee) - offset will be 0x0c + some bytes
++        - AbbrCode:    0x00000002
++          Values:
++            - Value:   0x0000000000000000   # DW_AT_name -> "callee"
++            - Value:   0x0000000000003000   # DW_AT_low_pc
++            - Value:   0x0000000000000010   # DW_AT_high_pc
++        # DW_TAG_subprogram (caller, with DW_AT_call_all_calls)
++        - AbbrCode:    0x00000003
++          Values:
++            - Value:   0x0000000000000007   # DW_AT_name -> "caller"
++            - Value:   0x0000000000001000   # DW_AT_low_pc
++            - Value:   0x0000000000000100   # DW_AT_high_pc
++        # DW_TAG_lexical_block (child of caller)
++        - AbbrCode:    0x00000004
++          Values:
++            - Value:   0x0000000000001000   # DW_AT_low_pc
++            - Value:   0x0000000000000080   # DW_AT_high_pc
++            - Value:   0x0000000000000015   # DW_AT_abstract_origin
++        # DW_TAG_call_site (child of lexical_block)
++        - AbbrCode:    0x00000005
++          Values:
++            - Value:   0x0000000000000015   # DW_AT_call_origin -> callee subprogram
++        - AbbrCode:    0x00000000           # end lexical_block
++          Values:      []
++        - AbbrCode:    0x00000000           # end caller subprogram
++          Values:      []
++        - AbbrCode:    0x00000000           # end compile_unit
++          Values:      []
++...
+diff --git a/llvm/test/tools/llvm-dwarfdump/X86/callsite-invalid.s b/llvm/test/tools/llvm-dwarfdump/X86/callsite-invalid.s
+index dcb5ac5..8945dc8 100644
+--- a/llvm/test/tools/llvm-dwarfdump/X86/callsite-invalid.s
++++ b/llvm/test/tools/llvm-dwarfdump/X86/callsite-invalid.s
+@@ -1,11 +1,12 @@
++# Completeness flags are optional (DWARF5 3.3.1.3).
+ # RUN: llvm-mc -triple x86_64-apple-darwin %s -filetype=obj -o %t.o
+ # RUN: not llvm-dwarfdump -verify %t.o 2>&1 | FileCheck %s
+-
+-# CHECK: error: Subprogram with call site entry has no DW_AT_call attribute:
+-# CHECK: DW_TAG_subprogram
+-# CHECK:   DW_AT_name ("main")
+-# CHECK: DW_TAG_call_site
+-# CHECK:   DW_AT_call_origin
++# Completeness flags must not mask the fixture's missing line-table errors.
++# CHECK-NOT: Subprogram with call site entry has no DW_AT_call attribute
++# CHECK: error: DW_AT_stmt_list offset is beyond .debug_line bounds
++# CHECK: error: DIE has DW_AT_decl_file that references a file with index 1 and the compile unit has no line table
++# CHECK: error: Aggregated error counts:
++# CHECK-NOT: Subprogram with call site entry has no DW_AT_call attribute
+ # CHECK: Errors detected.
+ 
+ # Source:
+diff --git a/llvm/unittests/DebugInfo/DWARF/DWARFVerifierTest.cpp b/llvm/unittests/DebugInfo/DWARF/DWARFVerifierTest.cpp
+index 9fabc18..cf87c25 100644
+--- a/llvm/unittests/DebugInfo/DWARF/DWARFVerifierTest.cpp
++++ b/llvm/unittests/DebugInfo/DWARF/DWARFVerifierTest.cpp
+@@ -119,4 +119,37 @@ TEST(DWARFVerifierTest, InsertRandomOrderNoOverlap) {
+   EXPECT_EQ(Parent.Children.size(), 4u);
+ }
+ 
++TEST(DWARFVerifierTest, ContainsRangesInSeparateSections) {
++  DieRangeInfo Parent({{10, 30, 1}, {0, 10, 2}, {10, 20, 2}});
++  EXPECT_TRUE(Parent.contains(DieRangeInfo({{15, 20, 1}, {5, 15, 2}})));
++  EXPECT_FALSE(Parent.contains(DieRangeInfo({{5, 15, 1}})));
++  EXPECT_FALSE(Parent.contains(DieRangeInfo({{5, 15, 3}})));
++  EXPECT_FALSE(
++      DieRangeInfo({{0, 100, 1}}).contains(DieRangeInfo({{5, 10, 2}})));
++}
++
++TEST(DWARFVerifierTest, IntersectsRangesInSeparateSections) {
++  DieRangeInfo Left({{100, 200, 1}, {0, 10, 2}});
++  EXPECT_TRUE(Left.intersects(DieRangeInfo({{50, 60, 1}, {5, 15, 2}})));
++  EXPECT_FALSE(Left.intersects(DieRangeInfo({{0, 10, 1}, {100, 200, 2}})));
++  EXPECT_FALSE(Left.intersects(Left));
++}
++
++TEST(DWARFVerifierTest, DiscontiguousChildrenOverlap) {
++  DieRangeInfo Parent;
++  EXPECT_EQ(Parent.insert(DieRangeInfo({{0, 1}, {10, 11}})),
++            Parent.Children.end());
++  EXPECT_EQ(Parent.insert(makeRI(2, 3)), Parent.Children.end());
++  EXPECT_NE(Parent.insert(makeRI(10, 12)), Parent.Children.end());
++  EXPECT_EQ(Parent.insert(DieRangeInfo({{10, 11}, {20, 21}})),
++            Parent.Children.end());
++  EXPECT_NE(Parent.insert(makeRI(20, 22)), Parent.Children.end());
++  EXPECT_EQ(Parent.insert(makeRI(3, 10)), Parent.Children.end());
++  DieRangeInfo Copy = Parent;
++  EXPECT_NE(Copy.insert(makeRI(10, 12)), Copy.Children.end());
++  DieRangeInfo Assigned;
++  Assigned = Parent;
++  EXPECT_NE(Assigned.insert(makeRI(20, 22)), Assigned.Children.end());
++}
++
+ } // namespace
