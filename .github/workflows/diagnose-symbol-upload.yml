@@ -1,4 +1,4 @@
-name: Diagnose qualified libclang uploads
+name: Diagnose qualified native symbol uploads
 on:
   push:
     branches: [codex/symbol-ingestion]
@@ -8,11 +8,12 @@ permissions:
   contents: read
 jobs:
   diagnose:
+    if: github.ref == format('refs/heads/{0}', vars.DEBUGINFO_DEV_BRANCH || 'main')
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        arch: [amd64, arm64]
+        arch: [amd64, arm64, darwin-arm64]
     permissions:
       contents: read
       actions: read
@@ -27,7 +28,7 @@ jobs:
         with:
           persist-credentials: false
       - run: python3 -m unittest discover -s tools/symbol-coverage -p test_fetch_artifact_member.py -v
-      - name: Retrieve the exact qualified libclang peer without extracting the entire toolchain
+      - name: Retrieve the exact qualified debug peer without extracting the entire toolchain
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
