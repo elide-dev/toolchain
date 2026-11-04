@@ -8,6 +8,11 @@ on:
         description: Successful qualified producer run to ingest without rebuilding
         type: string
         required: false
+      platform:
+        description: Qualify all platforms or retry only one
+        type: choice
+        default: all
+        options: [all, linux-amd64, linux-arm64, darwin-arm64]
 permissions:
   contents: read
 jobs:
@@ -20,3 +25,4 @@ jobs:
       id-token: write
     with:
       source_run: ${{ inputs.source_run || vars.DEBUGINFO_DEV_SOURCE_RUN }}
+      platform: ${{ inputs.platform }}
