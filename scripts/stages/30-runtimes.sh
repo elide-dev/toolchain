@@ -26,6 +26,7 @@ runtimes_common_args() {
   printf '%s\n' \
     -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_SHARED_LINKER_FLAGS="-Wl,--build-id=sha1" -DCMAKE_MODULE_LINKER_FLAGS="-Wl,--build-id=sha1" \
     -DCMAKE_C_FLAGS_RELEASE="-O3 -DNDEBUG -g" -DCMAKE_CXX_FLAGS_RELEASE="-O3 -DNDEBUG -g" \
     -DCMAKE_ASM_FLAGS_RELEASE="-O3 -DNDEBUG -g" \
     -DCMAKE_C_COMPILER="$s/clang" -DCMAKE_CXX_COMPILER="$s/clang++" -DCMAKE_ASM_COMPILER="$s/clang" \
@@ -75,7 +76,7 @@ build_cxx_runtimes() {
   local memprof_args=()
   if memprof_supported "$t"; then
     memprof_args=(-DCOMPILER_RT_BUILD_MEMPROF=ON -DSANITIZER_CXX_ABI=none
-      "-DCMAKE_SHARED_LINKER_FLAGS=-fuse-ld=lld -rtlib=compiler-rt -unwindlib=none")
+      "-DCMAKE_SHARED_LINKER_FLAGS=-fuse-ld=lld -rtlib=compiler-rt -unwindlib=none -Wl,--build-id=sha1")
   fi
   fresh_dir "$b"
   cmake -S "$ROOT_DIR/llvm/runtimes" -B "$b" "${args[@]}" "${memprof_args[@]}" \
