@@ -107,8 +107,11 @@ def plan(repository, manifests, roots):
 def cli(*args):
     result = subprocess.run(["dbginfo", "--no-telemetry", "--json", *args], capture_output=True, text=True)
     if result.returncode:
-        # Never echo arbitrary stderr from an authenticated subprocess.
-        raise RuntimeError(f"dbginfo {args[0]} failed (exit {result.returncode}); ingestion incomplete")
+        detail = re.sub(r"https?://\S+", "[service URL]", result.stderr)
+        for name in ("DEBUGINFO_DEV_APIKEY", "GH_TOKEN", "GITHUB_TOKEN"):
+            if os.environ.get(name):
+                detail = detail.replace(os.environ[name], "[REDACTED]")
+        raise RuntimeError(f"dbginfo failed (exit {result.returncode}); ingestion incomplete: {detail[-1600:]}")
     return [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
 
 
@@ -148,6 +151,7 @@ def upload(result, destination, ref, receipt_path):
         receipt_path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     save()
     for item in result["uploads"]:
+        print(f"Ingesting {item['debugId']} ({Path(item['file']).stat().st_size} bytes)", flush=True)
         if digest(item["file"]) != item["debugSha256"]:
             raise ValueError("Debug bytes changed after planning")
         outcome = cli("--url", url, "--org", org, "ingest", item["file"], "--project", project,
