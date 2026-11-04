@@ -149,7 +149,17 @@ jobs:
           name: elide-toolchain-${{ matrix.os }}-${{ matrix.arch }}
           compression-level: 0
           overwrite: true
-          path: dist/*
+          path: |
+            dist/*
+            !dist/*-symbols/**
+      - name: "Artifact: Private native debug bundle"
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: native-debug-toolchain-${{ matrix.os }}-${{ matrix.arch }}
+          compression-level: 6
+          path: dist/*-symbols/
+          if-no-files-found: error
+          retention-days: 90
       - name: "Artifact: Build logs"
         if: always()
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5

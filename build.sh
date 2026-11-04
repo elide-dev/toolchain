@@ -62,6 +62,15 @@ done
 # shellcheck source=scripts/lib/env.sh
 source "$ROOT_DIR/scripts/lib/env.sh"
 
+# Pre-preservation stamps certify stripped/no-debug outputs. Rebuild those stages
+# once instead of treating an old local cache as evidence of debug generation.
+preservation_epoch="$STAMPS_DIR/.debug-generation-v1"
+if [ ! -f "$preservation_epoch" ] && [ -d "$STAMPS_DIR" ] &&
+   [ -z "$from" ] && [ -z "$only" ] && [ "$clean" = no ]; then
+  from=10-llvm-stage1
+  log "debug preservation requires rebuilding cached stages from $from"
+fi
+
 if [ -n "$targets_arg" ]; then
   TARGETS=""
   for t in ${targets_arg//,/ }; do
@@ -129,6 +138,7 @@ run_stage() {
   fi
   log "stage $stage done in $((SECONDS - start))s"
   stamp_done "$stage"
+  if [ "$stage" = 90-package ]; then printf '%s\n' 1 > "$preservation_epoch"; fi
 }
 
 # Validate stage names before --clean can delete anything: a typo must not wipe a build.
