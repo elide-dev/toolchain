@@ -64,7 +64,7 @@ source "$ROOT_DIR/scripts/lib/env.sh"
 
 # Pre-preservation stamps certify stripped/no-debug outputs. Rebuild those stages
 # once instead of treating an old local cache as evidence of debug generation.
-preservation_epoch="$STAMPS_DIR/.debug-generation-v2"
+preservation_epoch="$STAMPS_DIR/.debug-generation-v3"
 if [ ! -f "$preservation_epoch" ] && [ -d "$STAMPS_DIR" ] &&
    [ -z "$from" ] && [ -z "$only" ] && [ "$clean" = no ]; then
   from=10-llvm-stage1
