@@ -22,7 +22,9 @@ for path in sorted(bundle.rglob("*")):
     if not module or module["kind"] != "module":
         continue
     shipped_tool = path.parent == bundle / "bin"
-    if not shipped_tool and not module["dwarf"]:
+    # Mach-O normally carries a debug map, with DWARF still in link inputs.
+    # Its absence from the dylib is not evidence that no dSYM can be retained.
+    if not shipped_tool and not module["dwarf"] and module["format"] != "macho":
         gaps.append({"path": str(path.relative_to(bundle)), "reason": "no supported embedded DWARF inspection; see distribution format/provenance gaps"})
         continue
     preservation.preserve(path, symbols, strip=shipped_tool,
