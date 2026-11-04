@@ -57,8 +57,9 @@ jobs:
           assert m.cli('id',str(root/'candidate.debug'))[0]['debugId']==item['debugId']
           report['receipt']=m.cli('ingest',str(root/'candidate.debug'),'--project',os.environ['DEBUGINFO_DEV_PROJECT'],'--repo',os.environ['GITHUB_REPOSITORY'],'--commit','18067cbb5b6ed4a8685ef4a725f38f50c5ff52af','--ref',os.environ['GITHUB_REF'],'--run-id',os.environ['GITHUB_RUN_ID'],'--display-path',item['displayPath'],'--archive','source-commit:18067cbb5b6ed4a8685ef4a725f38f50c5ff52af;manifest-sha256:'+item['manifestSha256'])[0]
           out.write_text(json.dumps(report,indent=2))
-          m.cli('get',item['debugId'],'-o',str(root/'readback.debug'))
+          m.download(os.environ['DEBUGINFO_DEV_URL'],os.environ['DEBUGINFO_DEV_ORG'],item['debugId'],root/'readback.debug')
           with (root/'readback.debug').open('rb') as stream: assert hashlib.file_digest(stream,'sha256').hexdigest()==item['sha256']
+          report['readback']={'sha256':item['sha256'],'client':'curl','protocol':'debuginfod'}
           report['status']='ingested-and-read-back';out.write_text(json.dumps(report,indent=2))
           PYCODE
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
