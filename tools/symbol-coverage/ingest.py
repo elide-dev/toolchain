@@ -8,6 +8,7 @@ must never be mistaken for a product's final debug peers.
 
 import argparse
 import hashlib
+import html
 import json
 import os
 from pathlib import Path
@@ -107,11 +108,16 @@ def plan(repository, manifests, roots):
 def cli(*args):
     result = subprocess.run(["dbginfo", "--no-telemetry", "--json", *args], capture_output=True, text=True)
     if result.returncode:
-        detail = re.sub(r"https?://\S+", "[service URL]", result.stderr)
+        detail = result.stderr
+        if "<html" in detail.lower():
+            detail = re.sub(r"(?is)<(script|style)\b[^>]*>.*?</\1>", " ", detail)
+            detail = html.unescape(re.sub(r"<[^>]+>", " ", detail))
+            detail = " ".join(detail.split())
+        detail = re.sub(r"https?://\S+", "[service URL]", detail)
         for name in ("DEBUGINFO_DEV_APIKEY", "GH_TOKEN", "GITHUB_TOKEN"):
             if os.environ.get(name):
                 detail = detail.replace(os.environ[name], "[REDACTED]")
-        raise RuntimeError(f"dbginfo failed (exit {result.returncode}); ingestion incomplete: {detail[-1600:]}")
+        raise RuntimeError(f"dbginfo failed (exit {result.returncode}); ingestion incomplete: {detail[:1600]}")
     return [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
 
 
