@@ -71,7 +71,7 @@ build_musl_phase2() {
   prefix="$(target_prefix "$t")"
   # --no-default-config: bare stage-1 clang must not auto-load stage1/bin/<target>.cfg (spec §3.3).
   tflags="--no-default-config --target=$t --sysroot=$sysroot"
-  ldflags="$tflags -fuse-ld=lld"
+  ldflags="$tflags -fuse-ld=lld -Wl,--build-id=sha1"
   if is_yes "$MUSL_USE_LTO"; then
     lto="-flto=thin -ffat-lto-objects"
     # ldso bootstrap calls __dls2/__dls3 from asm, invisible to LTO: keep them, link libc.so without LTO.

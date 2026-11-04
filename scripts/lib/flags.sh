@@ -59,7 +59,13 @@ drop_pie_codegen() {
 target_cxxflags() { target_cflags "$1"; }
 
 # Link flags for shared objects and archives (no -static).
-target_ldflags() { target_cflags "$1"; }
+target_ldflags() {
+  if [ "$(triple_os "$1")" = linux ]; then
+    printf '%s -Wl,--build-id=sha1\n' "$(target_cflags "$1")"
+  else
+    target_cflags "$1"
+  fi
+}
 
 # Link flags for executables: musl executables are fully static (the build host has no musl loader).
 target_exe_ldflags() {
