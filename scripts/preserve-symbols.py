@@ -15,12 +15,15 @@ gaps = []
 for path in sorted(bundle.rglob("*")):
     if not path.is_file() or path.is_symlink():
         continue
-    module = preservation.inventory.native(path)
+    try:
+        module = preservation.inventory.native(path)
+    except (ValueError, OSError) as error:
+        raise ValueError(f"Unable to inspect shipped native candidate {path}: {error}") from error
     if not module or module["kind"] != "module":
         continue
     shipped_tool = path.parent == bundle / "bin"
     if not shipped_tool and not module["dwarf"]:
-        gaps.append({"path": str(path.relative_to(bundle)), "reason": "no embedded DWARF; copied/prebuilt provenance requires separate debug producer"})
+        gaps.append({"path": str(path.relative_to(bundle)), "reason": "no supported embedded DWARF inspection; see distribution format/provenance gaps"})
         continue
     preservation.preserve(path, symbols, strip=shipped_tool,
                           stage="final link; before stage-90 stripping; no address rewrite")
