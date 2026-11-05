@@ -29,6 +29,7 @@ jobs:
           bin="$PWD/elide-toolchain/bin"
           "$bin/clang" --target=arm64-apple-darwin -c tests/fixtures/debug-quality/macho-nameless-cu.s -o nameless.o
           "$bin/llvm-dwarfdump" --verify nameless.o
+          "$bin/llvm-dwarfdump" --debug-info nameless.o
           set +e
           "$bin/lld" -flavor darwin -arch arm64 -dylib -platform_version macos 14 14 nameless.o -o nameless.dylib > linker.log 2>&1
           status=$?

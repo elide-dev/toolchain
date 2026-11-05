@@ -10,10 +10,10 @@ _main:
   .uleb128 0
   .byte 0
 .section __DWARF,__debug_info,regular,debug
-  .long .Lunit_end-.Lunit_header
-.Lunit_header:
+  .long Lunit_end-Lunit_header
+Lunit_header:
   .short 4
   .long 0
   .byte 8
   .uleb128 1
-.Lunit_end:
+Lunit_end:
