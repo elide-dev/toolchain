@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import urllib.error
 import urllib.request
+from public_release_http import exists as public_exists, sha256 as public_sha256
 from producer_artifact import download_artifact
 
 SOURCE = 'e5365e07215ccfe81409ab5652d05a6c98c14606'
@@ -73,8 +74,7 @@ def verify(output, require_unpublished, remote=False):
         if remote:
             for base in [f'https://github.com/{REPOSITORY}/releases/download/v{VERSION}/',
                          f'https://static.elideusercontent.com/toolchain/{VERSION}/']:
-                with urllib.request.urlopen(base + name, timeout=180) as stream:
-                    assert hashlib.file_digest(stream, 'sha256').hexdigest() == digest, base + name
+                assert public_sha256(base + name) == digest, base + name
     if require_unpublished:
         for suffix in ['releases/tags/', 'git/ref/tags/']:
             request = urllib.request.Request(f'https://api.github.com/repos/{REPOSITORY}/{suffix}v{VERSION}',
@@ -85,12 +85,8 @@ def verify(output, require_unpublished, remote=False):
             except urllib.error.HTTPError as error:
                 if error.code != 404:
                     raise
-        try:
-            with urllib.request.urlopen(f'https://static.elideusercontent.com/toolchain/{VERSION}/elide-toolchain-{VERSION}-linux-amd64.tar.xz', timeout=60):
-                raise RuntimeError('Mirror version exists; refuse to overwrite it')
-        except urllib.error.HTTPError as error:
-            if error.code != 404:
-                raise
+        if public_exists(f'https://static.elideusercontent.com/toolchain/{VERSION}/elide-toolchain-{VERSION}-linux-amd64.tar.xz'):
+            raise RuntimeError('Mirror version exists; refuse to overwrite it')
     print('Verified exact staged bytes:', len(manifest['files']), 'assets')
 
 
