@@ -1,0 +1,153 @@
+diff --git a/llvm/lib/DebugInfo/DWARF/DWARFVerifier.cpp b/llvm/lib/DebugInfo/DWARF/DWARFVerifier.cpp
+index 2f4d058..a11f0ab 100644
+--- a/llvm/lib/DebugInfo/DWARF/DWARFVerifier.cpp
++++ b/llvm/lib/DebugInfo/DWARF/DWARFVerifier.cpp
+@@ -2346,9 +2346,9 @@ bool DWARFVerifier::verifyDebugStrOffsets(
+          ++Index) {
+       uint64_t OffOff = C.tell();
+       uint64_t StrOff = DA.getAddress(C);
+-      // check StrOff refers to the start of a string
+-      if (StrOff == 0)
+-        continue;
++      // Strings can be suffix-merged by the linker (e.g. "int" within
++      // "unsigned int"). An offset need not follow a null character, but
++      // must be in bounds and refer to a null-terminated string.
+       if (StrData.size() <= StrOff) {
+         ErrorCategory.Report(
+             "String offset out of bounds of string section", [&]() {
+@@ -2359,16 +2359,16 @@ bool DWARFVerifier::verifyDebugStrOffsets(
+                   SectionName, StartOffset, Index, OffOff, StrOff,
+                   StrData.size());
+             });
++        Success = false;
+         continue;
+       }
+-      if (StrData[StrOff - 1] == '\0')
++      if (StrData.find('\0', StrOff) != StringRef::npos)
+         continue;
+       ErrorCategory.Report(
+-          "Section contribution contains invalid string offset", [&]() {
++          "Section contribution contains unterminated string", [&]() {
+             error() << formatv(
+                 "{0}: contribution {1:X}: index {2:X}: invalid string "
+-                "offset *{3:X} == {4:X}, is neither zero nor "
+-                "immediately following a null character\n",
++                "offset *{3:X} == {4:X}, string is not null-terminated\n",
+                 SectionName, StartOffset, Index, OffOff, StrOff);
+           });
+       Success = false;
+diff --git a/llvm/test/tools/llvm-dwarfdump/X86/verify_invalid_str_offsets.yaml b/llvm/test/tools/llvm-dwarfdump/X86/verify_invalid_str_offsets.yaml
+index 1bdc640..3b0a76a 100644
+--- a/llvm/test/tools/llvm-dwarfdump/X86/verify_invalid_str_offsets.yaml
++++ b/llvm/test/tools/llvm-dwarfdump/X86/verify_invalid_str_offsets.yaml
+@@ -1,21 +1,43 @@
+ # RUN: rm -rf %t && split-file %s %t
+ # RUN: yaml2obj %t/v5.yaml -o %t/v5.o
+ # RUN: not llvm-dwarfdump -debug-str-offsets -verify %t/v5.o | FileCheck %s
++# RUN: yaml2obj %t/unterminated.yaml -o %t/unterminated.o
++# RUN: not llvm-dwarfdump -verify %t/unterminated.o | FileCheck --check-prefix=UNTERMINATED %s
+ # RUN: yaml2obj %t/v4.yaml -o %t/v4.o
+ # RUN: not llvm-dwarfdump -debug-str-offsets -verify %t/v4.o | FileCheck --check-prefix=V4 %s
+ 
+ #      CHECK: Verifying .debug_abbrev...
+ #      CHECK: Verifying .debug_str_offsets...
+-# CHECK-NEXT: error: .debug_str_offsets: contribution 0x0: index 0x2: invalid string offset *0x10 == 0x1, is neither zero nor immediately following a null character
+ # CHECK-NEXT: error: .debug_str_offsets: contribution 0x0: index 0x3: invalid string offset *0x14 == 0x42, is beyond the bounds of the string section of length 0x8
+ # CHECK-NEXT: error: .debug_str_offsets: contribution 0x18: invalid version 42
+ # CHECK-NEXT: error: .debug_str_offsets: contribution 0x20: invalid length ((length (0x5) - header (0x4)) % offset size 0x4 == 0x1 != 0)
+ # CHECK-NEXT: error: .debug_str_offsets: contribution 0x29: length exceeds available space (contribution offset (0x29) + length field space (0x4) + length (0x5000000) == 0x500002D > section size 0x30)
+ # Errors detected.
+ 
+-# V4: error: .debug_str_offsets.dwo: contribution 0x0: index 0x2: invalid string offset *0x8 == 0x2, is neither zero nor immediately following a null character
++# V4: error: .debug_str_offsets.dwo: contribution 0x0: index 0x2: invalid string offset *0x8 == 0x8, is beyond the bounds of the string section of length 0x8
+ 
+ 
++# UNTERMINATED: error: .debug_str_offsets: contribution 0x0: index 0x0: invalid string offset *0x8 == 0x0, string is not null-terminated
++# UNTERMINATED: error: .debug_str_offsets: contribution 0x0: index 0x1: invalid string offset *0xC == 0x4, string is not null-terminated
++
++#--- unterminated.yaml
++--- !ELF
++FileHeader:
++  Class: ELFCLASS64
++  Data: ELFDATA2LSB
++  Type: ET_EXEC
++DWARF:
++  debug_info:
++    - Version: 5
++      UnitType: DW_UT_compile
++      AddrSize: 8
++  debug_str_offsets:
++    - Offsets: [0, 4]
++Sections:
++  - Name: .debug_str
++    Type: SHT_PROGBITS
++    Content: "756E7369676E656420696E74"
++
+ #--- v4.yaml
+ --- !ELF
+ FileHeader:
+@@ -29,7 +51,7 @@ Sections:
+     Content: "0700000004000000000004"
+   - Name: '.debug_str_offsets.dwo'
+     Type: SHT_PROGBITS
+-    Content: "000000000400000002000000"
++    Content: "000000000400000008000000"
+   - Name: 'debug_str.dwo'
+     Type: SHT_PROGBITS
+     Content: "666F6F0062617200"
+diff --git a/llvm/test/tools/llvm-dwarfdump/X86/verify_tail_merged_str_offsets.yaml b/llvm/test/tools/llvm-dwarfdump/X86/verify_tail_merged_str_offsets.yaml
+new file mode 100644
+index 0000000..bd28ca4
+--- /dev/null
++++ b/llvm/test/tools/llvm-dwarfdump/X86/verify_tail_merged_str_offsets.yaml
+@@ -0,0 +1,50 @@
++# RUN: rm -rf %t && split-file %s %t
++# RUN: yaml2obj %t/v5.yaml -o %t/v5.o
++# RUN: llvm-dwarfdump --verify %t/v5.o | FileCheck %s
++# RUN: yaml2obj %t/v4.yaml -o %t/v4.o
++# RUN: llvm-dwarfdump --verify %t/v4.o | FileCheck %s
++# CHECK: No errors.
++# String references into a suffix are valid. Include an empty-string reference,
++# the complete string, and "int" in "unsigned int", for both DWARF32/64 tables
++# and the headerless GNU split DWARF4 table.
++
++#--- v5.yaml
++--- !ELF
++FileHeader:
++  Class: ELFCLASS64
++  Data: ELFDATA2LSB
++  Type: ET_EXEC
++DWARF:
++  debug_str: ["unsigned int"]
++  debug_str_offsets:
++    - Offsets: [0, 9, 12]
++    - Format: DWARF64
++      Offsets: [0, 9, 12]
++
++Sections:
++  - Name: .debug_abbrev
++    Type: SHT_PROGBITS
++    Content: "011100000000"
++  - Name: .debug_info
++    Type: SHT_PROGBITS
++    Content: "09000000050001080000000001"
++
++#--- v4.yaml
++--- !ELF
++FileHeader:
++  Class: ELFCLASS64
++  Data: ELFDATA2LSB
++  Type: ET_EXEC
++Sections:
++  - Name: .debug_info.dwo
++    Type: SHT_PROGBITS
++    Content: "080000000400000000000401"
++  - Name: .debug_abbrev.dwo
++    Type: SHT_PROGBITS
++    Content: "011100000000"
++  - Name: .debug_str_offsets.dwo
++    Type: SHT_PROGBITS
++    Content: "00000000090000000C000000"
++  - Name: .debug_str.dwo
++    Type: SHT_PROGBITS
++    Content: "756E7369676E656420696E7400"
