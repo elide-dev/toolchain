@@ -29,19 +29,34 @@ jobs:
               assert type(run) is int and run>0
               request=urllib.request.Request(f'https://api.github.com/repos/elide-dev/toolchain/actions/runs/{run}',headers={'Authorization':'Bearer '+os.environ['GH_TOKEN']})
               with urllib.request.urlopen(request) as response: metadata=json.load(response)
-              assert metadata['head_sha']=='ae94ae7f9bee4ba480bc47c702bd4a48a12c52e7'
+              assert metadata['head_sha']=='e5365e07215ccfe81409ab5652d05a6c98c14606'
               assert metadata['conclusion']=='success',metadata['html_url']
               print(platform,run,metadata['head_sha'])
           with open('provenance.json','w') as stream:
-              json.dump({'source':'ae94ae7f9bee4ba480bc47c702bd4a48a12c52e7','runs':runs},stream)
+              json.dump({'source':'e5365e07215ccfe81409ab5652d05a6c98c14606','runs':runs},stream)
           PY
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: debug-quality-action-provenance
           path: provenance.json
           retention-days: 90
+  unit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          ref: e5365e07215ccfe81409ab5652d05a6c98c14606
+          persist-credentials: false
+      - run: git submodule update --init --depth=1 cflags
+      - name: Install shellcheck
+        run: sudo apt-get update -qq && sudo apt-get install -qq -y shellcheck
+      - run: tests/run.sh
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+      - name: Check the normal installer action
+        working-directory: action
+        run: bun install --frozen-lockfile && bun run typecheck && bun test
   action:
-    needs: provenance
+    needs: [provenance, unit]
     uses: ./.github/workflows/job.action-e2e.yml
     with:
       candidate-runs: ${{ inputs.runs }}

@@ -9,8 +9,8 @@ import urllib.error
 import urllib.request
 from producer_artifact import download_artifact
 
-SOURCE = 'ae94ae7f9bee4ba480bc47c702bd4a48a12c52e7'
-RUN = 41956212498
+SOURCE = 'e5365e07215ccfe81409ab5652d05a6c98c14606'
+RUN = 41974944319
 VERSION = '2026.11.2'
 REPOSITORY = 'elide-dev/toolchain'
 

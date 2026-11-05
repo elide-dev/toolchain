@@ -16,7 +16,7 @@ on:
 permissions:
   contents: read
 env:
-  SOURCE: ae94ae7f9bee4ba480bc47c702bd4a48a12c52e7
+  SOURCE: e5365e07215ccfe81409ab5652d05a6c98c14606
   TAG: v2026.11.2
 jobs:
   preview:
