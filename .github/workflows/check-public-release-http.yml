@@ -1,0 +1,36 @@
+name: Check normal public release HTTP reads
+on:
+  push:
+    branches: [codex/debug-quality-qualification]
+    paths: [.github/workflows/check-public-release-http.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  public-read:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          persist-credentials: false
+      - name: Check published controls, exact bytes and unused future destinations
+        run: |
+          python3 - <<'PY'
+          import sys
+          sys.path.insert(0, '.github/scripts')
+          from public_release_http import exists, sha256
+          published = 'https://maven.elide.dev/gvm-elide/25.5.5-elide.24/org/graalvm/nativeimage/svm/25.5.5-elide.24/svm-25.5.5-elide.24.pom'
+          future = 'https://maven.elide.dev/gvm-elide/25.5.5-elide.25/org/graalvm/polyglot/polyglot/25.5.5-elide.25/polyglot-25.5.5-elide.25.pom'
+          assert exists(published)
+          assert sha256(published) == '8da1e27067521cbb888f81c21510c510382976ac8d0a17534f394a7edc8ef427'
+          assert not exists(future)
+          assert exists('https://static.elideusercontent.com/toolchain/2026.10.0/elide-toolchain-2026.10.0-linux-amd64.tar.xz.sha256')
+          assert not exists('https://static.elideusercontent.com/toolchain/2026.11.2/elide-toolchain-2026.11.2-linux-amd64.tar.xz')
+          try:
+              sha256(future)
+          except RuntimeError as failure:
+              assert 'curl status 22' in str(failure)
+          else:
+              raise AssertionError('Missing public asset was accepted')
+          print('Published controls, exact byte hash, future absence and failed-read rejection verified')
+          PY
