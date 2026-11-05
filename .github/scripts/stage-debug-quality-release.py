@@ -10,7 +10,7 @@ import urllib.request
 from producer_artifact import download_artifact
 
 SOURCE = 'e5365e07215ccfe81409ab5652d05a6c98c14606'
-RUN = 41974944319
+RUNS = {platform: 41974944319 for platform in ['linux-amd64', 'linux-arm64', 'darwin-arm64']}
 VERSION = '2026.11.2'
 REPOSITORY = 'elide-dev/toolchain'
 
@@ -31,8 +31,9 @@ def package(run, commit, name):
 
 
 def stage(output, qualification):
-    build = api(f'actions/runs/{RUN}')
-    assert build['conclusion'] == 'success' and build['head_sha'] == SOURCE
+    for run in set(RUNS.values()):
+        build = api(f'actions/runs/{run}')
+        assert build['conclusion'] == 'success' and build['head_sha'] == SOURCE
     check = api(f'actions/runs/{qualification}')
     assert check['conclusion'] == 'success' and check['event'] == 'workflow_dispatch'
     assert check['path'] == '.github/workflows/debug-quality-qualification.yml'
@@ -40,11 +41,11 @@ def stage(output, qualification):
     proof = package(qualification, check['head_sha'], 'debug-quality-action-provenance')
     download_artifact(proof, REPOSITORY, downloads / 'proof')
     evidence = json.loads((downloads / 'proof/provenance.json').read_text())
-    assert evidence == {'source': SOURCE, 'runs': {p: RUN for p in ['linux-amd64', 'linux-arm64', 'darwin-arm64']}}
+    assert evidence == {'source': SOURCE, 'runs': RUNS}
     output.mkdir(parents=True)
     packages = []
     for platform in ['linux-amd64', 'linux-arm64', 'darwin-arm64']:
-        item = package(RUN, SOURCE, 'elide-toolchain-' + platform)
+        item = package(RUNS[platform], SOURCE, 'elide-toolchain-' + platform)
         folder = downloads / platform
         download_artifact(item, REPOSITORY, folder)
         for path in folder.iterdir():
