@@ -60,6 +60,16 @@ check_bolt_debug_quality() {
   fi
 }
 
+check_dwarf_strings() {
+  local root="$1" output
+  if output=$(python3 "$ROOT_DIR/scripts/verify/dwarf-strings.py" "$root/bin" \
+      "$ROOT_DIR/tests/fixtures/debug-quality/dwarf-string-suffixes.s" 2>&1); then
+    pass "DWARF string offsets"
+  else
+    fail "DWARF string offsets" "$output"
+  fi
+}
+
 check_werror() {
   local root="$1" t="$2" tmp
   tmp="$(mktemp -d)"
@@ -514,6 +524,7 @@ run_all_checks() {
   if [ "$HOST_OS" = linux ]; then check_containers "$root"; else check_darwin_dylibs "$root"; fi
   run_feature_checks "$root"
   check_bolt_debug_quality "$root"
+  check_dwarf_strings "$root"
   check_relocatable "$root"
   run_sanitizer_addon_checks "$root"
   echo "verification: $VERIFY_FAILURES failure(s)"
