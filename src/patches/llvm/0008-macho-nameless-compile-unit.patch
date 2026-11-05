@@ -1,0 +1,49 @@
+diff --git a/lld/MachO/InputFiles.cpp b/lld/MachO/InputFiles.cpp
+--- a/lld/MachO/InputFiles.cpp
++++ b/lld/MachO/InputFiles.cpp
+@@ -1577,6 +1577,10 @@
+ 
+ std::string ObjFile::sourceFile() const {
+   const char *unitName = compileUnit->getUnitDIE().getShortName();
++  // DW_AT_name is optional, including on compile units used only for types.
++  // Retain the object identity in STABS when there is no source filename.
++  if (!unitName)
++    return getName().str();
+   // DWARF allows DW_AT_name to be absolute, in which case nothing should be
+   // prepended. As for the styles, debug info can contain paths from any OS, not
+   // necessarily an OS we're currently running on. Moreover different
+diff --git a/lld/test/MachO/nameless-cu.s b/lld/test/MachO/nameless-cu.s
+new file mode 100644
+--- /dev/null
++++ b/lld/test/MachO/nameless-cu.s
+@@ -0,0 +1,30 @@
++# REQUIRES: aarch64
++# RUN: llvm-mc -filetype=obj -triple=arm64-apple-darwin %s -o %t.o
++# RUN: llvm-dwarfdump --verify %t.o
++# RUN: %lld -dylib -arch arm64 %t.o -o %t.dylib
++# RUN: dsymutil -s %t.dylib | FileCheck %s -DOBJ=%t.o
++
++# CHECK: (N_SO {{.*}}'[[OBJ]]'
++# CHECK: (N_OSO {{.*}}'[[OBJ]]'
++
++## A compilation unit need not provide DW_AT_name. Its STABS records must
++## retain the object file so dsymutil can still read every compilation unit.
++.text
++.globl _main
++_main:
++  .long 0xd65f03c0
++.section __DWARF,__debug_abbrev,regular,debug
++  .uleb128 1
++  .uleb128 0x11
++  .byte 0
++  .uleb128 0
++  .uleb128 0
++  .byte 0
++.section __DWARF,__debug_info,regular,debug
++  .long Lunit_end-Lunit_header
++Lunit_header:
++  .short 4
++  .long 0
++  .byte 8
++  .uleb128 1
++Lunit_end:

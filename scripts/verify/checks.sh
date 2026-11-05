@@ -70,6 +70,16 @@ check_dwarf_strings() {
   fi
 }
 
+check_macho_compilation_units() {
+  local root="$1" output
+  if output=$(python3 "$ROOT_DIR/scripts/verify/macho-compilation-units.py" "$root/bin" \
+      "$ROOT_DIR/tests/fixtures/debug-quality/macho-nameless-cu.s" 2>&1); then
+    pass "Mach-O nameless compilation units"
+  else
+    fail "Mach-O nameless compilation units" "$output"
+  fi
+}
+
 check_werror() {
   local root="$1" t="$2" tmp
   tmp="$(mktemp -d)"
@@ -525,6 +535,7 @@ run_all_checks() {
   run_feature_checks "$root"
   check_bolt_debug_quality "$root"
   check_dwarf_strings "$root"
+  check_macho_compilation_units "$root"
   check_relocatable "$root"
   run_sanitizer_addon_checks "$root"
   echo "verification: $VERIFY_FAILURES failure(s)"
