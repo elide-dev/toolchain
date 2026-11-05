@@ -29,7 +29,7 @@ jobs:
               assert type(run) is int and run>0
               request=urllib.request.Request(f'https://api.github.com/repos/elide-dev/toolchain/actions/runs/{run}',headers={'Authorization':'Bearer '+os.environ['GH_TOKEN']})
               with urllib.request.urlopen(request) as response: metadata=json.load(response)
-              assert metadata['head_sha']=='cf725d71ebf5cd1d222daf984a3e39c57b707a1c'
+              assert metadata['head_sha']=='ae94ae7f9bee4ba480bc47c702bd4a48a12c52e7'
               assert metadata['conclusion']=='success',metadata['html_url']
               print(platform,run,metadata['head_sha'])
           PY
