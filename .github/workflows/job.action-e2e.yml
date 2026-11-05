@@ -3,6 +3,10 @@ name: "Job - Action E2E"
 on:
   workflow_call:
     inputs:
+      candidate-runs:
+        description: "Qualification-only successful producer runs by package platform; empty uses this run"
+        type: string
+        default: ""
       sanitizer-addons:
         description: "The build produced sanitizer add-on archives: also test the action's sanitizer input"
         required: false
@@ -36,6 +40,8 @@ jobs:
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
           name: elide-toolchain-${{ matrix.os }}-${{ matrix.arch }}
+          run-id: ${{ inputs.candidate-runs != '' && fromJSON(inputs.candidate-runs)[format('{0}-{1}', matrix.os, matrix.arch)] || github.run_id }}
+          github-token: ${{ inputs.candidate-runs != '' && github.token || '' }}
           path: dist
       - name: "Locate archive"
         id: archive
@@ -83,6 +89,8 @@ jobs:
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
           name: elide-toolchain-linux-${{ matrix.arch }}
+          run-id: ${{ inputs.candidate-runs != '' && fromJSON(inputs.candidate-runs)[format('linux-{0}', matrix.arch)] || github.run_id }}
+          github-token: ${{ inputs.candidate-runs != '' && github.token || '' }}
           path: dist
       - name: "Locate archives"
         id: archive

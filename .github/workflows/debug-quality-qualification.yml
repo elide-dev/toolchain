@@ -1,0 +1,41 @@
+name: Qualify the complete unpublished toolchain release
+on:
+  push:
+    branches: [codex/debug-quality-qualification]
+    paths: [.github/workflows/debug-quality-qualification.yml]
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: "Successful release-package runs by linux-amd64/linux-arm64/darwin-arm64"
+        type: string
+        required: true
+permissions:
+  contents: read
+jobs:
+  provenance:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require the exact successful producer builds
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNS: ${{ inputs.runs }}
+        run: |
+          python3 - <<'PY'
+          import json,os,urllib.request
+          runs=json.loads(os.environ['RUNS'])
+          assert set(runs)=={'linux-amd64','linux-arm64','darwin-arm64'}
+          for platform,run in runs.items():
+              assert type(run) is int and run>0
+              request=urllib.request.Request(f'https://api.github.com/repos/elide-dev/toolchain/actions/runs/{run}',headers={'Authorization':'Bearer '+os.environ['GH_TOKEN']})
+              with urllib.request.urlopen(request) as response: metadata=json.load(response)
+              assert metadata['head_sha']=='cf725d71ebf5cd1d222daf984a3e39c57b707a1c'
+              assert metadata['conclusion']=='success',metadata['html_url']
+              print(platform,run,metadata['head_sha'])
+          PY
+  action:
+    needs: provenance
+    uses: ./.github/workflows/job.action-e2e.yml
+    with:
+      candidate-runs: ${{ inputs.runs }}
+      sanitizer-addons: true
