@@ -1,0 +1,47 @@
+name: Reproduce the nameless Mach-O compilation unit failure
+on:
+  push:
+    branches: [codex/debug-quality-qualification]
+    paths: [.github/workflows/debug-quality-lld-repro.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  reproduce:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
+        with:
+          github-token: ${{ github.token }}
+          repository: elide-dev/toolchain
+          run-id: 41956212498
+          artifact-ids: 13387970553
+          path: packages
+      - name: Reproduce with the exact qualified LLVM package
+        shell: bash
+        run: |
+          archive=packages/elide-toolchain-2026.11.2-linux-amd64.tar.xz
+          echo "38866ceabf57cae766ea5bd1a5cbca9e35f4e352c0e8e9cd1ad58ba0252ecd29  $archive" | sha256sum -c -
+          tar -xJf "$archive"
+          bin="$PWD/elide-toolchain/bin"
+          "$bin/clang" --target=arm64-apple-darwin -c tests/fixtures/debug-quality/macho-nameless-cu.s -o nameless.o
+          "$bin/llvm-dwarfdump" --verify nameless.o
+          set +e
+          "$bin/lld" -flavor darwin -arch arm64 -dylib -platform_version macos 14 14 nameless.o -o nameless.dylib > linker.log 2>&1
+          status=$?
+          set -e
+          cat linker.log
+          echo "linker_exit=$status"
+          test "$status" -eq 139
+          grep -F 'ObjFile::sourceFile' linker.log
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: nameless-cu-reproduction
+          path: |
+            nameless.o
+            linker.log
+          retention-days: 90
