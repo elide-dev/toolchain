@@ -1,6 +1,6 @@
 // Rust-driven link through the bundle clang/lld with -Clinker-plugin-lto (issue #13): with
 // lld --fat-lto-objects, libzstd.a's bitcode joins the LTO link and ZSTD_versionNumber is
-// internalized (inlined or local); without it, the archive's native code keeps a global symbol.
+// internalized, so its unused ZSTD_versionString is dropped; without it, the native code keeps it.
 extern "C" {
     fn ZSTD_versionNumber() -> u32;
 }

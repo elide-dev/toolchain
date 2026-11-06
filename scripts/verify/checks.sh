@@ -110,15 +110,29 @@ check_components_pic() {
   if [ -n "$bad" ]; then fail "components pic $t" "${bad# }"; else pass "components pic $t"; fi
 }
 
-# zstd_binding ROOT FILE — llvm-nm class of ZSTD_versionNumber in FILE (T global, t local), empty if absent.
-zstd_binding() { "$1/bin/llvm-nm" --defined-only "$2" 2>/dev/null | awk '$3=="ZSTD_versionNumber"{print $2; exit}'; }
+# nm_class ROOT FILE SYM — llvm-nm class of SYM in FILE (T global, t local), empty if absent.
+# Captures nm's output first: an early-exiting reader would SIGPIPE nm and, under pipefail, abort verify.
+nm_class() {
+  local out
+  out="$("$1/bin/llvm-nm" --defined-only "$2" 2>/dev/null || true)"
+  awk -v s="$3" '$3==s && !f {print $2; f=1}' <<< "$out"
+}
+
+# main_calls ROOT FILE SYM — "yes" if main's disassembly in FILE references SYM.
+main_calls() {
+  local out
+  out="$("$1/bin/llvm-objdump" -d --disassemble-symbols=main "$2" 2>/dev/null || true)"
+  case $out in *"<$3>"*|*"<$3@"*) echo yes ;; *) echo no ;; esac
+}
 
 # check_fat_lto ROOT TRIPLE — issue #13: a plain `-flto=thin` link through the bundle clang uses the
-# bitcode of the shipped fat archives. Asserts cross-module optimization, not just a link: a
-# libzstd.a function is inlined into the caller and dropped. -fno-fat-lto-objects and non-LTO links
-# keep the archive's native code. The Rust leg uses `elide-toolchain flags lto` RUSTFLAGS.
+# bitcode of the shipped fat archives, asserted as cross-module optimization rather than a link:
+# libzstd.a's ZSTD_versionNumber is inlined into main (no call left), and ZSTD_versionString, unused
+# in the same archive member, is internalized and dropped. (ThinLTO keeps the inlined callee itself
+# as a global: other modules referenced it.) -fno-fat-lto-objects and non-LTO links use the
+# archive's native code: main calls ZSTD_versionNumber and ZSTD_versionString stays global.
 check_fat_lto() {
-  local root="$1" t="$2" tmp static=() mode b bad="" cflags
+  local root="$1" t="$2" tmp static=() mode bad="" cflags driver calls vs
   if ! component_enabled zstd; then warn "zstd disabled; skipping fat LTO $t"; return; fi
   if [ "$(triple_libc "$t")" = musl ]; then static=(-static); fi
   tmp="$(mktemp -d)"
@@ -127,9 +141,11 @@ check_fat_lto() {
   if ! "$root/bin/$t-clang" "${cflags[@]}" -c "$ROOT_DIR/tests/fixtures/fat-lto.c" -o "$tmp/f.o" 2>"$tmp/err"; then
     fail "fat LTO $t" "fixture: $(head -3 "$tmp/err")"; rm -rf "$tmp"; return
   fi
-  if ! "$root/bin/$t-clang" -flto=thin -### "$tmp/f.o" -o "$tmp/x" 2>&1 | grep -q -- '"--fat-lto-objects"'; then
-    bad="$bad -flto=thin link does not pass --fat-lto-objects;"
-  fi
+  driver="$("$root/bin/$t-clang" "${static[@]}" -flto=thin -### "$tmp/f.o" -o "$tmp/x" 2>&1 || true)"
+  case $driver in
+    *'"--fat-lto-objects"'*) ;;
+    *) bad="$bad -flto=thin link does not pass --fat-lto-objects;" ;;
+  esac
   for mode in lto nofat nolto; do
     local args=()
     case $mode in
@@ -138,13 +154,18 @@ check_fat_lto() {
       nolto) args=(-fno-lto) ;;
     esac
     if ! "$root/bin/$t-clang" "${static[@]}" "${args[@]}" "$tmp/f.o" -lzstd -o "$tmp/$mode" 2>"$tmp/err"; then
-      bad="$bad $mode: $(grep -m1 -E 'error|undefined' "$tmp/err");"; continue
+      bad="$bad $mode: $(grep -m1 -E 'error|undefined' "$tmp/err" || head -1 "$tmp/err");"; continue
     fi
     if ! "$tmp/$mode"; then bad="$bad $mode: program failed;"; continue; fi
-    b="$(zstd_binding "$root" "$tmp/$mode")"
+    calls="$(main_calls "$root" "$tmp/$mode" ZSTD_versionNumber)"
+    vs="$(nm_class "$root" "$tmp/$mode" ZSTD_versionString)"
     case $mode in
-      lto) [ -z "$b" ] || bad="$bad lto: ZSTD_versionNumber not inlined from libzstd.a bitcode (nm: $b);" ;;
-      *) [ "$b" = T ] || bad="$bad $mode: want the archive's native ZSTD_versionNumber (nm: ${b:-absent});" ;;
+      lto)
+        [ "$calls" = no ] || bad="$bad lto: main still calls ZSTD_versionNumber (libzstd.a bitcode not inlined);"
+        [ -z "$vs" ] || bad="$bad lto: unused ZSTD_versionString kept (nm: $vs), libzstd.a bitcode not in the LTO link;" ;;
+      *)
+        [ "$calls" = yes ] || bad="$bad $mode: main does not call the archive's native ZSTD_versionNumber;"
+        [ "$vs" = T ] || bad="$bad $mode: want the archive's native ZSTD_versionString (nm: ${vs:-absent});" ;;
     esac
   done
   rm -rf "$tmp"
@@ -153,31 +174,45 @@ check_fat_lto() {
 }
 
 # check_fat_lto_rust ROOT TRIPLE — the Rust leg of check_fat_lto (needs rustc LLVM <= the bundle's).
+# rustc's IR targets a different CPU than the components, so inlining is not expected; the marker is
+# libzstd.a's unused ZSTD_versionString: dropped when the member's bitcode joins the LTO link, kept
+# (-C link-dead-code: no --gc-sections) when lld takes the native code. Both links run.
 check_fat_lto_rust() {
-  local root="$1" t="$2" rt rsys rmajor tmp b rf=() extra=()
+  local root="$1" t="$2" rt rsys rmajor tmp vs rflags rf=() nofat=() extra=() w bad=""
   rt="$(rust_triple "$t")"
   if ! command -v rustc >/dev/null 2>&1; then warn "rustc not on PATH; skipping fat LTO rust $t"; return; fi
   rsys="$(rustc --print sysroot 2>/dev/null || true)"
   if [ ! -d "$rsys/lib/rustlib/$rt" ]; then warn "rust std for $rt not installed; skipping fat LTO rust $t"; return; fi
-  rmajor="$(rustc -vV 2>/dev/null | sed -n 's/^LLVM version: \([0-9]*\).*/\1/p')"
+  rmajor="$(rustc -vV 2>/dev/null | sed -n 's/^LLVM version: \([0-9]*\).*/\1/p' || true)"
   if [ -z "$rmajor" ] || [ "$rmajor" -gt "${LLVM_VERSION%%.*}" ]; then
     warn "rustc LLVM ${rmajor:-?} is newer than the bundle's ${LLVM_VERSION%%.*}; skipping fat LTO rust $t"; return
   fi
-  read -r -a rf <<< "$(eval "$("$root/bin/elide-toolchain" flags --target "$t" lto)"; printf '%s' "$ELIDE_RUSTFLAGS")"
+  rflags="$("$root/bin/elide-toolchain" flags --target "$t" lto --format json 2>/dev/null \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["ELIDE_RUSTFLAGS"])' || true)"
+  read -r -a rf <<< "$rflags"
+  case " ${rf[*]} " in
+    *" -Clink-arg=-Wl,--fat-lto-objects "*) ;;
+    *) fail "fat LTO rust $t" "elide-toolchain flags lto: no -Clink-arg=-Wl,--fat-lto-objects in '$rflags'"; return ;;
+  esac
+  for w in "${rf[@]}"; do [ "$w" = -Clink-arg=-Wl,--fat-lto-objects ] || nofat+=("$w"); done
   if [ "$(triple_libc "$t")" = musl ]; then extra=(-C target-feature=+crt-static); fi
   tmp="$(mktemp -d)"
-  if ! rustc --target "$rt" "${extra[@]}" "${rf[@]}" -C opt-level=2 -C link-arg=-lzstd \
-      "$ROOT_DIR/tests/fixtures/fat-lto.rs" -o "$tmp/r" 2>"$tmp/err"; then
-    fail "fat LTO rust $t" "$(grep -m3 -E 'error|undefined' "$tmp/err")"; rm -rf "$tmp"; return
-  fi
-  if ! "$tmp/r"; then fail "fat LTO rust $t" "program failed"; rm -rf "$tmp"; return; fi
-  b="$(zstd_binding "$root" "$tmp/r")"
+  for w in lto nofat; do
+    local flags=()
+    if [ "$w" = lto ]; then flags=("${rf[@]}"); else flags=("${nofat[@]}"); fi
+    if ! rustc --target "$rt" "${extra[@]}" "${flags[@]}" -C opt-level=2 -C link-dead-code -C link-arg=-lzstd \
+        "$ROOT_DIR/tests/fixtures/fat-lto.rs" -o "$tmp/$w" 2>"$tmp/err"; then
+      bad="$bad $w: $(grep -m2 -E 'error|undefined' "$tmp/err" | tr '\n' ' ' || true);"; continue
+    fi
+    if ! "$tmp/$w"; then bad="$bad $w: program failed;"; continue; fi
+    vs="$(nm_class "$root" "$tmp/$w" ZSTD_versionString)"
+    case $w in
+      lto) [ -z "$vs" ] || bad="$bad lto: unused ZSTD_versionString kept (nm: $vs), libzstd.a bitcode not in the LTO link;" ;;
+      nofat) [ "$vs" = T ] || bad="$bad control without --fat-lto-objects: want native ZSTD_versionString (nm: ${vs:-absent});" ;;
+    esac
+  done
   rm -rf "$tmp"
-  if [ "$b" = T ]; then
-    fail "fat LTO rust $t" "ZSTD_versionNumber is the archive's native global: libzstd.a bitcode stayed out of the link"
-  else
-    pass "fat LTO rust $t"
-  fi
+  if [ -n "$bad" ]; then fail "fat LTO rust $t" "${bad# }"; else pass "fat LTO rust $t"; fi
 }
 
 # check_components_shared ROOT TRIPLE — R23: ACCP/JNI link libssl.a/libcrypto.a into a -shared
