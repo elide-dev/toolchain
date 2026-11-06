@@ -32,6 +32,17 @@ cmake_launcher_args() {
   return 0
 }
 
+# LLVM 23 enables PCH by default. ccache rejects PCH without relaxed validation,
+# so most LLVM compilations otherwise bypass the persistent cache. Keep ordinary
+# header dependency hashing with a launcher; uncached builds retain LLVM's PCH.
+llvm_cache_args() {
+  cmake_launcher_args
+  if [ -n "$(compiler_launcher)" ]; then
+    echo -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON
+  fi
+  return 0
+}
+
 # ccache_defaults — ccache settings for this build unless the caller set them. Paths under
 # ROOT_DIR hash relative (BASEDIR, NOHASHDIR), compilers hash by content (stage-1 clang is rebuilt
 # or re-extracted, so its mtime changes every build), and the generators of the clang cfg files

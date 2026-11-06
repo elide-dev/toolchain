@@ -179,6 +179,7 @@ run_sanitizer_addon_checks() { # ROOT (the extracted, already verified main bund
     for t in $ALL_TARGETS; do
       case " $(triple_variants "$t") " in *" $s "*) ;; *) continue ;; esac
       check_addon_layout "$tree/$TOOLCHAIN_NAME" "$t" "$s"
+      check_sqlite_authorizer "$tree/$TOOLCHAIN_NAME" "$t+$s"
       check_sanitizer_trips "$tree/$TOOLCHAIN_NAME" "$t" "$s" "add-on"
       check_addon_clean "$tree/$TOOLCHAIN_NAME" "$t" "$s"
       check_addon_cmake "$tree/$TOOLCHAIN_NAME" "$t" "$s"

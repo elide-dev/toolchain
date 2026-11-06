@@ -51,6 +51,14 @@ printf '#!/bin/sh\n' > "$T/bin/ccache"; chmod +x "$T/bin/ccache"
 : > "$T/calls"
 PATH="$P:$PATH" USE_CCACHE=yes cmake_target x86_64-unknown-linux-gnu /src /build /prefix
 assert_contains "$(head -n 1 "$T/calls")" "-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache" "cmake_target uses the launcher"
+
+# LLVM PCH must not silently bypass compiler caches. No launcher retains upstream defaults.
+assert_contains "$(PATH="$P" USE_CCACHE=yes llvm_cache_args)" "-DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON" "ccache disables LLVM PCH"
+assert_contains "$(PATH="$P" USE_CCACHE=no USE_SCCACHE=yes llvm_cache_args)" "-DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON" "sccache disables LLVM PCH"
+assert_eq "$(PATH="$P" USE_CCACHE=no USE_SCCACHE=no llvm_cache_args)" "" "uncached LLVM retains PCH"
+for f in 10-llvm-stage1 40-llvm-stage2; do
+  assert_contains "$(cat "$ROOT_DIR/scripts/stages/$f.sh")" "llvm_cache_args" "$f uses cache-compatible LLVM settings"
+done
 # ccache settings: defaults only where the caller set nothing
 d="$(env -u CCACHE_BASEDIR -u CCACHE_COMPILERCHECK -u CCACHE_NOHASHDIR -u CCACHE_EXTRAFILES CCACHE_MAXSIZE=5G \
   bash -c "source '$ROOT_DIR/scripts/lib/common.sh'; source '$ROOT_DIR/scripts/lib/cmake.sh'; ROOT_DIR=/r; ccache_defaults; env" | grep '^CCACHE_' | sort | xargs)"

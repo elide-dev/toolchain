@@ -20,7 +20,7 @@ llvm_common_args() {
     -DLLVM_ENABLE_ZSTD=OFF \
     -DLLVM_FORCE_VC_REPOSITORY=https://github.com/llvm/llvm-project.git
   llvm_link_jobs_args
-  cmake_launcher_args
+  llvm_cache_args
 }
 
 stage_main() {

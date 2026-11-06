@@ -1,5 +1,33 @@
 # Build timings
 
+## 2026.11.2 release CI baseline and cache fix
+
+[Release run 42283324390](https://github.com/elide-dev/toolchain/actions/runs/42283324390)
+took 53m56s end to end. Linux runners reported 8 CPUs; amd64 had 50 GiB
+available memory and arm64 60 GiB. macOS reported 16 CPUs and 128 GiB.
+
+| Stage | linux-amd64 | linux-arm64 | darwin-arm64 |
+|---|---:|---:|---:|
+| Shipped LLVM (40 on Linux, 10 on macOS) | 1076 s | 736 s | 460 s |
+| Components | 359 s | 345 s | 30 s |
+| Sanitizer add-ons | 539 s | — | — |
+| Package | 480 s | 222 s | 84 s |
+| Verify | 290 s | 168 s | 60 s |
+
+The LLVM log reports precompiled headers enabled. Of all ccache calls,
+4538/9598 (amd64), 4472/7805 (arm64), and 4348/4949 (macOS) were uncacheable.
+A local Clang/ccache 4.11.2 probe reproduced `Could not use precompiled header`
+with LLVM's `-Xclang -fno-pch-timestamp` and default strict cache settings.
+Compiling the same source without PCH gave a cache miss followed by a direct hit.
+
+Starting with 2026.11.3, LLVM builds with a compiler launcher set
+`CMAKE_DISABLE_PRECOMPILE_HEADERS=ON`; uncached builds retain upstream defaults.
+This avoids relaxing ccache's header/macro validation. The first build populates
+the new cache entries; full-build savings need a subsequent warm-cache run.
+CI now prints verbose ccache statistics so bypass reasons are visible.
+
+## Original local baseline
+
 Full clean build of the linux-amd64 bundle: `REQUIRE_CONTAINER_CHECKS=yes ./build.sh --clean`
 (2026-10-04, from timestamps in `out/full-build.log`; sccache off).
 

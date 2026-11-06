@@ -310,6 +310,12 @@ Stages:
 
 Persistent caches: downloads (kernel headers, Propeller deps, the prebuilt LLVM tarball) go to `ELIDE_CACHE_DIR` (default `out/cache`), and ccache uses `CCACHE_DIR` (default `~/.cache/ccache`). CI sets both under `$HOME/.cache/elide-toolchain/` because `actions/checkout` cleans ignored files in the workspace, and prints `ccache --show-stats` after every build. The prebuilt stage 1 is safe to use because the version is the same, so stage 1 produces bitcode the shipped LLVM reads. Our LLVM patches only affect the shipped stage 2 and compiler-rt, which stage 30 builds from the patched tree (spec §3.3b). Changing `STAGE1_SOURCE` takes effect on `--from 10-llvm-stage1`.
 
+LLVM builds disable precompiled headers when ccache or sccache is active. LLVM 23's
+default PCH otherwise makes most of its compilations uncacheable with strict ccache
+settings. Builds without a compiler cache retain LLVM's PCH defaults. The first build
+after this change populates the cache; subsequent builds benefit. CI reports verbose
+ccache statistics, including reasons for uncacheable calls.
+
 **Build times.** See [`docs/notes/build-timings.md`](docs/notes/build-timings.md) for per-stage wall times and the host they were measured on.
 
 ## Versions
@@ -329,6 +335,7 @@ Stage 95 (`scripts/verify/checks.sh`) runs against a fresh extraction of the pac
 - **smoke:** per triple, compile, link and run C and C++ (iostream, exceptions, threads); musl output is static.
 - **werror:** `<triple>-clang -Werror -c` is clean (cfg flags raise no unused-argument warnings).
 - **components:** a program links against every enabled component. On Linux, a `-shared` object also links `libssl.a`/`libcrypto.a` cleanly under `-z defs` (the ACCP/JNI case), and for gnu it stays within the glibc floor.
+- **SQLite authorizer:** each `libsqlite3elide.a`, including sanitizer add-ons, exports `sqlite_set_1authorizer` and `sqlite_clear_1authorizer`; the installed JNI header declares both.
 - **bitcode:** every member of every sysroot archive and of the libc++ runtimes is LLVM bitcode (raw or the Mach-O wrapper) or an object with a `.llvm.lto` section, produced by the bundle's LLVM major. Each occurrence of a duplicated member name is checked. Exempt: compiler-rt, glibc's own archives (gnu only), musl's empty stub archives, and hand-written assembly. A member counts as assembly only if it is a native object with no `.llvm.lto` and no compiler `.comment`, and its source is assembly (a CMake `*.S.o`/`*.s.o`/`*.asm.o` object, or a musl `src/*/<arch>/*.s` source).
 - **fat LTO (Linux):** issue [#13](https://github.com/elide-dev/toolchain/issues/13). A C program calls `ZSTD_versionNumber` from the shipped fat `libzstd.a`. With a plain `-flto=thin` link, the driver passes `--fat-lto-objects` and the function is inlined and dropped (no symbol left). With `-fno-fat-lto-objects` or without `-flto`, the archive's native global is linked. Every variant runs. When `rustc` (LLVM <= the bundle's) and the target's std are installed, a Rust caller linked with `elide-toolchain flags lto`'s `ELIDE_RUSTFLAGS` must not end up with the archive's native global.
 - **rust:** when `rustc` and the target's std are installed, a hello world with a caught panic links through `<triple>-clang` and runs (musl: `+crt-static`; gnu: within the glibc floor, no `libgcc_s`). Otherwise it is skipped with a warning.

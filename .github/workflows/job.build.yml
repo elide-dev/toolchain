@@ -125,7 +125,7 @@ jobs:
       - name: "Report: ccache"
         if: always()
         run: |
-          if command -v ccache >/dev/null 2>&1; then ccache --show-stats; else echo "ccache not installed"; fi
+          if command -v ccache >/dev/null 2>&1; then ccache --show-stats --verbose; else echo "ccache not installed"; fi
       - name: "Artifact: Bundle"
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

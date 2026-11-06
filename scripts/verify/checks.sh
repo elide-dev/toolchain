@@ -73,9 +73,32 @@ check_components() {
     fail "components $t" "$(head -5 "$tmp/err")"
   fi
   rm -rf "$tmp"
+  check_sqlite_authorizer "$root" "$t"
   case " ${defs[*]} " in *" -DHAVE_CRYPTO "*) [ "$(triple_os "$t")" = linux ] && check_components_shared "$root" "$t" ;; esac
   if [ "$(triple_os "$t")" = linux ]; then check_components_pic "$root" "$t"; fi
   return 0
+}
+
+# PR #17: both authorizer entry points and their declarations must ship together.
+# Also called with the add-on sysroot suffix, where the archive is independently built.
+check_sqlite_authorizer() {
+  component_enabled sqlite3elide || return 0
+  local root="$1" prefix="$1/sysroot/$2/usr" symbols symbol
+  local name="sqlite3elide authorizer $2"
+  if ! symbols="$("$root/bin/llvm-nm" --defined-only --extern-only --just-symbol-name \
+      "$prefix/lib/libsqlite3elide.a" 2>/dev/null)"; then
+    fail "$name" "cannot read libsqlite3elide.a"; return
+  fi
+  for symbol in sqlite_set_1authorizer sqlite_clear_1authorizer; do
+    # Mach-O prefixes C symbols with an underscore.
+    if ! grep -Fx -e "$symbol" -e "_$symbol" <<< "$symbols" >/dev/null; then
+      fail "$name" "missing exported $symbol"; return
+    fi
+    if ! grep -w "$symbol" "$prefix/include/sqlite3jni.h" >/dev/null; then
+      fail "$name" "missing declaration for $symbol"; return
+    fi
+  done
+  pass "$name"
 }
 
 # check_components_pic ROOT TRIPLE — each component's primary archive links whole into a shared object,
