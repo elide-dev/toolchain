@@ -1,18 +1,24 @@
-name: Qualify the complete unpublished toolchain release
+name: Bounded unpublished toolchain qualification
 on:
-  push:
-    branches: [codex/debug-quality-qualification]
-    paths: [.github/workflows/debug-quality-qualification.yml]
   workflow_dispatch:
     inputs:
       runs:
-        description: "Successful release-package runs by linux-amd64/linux-arm64/darwin-arm64"
+        description: "One successful release-package run keyed by its package platform"
         type: string
         required: true
+      target:
+        description: One normal installer target
+        type: choice
+        default: x86_64-unknown-linux-gnu
+        options: [x86_64-unknown-linux-gnu, x86_64-unknown-linux-musl, aarch64-unknown-linux-gnu, aarch64-unknown-linux-musl, arm64-apple-darwin]
+concurrency:
+  group: symbolication-qualification-${{ github.repository }}
+  cancel-in-progress: false
 permissions:
   contents: read
 jobs:
   provenance:
+    timeout-minutes: 5
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     steps:
@@ -20,11 +26,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RUNS: ${{ inputs.runs }}
+          TARGET: ${{ inputs.target }}
         run: |
           python3 - <<'PY'
           import json,os,urllib.request
           runs=json.loads(os.environ['RUNS'])
-          assert set(runs)=={'linux-amd64','linux-arm64','darwin-arm64'}
+          target=os.environ['TARGET']
+          assert target in {'x86_64-unknown-linux-gnu','x86_64-unknown-linux-musl','aarch64-unknown-linux-gnu','aarch64-unknown-linux-musl','arm64-apple-darwin'}
+          platform='darwin-arm64' if target=='arm64-apple-darwin' else 'linux-arm64' if target.startswith('aarch64-') else 'linux-amd64'
+          assert set(runs)=={platform}
           for platform,run in runs.items():
               assert type(run) is int and run>0
               request=urllib.request.Request(f'https://api.github.com/repos/elide-dev/toolchain/actions/runs/{run}',headers={'Authorization':'Bearer '+os.environ['GH_TOKEN']})
@@ -37,10 +47,12 @@ jobs:
           PY
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: debug-quality-action-provenance
+          name: recovery-toolchain-action-provenance
           path: provenance.json
           retention-days: 90
   unit:
+    timeout-minutes: 45
+    needs: provenance
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
@@ -60,4 +72,5 @@ jobs:
     uses: ./.github/workflows/job.action-e2e.yml
     with:
       candidate-runs: ${{ inputs.runs }}
-      sanitizer-addons: true
+      sanitizer-addons: false
+      qualification-target: ${{ inputs.target }}

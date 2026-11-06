@@ -3,6 +3,10 @@ name: "Job - Action E2E"
 on:
   workflow_call:
     inputs:
+      qualification-target:
+        description: "Qualification-only single target; empty preserves the normal matrix"
+        type: string
+        default: ""
       candidate-runs:
         description: "Qualification-only successful producer runs by package platform; empty uses this run"
         type: string
@@ -18,17 +22,14 @@ permissions:
 
 jobs:
   e2e:
+    timeout-minutes: ${{ inputs.qualification-target != '' && 45 || 360 }}
     name: "Action (${{ matrix.os }}-${{ matrix.arch }} ${{ matrix.target }})"
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
+      max-parallel: ${{ inputs.qualification-target != '' && 1 || 5 }}
       matrix:
-        include:
-          - { os: linux, arch: amd64, runner: linux-amd64-cipool, target: x86_64-unknown-linux-gnu }
-          - { os: linux, arch: amd64, runner: linux-amd64-cipool, target: x86_64-unknown-linux-musl }
-          - { os: linux, arch: arm64, runner: linux-arm64-cipool, target: aarch64-unknown-linux-gnu }
-          - { os: linux, arch: arm64, runner: linux-arm64-cipool, target: aarch64-unknown-linux-musl }
-          - { os: darwin, arch: arm64, runner: darwin-arm64-cipool, target: arm64-apple-darwin }
+        include: ${{ fromJSON(inputs.qualification-target == 'x86_64-unknown-linux-gnu' && '[{"os":"linux","arch":"amd64","runner":"linux-amd64-cipool","target":"x86_64-unknown-linux-gnu"}]' || inputs.qualification-target == 'x86_64-unknown-linux-musl' && '[{"os":"linux","arch":"amd64","runner":"linux-amd64-cipool","target":"x86_64-unknown-linux-musl"}]' || inputs.qualification-target == 'aarch64-unknown-linux-gnu' && '[{"os":"linux","arch":"arm64","runner":"linux-arm64-cipool","target":"aarch64-unknown-linux-gnu"}]' || inputs.qualification-target == 'aarch64-unknown-linux-musl' && '[{"os":"linux","arch":"arm64","runner":"linux-arm64-cipool","target":"aarch64-unknown-linux-musl"}]' || inputs.qualification-target == 'arm64-apple-darwin' && '[{"os":"darwin","arch":"arm64","runner":"darwin-arm64-cipool","target":"arm64-apple-darwin"}]' || (inputs.qualification-target == '' && '[{"os":"linux","arch":"amd64","runner":"linux-amd64-cipool","target":"x86_64-unknown-linux-gnu"},{"os":"linux","arch":"amd64","runner":"linux-amd64-cipool","target":"x86_64-unknown-linux-musl"},{"os":"linux","arch":"arm64","runner":"linux-arm64-cipool","target":"aarch64-unknown-linux-gnu"},{"os":"linux","arch":"arm64","runner":"linux-arm64-cipool","target":"aarch64-unknown-linux-musl"},{"os":"darwin","arch":"arm64","runner":"darwin-arm64-cipool","target":"arm64-apple-darwin"}]' || '[]')) }}
     steps:
       - name: "Setup: Harden Runner"
         uses: step-security/harden-runner@c6295a65d1254861815972266d5933fd6e532bdf # v2.11.1
@@ -74,6 +75,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
+      max-parallel: 2
       matrix:
         include:
           - { arch: amd64, runner: linux-amd64-cipool, target: x86_64-unknown-linux-gnu, sanitizer: msan }
