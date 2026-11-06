@@ -62,11 +62,21 @@ assert_eq "$(eval "$f"; printf '%s' "$ELIDE_CFLAGS")" "-flto=thin -gmlt -fdebug-
 assert_contains "$("$H" flags --target x86_64-unknown-linux-musl memprof-use=/p/a)" "-lelidealloc-shim -static"
 # Linux archives are fat: LTO links must ask lld for their bitcode; darwin's are pure bitcode.
 assert_contains "$(eval "$f"; printf '%s' "$ELIDE_LDFLAGS")" "-ffat-lto-objects"
-assert_contains "$f" "-Clink-arg=-ffat-lto-objects"
+# rustc does not put clang in LTO mode, so Rust gets the lld flag itself.
+assert_contains "$(eval "$f"; printf '%s' "$ELIDE_RUSTFLAGS")" "-Clink-arg=-Wl,--fat-lto-objects"
+assert_not_contains "$(eval "$f"; printf '%s' "$ELIDE_RUSTFLAGS")" "-Clink-arg=-ffat-lto-objects"
 assert_contains "$("$H" flags --target x86_64-unknown-linux-musl propeller-baseline)" "-ffat-lto-objects"
 assert_not_contains "$("$H" flags --target arm64-apple-darwin memprof-use=/p/a)" "-ffat-lto-objects"
 assert_not_contains "$("$H" flags --target x86_64-unknown-linux-gnu memprof-instrument)" "-ffat-lto-objects"
 assert_contains "$("$H" flags --target x86_64-unknown-linux-gnu memprof-instrument)" "-fmemory-profile -gmlt"
+# lto: plain ThinLTO link flags for build-system integrations (issue #13).
+l="$("$H" flags --target x86_64-unknown-linux-gnu lto)"
+assert_eq "$(eval "$l"; printf '%s' "$ELIDE_CFLAGS")" "-flto=thin"
+assert_eq "$(eval "$l"; printf '%s' "$ELIDE_LDFLAGS")" "-flto=thin -fuse-ld=lld -ffat-lto-objects"
+assert_eq "$(eval "$l"; printf '%s' "$ELIDE_RUSTFLAGS")" "-Clinker-plugin-lto -Clinker=$root/bin/x86_64-unknown-linux-gnu-clang -Clink-arg=-fuse-ld=lld -Clink-arg=-Wl,--fat-lto-objects"
+assert_eq "$("$H" flags --target x86_64-unknown-linux-gnu lto --format json | python3 -c 'import json,sys; print(json.load(sys.stdin)["ELIDE_LDFLAGS"])')" "-flto=thin -fuse-ld=lld -ffat-lto-objects"
+assert_eq "$(eval "$("$H" flags --target arm64-apple-darwin lto)"; printf '%s' "$ELIDE_LDFLAGS")" "-flto=thin -fuse-ld=lld"
+assert_not_contains "$("$H" flags --target arm64-apple-darwin lto)" "fat-lto-objects"
 assert_fails "$H" flags --target x86_64-unknown-linux-musl memprof-instrument
 assert_contains "$("$H" flags --target x86_64-unknown-linux-musl memprof-instrument 2>&1 || true)" "x86_64-unknown-linux-gnu only"
 b="$("$H" flags --target x86_64-unknown-linux-gnu propeller-baseline)"

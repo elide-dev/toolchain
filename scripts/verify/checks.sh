@@ -110,6 +110,76 @@ check_components_pic() {
   if [ -n "$bad" ]; then fail "components pic $t" "${bad# }"; else pass "components pic $t"; fi
 }
 
+# zstd_binding ROOT FILE — llvm-nm class of ZSTD_versionNumber in FILE (T global, t local), empty if absent.
+zstd_binding() { "$1/bin/llvm-nm" --defined-only "$2" 2>/dev/null | awk '$3=="ZSTD_versionNumber"{print $2; exit}'; }
+
+# check_fat_lto ROOT TRIPLE — issue #13: a plain `-flto=thin` link through the bundle clang uses the
+# bitcode of the shipped fat archives. Asserts cross-module optimization, not just a link: a
+# libzstd.a function is inlined into the caller and dropped. -fno-fat-lto-objects and non-LTO links
+# keep the archive's native code. The Rust leg uses `elide-toolchain flags lto` RUSTFLAGS.
+check_fat_lto() {
+  local root="$1" t="$2" tmp static=() mode b bad="" cflags
+  if ! component_enabled zstd; then warn "zstd disabled; skipping fat LTO $t"; return; fi
+  if [ "$(triple_libc "$t")" = musl ]; then static=(-static); fi
+  tmp="$(mktemp -d)"
+  # Same flags as the components (ISA, branch protection), so the callee is inline-compatible.
+  read -r -a cflags <<< "$(target_cflags "$t")"
+  if ! "$root/bin/$t-clang" "${cflags[@]}" -c "$ROOT_DIR/tests/fixtures/fat-lto.c" -o "$tmp/f.o" 2>"$tmp/err"; then
+    fail "fat LTO $t" "fixture: $(head -3 "$tmp/err")"; rm -rf "$tmp"; return
+  fi
+  if ! "$root/bin/$t-clang" -flto=thin -### "$tmp/f.o" -o "$tmp/x" 2>&1 | grep -q -- '"--fat-lto-objects"'; then
+    bad="$bad -flto=thin link does not pass --fat-lto-objects;"
+  fi
+  for mode in lto nofat nolto; do
+    local args=()
+    case $mode in
+      lto) args=(-flto=thin -O2) ;;
+      nofat) args=(-flto=thin -O2 -fno-fat-lto-objects) ;;
+      nolto) args=(-fno-lto) ;;
+    esac
+    if ! "$root/bin/$t-clang" "${static[@]}" "${args[@]}" "$tmp/f.o" -lzstd -o "$tmp/$mode" 2>"$tmp/err"; then
+      bad="$bad $mode: $(grep -m1 -E 'error|undefined' "$tmp/err");"; continue
+    fi
+    if ! "$tmp/$mode"; then bad="$bad $mode: program failed;"; continue; fi
+    b="$(zstd_binding "$root" "$tmp/$mode")"
+    case $mode in
+      lto) [ -z "$b" ] || bad="$bad lto: ZSTD_versionNumber not inlined from libzstd.a bitcode (nm: $b);" ;;
+      *) [ "$b" = T ] || bad="$bad $mode: want the archive's native ZSTD_versionNumber (nm: ${b:-absent});" ;;
+    esac
+  done
+  rm -rf "$tmp"
+  if [ -n "$bad" ]; then fail "fat LTO $t" "${bad# }"; else pass "fat LTO $t"; fi
+  check_fat_lto_rust "$root" "$t"
+}
+
+# check_fat_lto_rust ROOT TRIPLE — the Rust leg of check_fat_lto (needs rustc LLVM <= the bundle's).
+check_fat_lto_rust() {
+  local root="$1" t="$2" rt rsys rmajor tmp b rf=() extra=()
+  rt="$(rust_triple "$t")"
+  if ! command -v rustc >/dev/null 2>&1; then warn "rustc not on PATH; skipping fat LTO rust $t"; return; fi
+  rsys="$(rustc --print sysroot 2>/dev/null || true)"
+  if [ ! -d "$rsys/lib/rustlib/$rt" ]; then warn "rust std for $rt not installed; skipping fat LTO rust $t"; return; fi
+  rmajor="$(rustc -vV 2>/dev/null | sed -n 's/^LLVM version: \([0-9]*\).*/\1/p')"
+  if [ -z "$rmajor" ] || [ "$rmajor" -gt "${LLVM_VERSION%%.*}" ]; then
+    warn "rustc LLVM ${rmajor:-?} is newer than the bundle's ${LLVM_VERSION%%.*}; skipping fat LTO rust $t"; return
+  fi
+  read -r -a rf <<< "$(eval "$("$root/bin/elide-toolchain" flags --target "$t" lto)"; printf '%s' "$ELIDE_RUSTFLAGS")"
+  if [ "$(triple_libc "$t")" = musl ]; then extra=(-C target-feature=+crt-static); fi
+  tmp="$(mktemp -d)"
+  if ! rustc --target "$rt" "${extra[@]}" "${rf[@]}" -C opt-level=2 -C link-arg=-lzstd \
+      "$ROOT_DIR/tests/fixtures/fat-lto.rs" -o "$tmp/r" 2>"$tmp/err"; then
+    fail "fat LTO rust $t" "$(grep -m3 -E 'error|undefined' "$tmp/err")"; rm -rf "$tmp"; return
+  fi
+  if ! "$tmp/r"; then fail "fat LTO rust $t" "program failed"; rm -rf "$tmp"; return; fi
+  b="$(zstd_binding "$root" "$tmp/r")"
+  rm -rf "$tmp"
+  if [ "$b" = T ]; then
+    fail "fat LTO rust $t" "ZSTD_versionNumber is the archive's native global: libzstd.a bitcode stayed out of the link"
+  else
+    pass "fat LTO rust $t"
+  fi
+}
+
 # check_components_shared ROOT TRIPLE — R23: ACCP/JNI link libssl.a/libcrypto.a into a -shared
 # object. The link must succeed with -z defs (every symbol resolved against libc), and on gnu
 # the result must stay within the glibc floor.
@@ -501,6 +571,7 @@ run_all_checks() {
     check_components "$root" "$t"
     check_bitcode "$root" "$t"
     check_rust "$root" "$t"
+    if [ "$(triple_os "$t")" = linux ]; then check_fat_lto "$root" "$t"; fi
     if [ "$(triple_libc "$t")" = gnu ]; then
       local personality_dir
       personality_dir="$(mktemp -d)"

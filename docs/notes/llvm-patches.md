@@ -14,6 +14,7 @@ and 45 (llvm-propeller). Stage 00's `unapply_patches` reverses it before the cle
 | `0001-memprof-deterministic-clone-tiebreak.patch` | llvm/llvm-project#222126 (`8c7d76bfc1b5`) | `MemProfContextDisambiguation.cpp` + tests | Deterministic MemProf cloning | on | the new LLVM tag contains `8c7d76bfc1b5` |
 | `0002-memprof-histogram-tail-granule.patch` | llvm/llvm-project#208911 (`c0b8c59b65af`) | `compiler-rt/lib/memprof/memprof_allocator.cpp` + tests | Correct histogram profiles | on | the new tag contains `c0b8c59b65af` |
 | `0100-dedubb-codegen.patch` | chaitanyaupp18/DeduBB@`07d730d` `patches/llvm-project-dedubb.patch` | CodeGen (DeduBB passes, hooks), X86/AArch64 InstrInfo, lld LinkerScript, clang driver CMake, 6 lit tests | DeduBB folding (`-mllvm -dedubb-directives=`) | on (`LLVM_DEDUBB`), inert without directives | DeduBB lands upstream |
+| `0200-linux-fat-lto-objects-default.patch` | local, [#13](https://github.com/elide-dev/toolchain/issues/13) | `clang/lib/Driver/ToolChains/CommonArgs.cpp`, `clang/test/Driver/elide-fat-lto-objects-default.c` | Linux LTO links pass lld `--fat-lto-objects` unless `-fno-fat-lto-objects`, so the fat sysroot/runtime archives join LTO with a plain `-flto=thin` | on | never (bundle policy); drop only if the archives stop being fat |
 
 ## `src/patches/llvm-propeller` (base `google/llvm-propeller@ea240c1`)
 
@@ -66,3 +67,11 @@ The SQLite JNI shim now carries `src/patches/sqlite-jni/0001-jdbc-3.54.1-jni-lif
 backporting the two NativeDB.c fixes from sqlite-jdbc 3.54.1.0: keep an already-open
 handle valid on duplicate open, and pass the pinned Java-array pointer to
 `ReleasePrimitiveArrayCritical`. Drop it when a new sqlite-jni pin includes both fixes.
+
+## 2026-11: fat-object LTO by default (#13)
+
+`0200-linux-fat-lto-objects-default.patch` changes `addLTOOptions` so that `-ffat-lto-objects`
+defaults to on at link time for Linux triples. lld then reads `.llvm.lto` from the fat archives
+on every `-flto` link. The compile-side default is unchanged: `-flto=thin -c` still emits plain
+bitcode. Darwin and non-LTO links are unaffected. The prebuilt stage-1 compiler is unpatched,
+so internal builds keep their current link behavior. Stage 95's `check_fat_lto` covers this.

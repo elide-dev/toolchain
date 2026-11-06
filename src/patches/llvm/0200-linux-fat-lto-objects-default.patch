@@ -1,0 +1,48 @@
+# local: Linux LTO links read fat-object bitcode by default (lld --fat-lto-objects).
+#   Tracked in https://github.com/elide-dev/toolchain/issues/13
+diff --git a/clang/lib/Driver/ToolChains/CommonArgs.cpp b/clang/lib/Driver/ToolChains/CommonArgs.cpp
+index 08c06951cf22..9e8fee2fedbf 100644
+--- a/clang/lib/Driver/ToolChains/CommonArgs.cpp
++++ b/clang/lib/Driver/ToolChains/CommonArgs.cpp
+@@ -1022,8 +1022,12 @@ void tools::addLTOOptions(const ToolChain &ToolChain, const ArgList &Args,
+   StringRef Linker = Args.getLastArgValue(options::OPT_fuse_ld_EQ);
+   const char *LinkerPath = Args.MakeArgString(ToolChain.GetLinkerPath());
+   const Driver &D = ToolChain.getDriver();
++  // Elide: the Linux sysroot and runtime archives are fat LTO objects, so a
++  // Linux LTO link reads their bitcode (lld --fat-lto-objects) by default.
++  // -fno-fat-lto-objects at link time restores upstream behavior.
+   const bool IsFatLTO = Args.hasFlag(options::OPT_ffat_lto_objects,
+-                                     options::OPT_fno_fat_lto_objects, false);
++                                     options::OPT_fno_fat_lto_objects,
++                                     Triple.isOSLinux());
+   const bool IsUnifiedLTO = Args.hasArg(options::OPT_funified_lto);
+ 
+   assert(!Inputs.empty() && "Must have at least one input.");
+diff --git a/clang/test/Driver/elide-fat-lto-objects-default.c b/clang/test/Driver/elide-fat-lto-objects-default.c
+new file mode 100644
+index 000000000000..8cfa7d111c28
+--- /dev/null
++++ b/clang/test/Driver/elide-fat-lto-objects-default.c
+@@ -0,0 +1,22 @@
++/// Elide: a Linux LTO link passes --fat-lto-objects to lld by default, so the
++/// fat sysroot and runtime archives contribute bitcode. -fno-fat-lto-objects
++/// opts out; non-LTO links and non-Linux targets are unchanged.
++// RUN: %clang --target=x86_64-unknown-linux-gnu --sysroot=%S/Inputs/basic_cross_linux_tree %s \
++// RUN:   -fuse-ld=lld -flto=thin -### 2>&1 | FileCheck --check-prefix=FAT %s
++// RUN: %clang --target=aarch64-unknown-linux-musl --sysroot=%S/Inputs/basic_cross_linux_tree %s \
++// RUN:   -fuse-ld=lld -flto -### 2>&1 | FileCheck --check-prefix=FAT %s
++// RUN: %clang --target=x86_64-unknown-linux-gnu --sysroot=%S/Inputs/basic_cross_linux_tree %s \
++// RUN:   -fuse-ld=lld -flto=thin -fno-fat-lto-objects -### 2>&1 | FileCheck --check-prefix=NOFAT %s
++// RUN: %clang --target=x86_64-unknown-linux-gnu --sysroot=%S/Inputs/basic_cross_linux_tree %s \
++// RUN:   -fuse-ld=lld -### 2>&1 | FileCheck --check-prefix=NOFAT %s
++// RUN: %clang --target=x86_64-unknown-freebsd -fuse-ld=lld -flto=thin -### %s 2>&1 \
++// RUN:   | FileCheck --check-prefix=NOFAT %s
++
++/// Compiles keep emitting plain (non-fat) bitcode unless -ffat-lto-objects is given.
++// RUN: %clang --target=x86_64-unknown-linux-gnu -flto=thin -### -c %s 2>&1 \
++// RUN:   | FileCheck --check-prefix=CC %s
++
++// FAT: "--fat-lto-objects"
++// NOFAT-NOT: "--fat-lto-objects"
++// CC: "-cc1"
++// CC-NOT: "-ffat-lto-objects"
