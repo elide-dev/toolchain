@@ -26,6 +26,12 @@ This avoids relaxing ccache's header/macro validation. The first build populates
 the new cache entries; full-build savings need a subsequent warm-cache run.
 CI now prints verbose ccache statistics so bypass reasons are visible.
 
+The macOS job in [the cancelled 2026.11.3 release run](https://github.com/elide-dev/toolchain/actions/runs/42304760774)
+completed before cancellation for issue #18. Cacheable calls rose from 601/4949
+(12.14%) to 4915/4944 (99.41%). This cold fill had 4799 misses; LLVM took 576 s
+versus 460 s in the baseline, so it is evidence of restored caching, not yet a
+warm-build speed measurement. All macOS bundle checks passed.
+
 ## Original local baseline
 
 Full clean build of the linux-amd64 bundle: `REQUIRE_CONTAINER_CHECKS=yes ./build.sh --clean`

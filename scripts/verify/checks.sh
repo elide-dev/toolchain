@@ -194,6 +194,18 @@ check_fat_lto() {
   rm -rf "$tmp"
   if [ -n "$bad" ]; then fail "fat LTO $t" "${bad# }"; else pass "fat LTO $t"; fi
   check_fat_lto_rust "$root" "$t"
+  check_distributed_thinlto "$root" "$t"
+}
+
+check_distributed_thinlto() {
+  local logf name="distributed ThinLTO $2"
+  logf="$(mktemp)"
+  if bash "$ROOT_DIR/scripts/verify/distributed-thinlto.sh" "$1" "$2" >"$logf" 2>&1; then
+    pass "$name"
+  else
+    fail "$name" "$(tail -8 "$logf")"
+  fi
+  rm -f "$logf"
 }
 
 # check_fat_lto_rust ROOT TRIPLE — the Rust leg of check_fat_lto (needs rustc LLVM <= the bundle's).
