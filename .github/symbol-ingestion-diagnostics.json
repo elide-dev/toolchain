@@ -1,0 +1,29 @@
+[
+  {
+    "arch": "amd64",
+    "artifact": 13302984304,
+    "debugId": "380f3924b09662ad6234d3e86d01a4cd332f22ec",
+    "sha256": "2372c05e6a5b58e43993b30f15bf0abaec50746925d8ce7debc7458ff54e9bac",
+    "memberSuffix": "/libclang.so.23.1.4-380f3924b09662ad6234d3e86d01a4cd332f22ec/libclang.so.23.1.4.debug",
+    "displayPath": "elide-toolchain-2026.10.5-dev.18067cb-linux-amd64.tar.xz!/elide-toolchain/lib/libclang.so.23.1.4",
+    "manifestSha256": "8af1ef126b9fd28cee97a66385b7c12d08b37b30e1e42230b9b1430ac3c0ab12"
+  },
+  {
+    "arch": "arm64",
+    "artifact": 13302398969,
+    "debugId": "c61512e3c02534b4db5d7df1c9cdd7472a43a6ef",
+    "sha256": "6a9e35c6e47d252567206d78f7ec0be46c327f767bdd5ec6628520ccb10aec39",
+    "memberSuffix": "/libclang.so.23.1.4-c61512e3c02534b4db5d7df1c9cdd7472a43a6ef/libclang.so.23.1.4.debug",
+    "displayPath": "elide-toolchain-2026.10.5-dev.18067cb-linux-arm64.tar.xz!/elide-toolchain/lib/libclang.so.23.1.4",
+    "manifestSha256": "2eea65bb1d6490704db22bbae8b0cd7a1e64a266f01deb2dff26a6a31e0ff31e"
+  },
+  {
+    "arch": "darwin-arm64",
+    "artifact": 13303860943,
+    "debugId": "517b7a91ae5938d0b063915d55bae0a8",
+    "sha256": "de439d57b2bc096133a099818618f3022bbfc28dafe7e28d26df44637ec9f0a9",
+    "memberSuffix": "/llvm-lto2-517b7a91ae5938d0b063915d55bae0a8/llvm-lto2.dSYM/Contents/Resources/DWARF/llvm-lto2",
+    "displayPath": "elide-toolchain-2026.10.5-dev.18067cb-darwin-arm64.tar.xz!/elide-toolchain/bin/llvm-lto2",
+    "manifestSha256": "d00ddf0b76cbbe6381c27d2426eafb108d5476455235718147f548e9dab4affb"
+  }
+]

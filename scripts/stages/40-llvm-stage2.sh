@@ -16,6 +16,9 @@ stage_main() {
   fresh_dir "$b"
   cmake -S "$ROOT_DIR/llvm/llvm" -B "$b" -G Ninja "${launcher[@]}" \
     -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_C_FLAGS_RELEASE="-O3 -DNDEBUG -g" -DCMAKE_CXX_FLAGS_RELEASE="-O3 -DNDEBUG -g" \
+    -DCMAKE_EXE_LINKER_FLAGS="-Wl,--build-id=sha1" \
+    -DCMAKE_SHARED_LINKER_FLAGS="-Wl,--build-id=sha1" -DCMAKE_MODULE_LINKER_FLAGS="-Wl,--build-id=sha1" \
     -DCMAKE_INSTALL_PREFIX="$BUNDLE_DIR" \
     -DCMAKE_C_COMPILER="$s/$t-clang" -DCMAKE_CXX_COMPILER="$s/$t-clang++" -DCMAKE_ASM_COMPILER="$s/$t-clang" \
     -DCMAKE_AR="$s/llvm-ar" -DCMAKE_RANLIB="$s/llvm-ranlib" -DCMAKE_NM="$s/llvm-nm" \

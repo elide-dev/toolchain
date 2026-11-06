@@ -20,10 +20,11 @@ stage_main() {
   fresh_dir "$b"
   cmake -S "$ROOT_DIR/llvm-propeller" -B "$b" -G Ninja "${launcher[@]}" \
     -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_C_FLAGS_RELEASE="-O3 -DNDEBUG -g" -DCMAKE_CXX_FLAGS_RELEASE="-O3 -DNDEBUG -g" \
     -DCMAKE_C_COMPILER="$s/$t-clang" -DCMAKE_CXX_COMPILER="$s/$t-clang++" \
     -DCMAKE_AR="$s/llvm-ar" -DCMAKE_RANLIB="$s/llvm-ranlib" -DCMAKE_NM="$s/llvm-nm" \
     -DCMAKE_C_FLAGS="$(arch_flags "$t")" -DCMAKE_CXX_FLAGS="$(arch_flags "$t")" \
-    -DCMAKE_EXE_LINKER_FLAGS="$deps/lib/libzstd.a $deps/lib/libz.a" \
+    -DCMAKE_EXE_LINKER_FLAGS="$deps/lib/libzstd.a $deps/lib/libz.a -Wl,--build-id=sha1" \
     -DCMAKE_PREFIX_PATH="$deps" \
     -DLLVM_DIR="$BUILD_DIR/llvm-stage2/lib/cmake/llvm" \
     -DPROPELLER_DEPS_DIR="$CACHE_DIR/propeller-deps" \

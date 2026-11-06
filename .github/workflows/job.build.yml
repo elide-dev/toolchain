@@ -3,6 +3,15 @@ name: "Job - Build"
 on:
   workflow_dispatch:
     inputs:
+      runner:
+        description: "Optional runner override for a single-platform qualification"
+        type: string
+        default: ""
+      platform:
+        description: "Platform subset for build qualification"
+        type: choice
+        default: all
+        options: [all, linux-amd64, linux-arm64, darwin-arm64]
       version:
         description: "Toolchain version (YYYY.MM.N or vYYYY.MM.N); empty = dev build"
         required: false
@@ -14,6 +23,14 @@ on:
         default: false
   workflow_call:
     inputs:
+      runner:
+        required: false
+        type: string
+        default: ""
+      platform:
+        required: false
+        type: string
+        default: all
       version:
         required: false
         type: string
@@ -31,15 +48,12 @@ permissions:
 jobs:
   build:
     name: "Bundle (${{ matrix.os }}-${{ matrix.arch }})"
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ inputs.platform != 'all' && inputs.runner || matrix.runner }}
     timeout-minutes: ${{ matrix.timeout }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { os: linux, arch: amd64, runner: linux-amd64-cipool, timeout: 720 }
-          - { os: linux, arch: arm64, runner: linux-arm64-cipool, timeout: 720 }
-          - { os: darwin, arch: arm64, runner: darwin-arm64-cipool, timeout: 720 }
+        include: ${{ fromJSON(inputs.platform == 'darwin-arm64' && '[{"os":"darwin","arch":"arm64","runner":"macos-arm64-cipool","timeout":720}]' || inputs.platform == 'linux-amd64' && '[{"os":"linux","arch":"amd64","runner":"linux-amd64-cipool","timeout":720}]' || inputs.platform == 'linux-arm64' && '[{"os":"linux","arch":"arm64","runner":"linux-arm64-cipool","timeout":720}]' || '[{"os":"linux","arch":"amd64","runner":"linux-amd64-cipool","timeout":720},{"os":"linux","arch":"arm64","runner":"linux-arm64-cipool","timeout":720},{"os":"darwin","arch":"arm64","runner":"macos-arm64-cipool","timeout":720}]') }}
     env:
       REQUIRE_CONTAINER_CHECKS: ${{ matrix.os == 'linux' && 'yes' || 'no' }}
       INPUT_VERSION: ${{ inputs.version }}
@@ -65,7 +79,10 @@ jobs:
           rm -rf glibc .git/modules/glibc
           # Discard patches from the previous build while switching revisions.
           # A reset after update alone is too late when a patched file changed upstream.
-          git submodule update --force --quiet --init --depth=1 --recursive --jobs 8
+          # Nested shallow repositories can race their shared shallow metadata.
+          # Retry serially with exactly the same pinned commits after that failure.
+          git submodule update --force --quiet --init --depth=1 --recursive --jobs 8 ||
+            git submodule update --force --quiet --init --depth=1 --recursive --jobs 1
           # Persistent runners may hold submodule work trees damaged by earlier jobs (tracked files
           # deleted or modified); `submodule update` does not repair them when HEAD already matches.
           git submodule foreach --recursive --quiet 'git reset -q --hard && git clean -qffdx'
@@ -132,7 +149,17 @@ jobs:
           name: elide-toolchain-${{ matrix.os }}-${{ matrix.arch }}
           compression-level: 0
           overwrite: true
-          path: dist/*
+          path: |
+            dist/*
+            !dist/*-symbols/**
+      - name: "Artifact: Private native debug bundle"
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: native-debug-toolchain-${{ matrix.os }}-${{ matrix.arch }}
+          compression-level: 6
+          path: dist/*-symbols/
+          if-no-files-found: error
+          retention-days: 90
       - name: "Artifact: Build logs"
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
