@@ -103,7 +103,7 @@ def shim_backend(triple):
 
 
 def features(env, host_os, triples):
-    """Propeller, DeduBB, MemProf and libelidealloc-shim (spec 2026-10-05-memprof-dedubb)."""
+    """Propeller, DeduBB, MemProf, libelidealloc-shim (spec 2026-10-05-memprof-dedubb) and fat LTO."""
     f = {
         "memprof": {
             "runtimeTargets": [t for t in triples if t == "x86_64-unknown-linux-gnu"],
@@ -118,6 +118,12 @@ def features(env, host_os, triples):
             "allocToken": False,
         },
     }
+    linux = [t for t in triples if "-linux-" in t]
+    if linux:
+        # Issue #13: the driver passes lld --fat-lto-objects on Linux -flto links, so the fat
+        # archives join LTO. Links that are LTO without -flto (rustc) need linkFlag themselves.
+        f["fatLto"] = {"targets": linux, "driverDefault": True, "linkFlag": "-Wl,--fat-lto-objects",
+                       "optOut": "-fno-fat-lto-objects"}
     if host_os == "linux" and yes("BUILD_PROPELLER"):
         f["propeller"] = {
             "tool": "bin/generate_propeller_profiles",

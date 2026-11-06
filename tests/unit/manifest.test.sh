@@ -25,6 +25,8 @@ assert_eq "$(q 'd["features"]["elideallocShim"]["backends"]["x86_64-unknown-linu
 assert_eq "$(q 'd["features"]["elideallocShim"]["abi"]')" "1"
 assert_eq "$(q 'd["features"]["propeller"]["tool"]')" "bin/generate_propeller_profiles"
 assert_eq "$(q 'd["features"]["dedubb"]["codegen"]')" "True"
+assert_eq "$(q 'd["features"]["fatLto"]["driverDefault"], d["features"]["fatLto"]["linkFlag"]')" "True -Wl,--fat-lto-objects"
+assert_eq "$(q 'all("-linux-" in t for t in d["features"]["fatLto"]["targets"])')" "True"
 assert_eq "$(BUILD_PROPELLER=no LLVM_DEDUBB=no MUSL_USE_MIMALLOC=no python3 "$ROOT_DIR/scripts/gen-manifest.py" manifest | python3 -c 'import json,sys; f=json.load(sys.stdin)["features"]; print("propeller" in f, "dedubb" in f, f["elideallocShim"]["backends"]["x86_64-unknown-linux-musl"])')" "False False forward"
 
 s="$(python3 "$ROOT_DIR/scripts/gen-manifest.py" sbom)"

@@ -7,7 +7,7 @@
 #   elide-toolchain version
 #   elide-toolchain env [--target TRIPLE] [--static] [--sanitizer SAN] [--format sh|github|json]
 #   elide-toolchain flags --target TRIPLE MODE... [--format sh|github|json]
-#       MODE: propeller-baseline | propeller-use=CC,LD | dedubb-apply=FILE |
+#       MODE: lto | propeller-baseline | propeller-use=CC,LD | dedubb-apply=FILE |
 #             memprof-instrument | memprof-use=FILE   (prints ELIDE_{C,CXX,LD,RUST}FLAGS)
 #   elide-toolchain sanitizers [--target TRIPLE]
 #   elide-toolchain addon install sanitizer-SAN [--from FILE|URL] [--no-verify]
@@ -135,8 +135,8 @@ cmd_env() {
 
 uniq_words() { printf '%s\n' "$1" | tr ' ' '\n' | awk 'NF && !seen[$0]++' | tr '\n' ' ' | sed 's/ $//'; }
 
-# flags --target T MODE... — consumer flags for Propeller, DeduBB and MemProf (spec §3.5, §4.3,
-# §6.2). Modes combine, e.g. `propeller-use=cc.txt,ld.txt dedubb-apply=dedubb.txt`.
+# flags --target T MODE... — consumer flags for ThinLTO, Propeller, DeduBB and MemProf (spec §3.5,
+# §4.3, §6.2). Modes combine, e.g. `propeller-use=cc.txt,ld.txt dedubb-apply=dedubb.txt`.
 cmd_flags() {
   target="" fmt=sh modes="" cf="" lf="" rf=""
   while [ $# -gt 0 ]; do
@@ -151,12 +151,15 @@ cmd_flags() {
   done
   [ -n "$target" ] || die "flags: --target is required"
   has_target "$target" || die "target $target is not in this bundle (have: $(list_targets | tr '\n' ' '))"
-  [ -n "$modes" ] || die "flags: give a mode: propeller-baseline, propeller-use=CC,LD, dedubb-apply=FILE, memprof-instrument, memprof-use=FILE"
+  [ -n "$modes" ] || die "flags: give a mode: lto, propeller-baseline, propeller-use=CC,LD, dedubb-apply=FILE, memprof-instrument, memprof-use=FILE"
   elf_only() { case $target in *-linux-*) ;; *) die "$1 needs ELF (Linux targets only; not $target)" ;; esac; }
   base_cf="-flto=thin -funique-internal-linkage-names -fbasic-block-address-map"
   base_lf="-flto=thin -fuse-ld=lld -Wl,--lto-basic-block-address-map -Wl,-z,keep-text-section-prefix"
   for m in $modes; do
     case $m in
+      lto)
+        # ThinLTO with the bundle's archives in the link (fat-object bitcode is added below).
+        cf="$cf -flto=thin"; lf="$lf -flto=thin -fuse-ld=lld" ;;
       propeller-baseline)
         elf_only "$m"; cf="$cf $base_cf"; lf="$lf $base_lf" ;;
       propeller-use=*)
@@ -185,12 +188,21 @@ cmd_flags() {
       *) die "flags: unknown mode: $m" ;;
     esac
   done
-  # Linux archives are fat: without -ffat-lto-objects (lld --fat-lto-objects) an LTO link would take
-  # their native code and leave components and libc out of the profile-driven optimization.
+  # Linux archives are fat: without lld --fat-lto-objects an LTO link would take their native code
+  # and leave components and libc out of the profile-driven optimization. The bundle clang adds it
+  # to every Linux -flto link; the explicit flag keeps these flags correct with other clangs.
   case "$target:$lf " in *-linux-*:*" -flto=thin "*) lf="$lf -ffat-lto-objects" ;; esac
   cf=$(uniq_words "$cf"); lf=$(uniq_words "$lf")
   rf="-Clinker-plugin-lto -Clinker=$ROOT/bin/$target-clang $rf"
-  for w in $lf; do case $w in -flto=thin) ;; *) rf="$rf -Clink-arg=$w" ;; esac; done
+  # rustc never passes -flto to its linker, so the clang driver is not in LTO mode and ignores
+  # -ffat-lto-objects: hand lld the flag directly. lld still LTO-links rustc's bitcode objects.
+  for w in $lf; do
+    case $w in
+      -flto=thin) ;;
+      -ffat-lto-objects) rf="$rf -Clink-arg=-Wl,--fat-lto-objects" ;;
+      *) rf="$rf -Clink-arg=$w" ;;
+    esac
+  done
   add ELIDE_CFLAGS "$cf"
   add ELIDE_CXXFLAGS "$cf"
   add ELIDE_LDFLAGS "$lf"
