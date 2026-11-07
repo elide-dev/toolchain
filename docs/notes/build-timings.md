@@ -23,7 +23,7 @@ Compiling the same source without PCH gave a cache miss followed by a direct hit
 Starting with 2026.11.3, LLVM builds with a compiler launcher set
 `CMAKE_DISABLE_PRECOMPILE_HEADERS=ON`; uncached builds retain upstream defaults.
 This avoids relaxing ccache's header/macro validation. The first build populates
-the new cache entries; full-build savings need a subsequent warm-cache run.
+the new cache entries; subsequent builds can reuse them.
 CI now prints verbose ccache statistics so bypass reasons are visible.
 
 The macOS job in [the cancelled 2026.11.3 release run](https://github.com/elide-dev/toolchain/actions/runs/42304760774)
@@ -31,6 +31,40 @@ completed before cancellation for issue #18. Cacheable calls rose from 601/4949
 (12.14%) to 4915/4944 (99.41%). This cold fill had 4799 misses; LLVM took 576 s
 versus 460 s in the baseline, so it is evidence of restored caching, not yet a
 warm-build speed measurement. All macOS bundle checks passed.
+
+The macOS job in [the 2026.11.4 release run](https://github.com/elide-dev/toolchain/actions/runs/42309093316)
+then demonstrated warm-cache savings on the same 16-CPU runner class:
+
+| Stage | 2026.11.2 | 2026.11.4 |
+|---|---:|---:|
+| LLVM | 460 s | 74 s |
+| Components | 30 s | 38 s |
+| Package | 84 s | 82 s |
+| Verify | 60 s | 60 s |
+
+The LLVM stage was 84% faster (6.2x); all toolchain stages together took about
+4m19s. ccache reported 4915/4944 cacheable calls (99.41%), with 4510 hits
+(91.76% of cacheable calls) and 405 misses. Bundle verification passed with zero
+failures. These are observed CI timings, not a controlled benchmark; cold-cache
+and Linux builds have different costs.
+
+The same release's Linux builds were mostly cache fills:
+
+| Measurement | linux-amd64 | linux-arm64 |
+|---|---:|---:|
+| Cacheable calls | 9478/9593 (98.80%) | 7751/7800 (99.37%) |
+| Hits / cacheable calls | 2495 (26.32%) | 1980 (25.55%) |
+| Misses | 6983 | 5771 |
+| Shipped LLVM | 1777 s | 1313 s |
+| Components | 348 s | 362 s |
+| Sanitizer add-ons | 503 s | — |
+| Package | 452 s | 231 s |
+| Verify | 294 s | 179 s |
+
+These runs do not demonstrate a Linux speedup: shipped LLVM took longer than
+the baseline on both architectures. Both glibc and musl distributed ThinLTO and
+SQLite authorizer checks passed, including authorizer checks for all three
+amd64 sanitizer add-ons; verification reported zero failures on both platforms.
 
 ## Original local baseline
 
