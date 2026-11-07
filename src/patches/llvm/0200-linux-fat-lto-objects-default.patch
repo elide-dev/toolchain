@@ -3,10 +3,10 @@
 #   Tracked in https://github.com/elide-dev/toolchain/issues/13
 #   and https://github.com/elide-dev/toolchain/issues/18
 diff --git a/clang/lib/Driver/ToolChains/CommonArgs.cpp b/clang/lib/Driver/ToolChains/CommonArgs.cpp
-index 08c06951cf22..41ff8f891e37 100644
+index 08c06951cf22..45ea361985f5 100644
 --- a/clang/lib/Driver/ToolChains/CommonArgs.cpp
 +++ b/clang/lib/Driver/ToolChains/CommonArgs.cpp
-@@ -1013,6 +1013,24 @@ void tools::addDTLTOOptions(const ToolChain &ToolChain, const ArgList &Args,
+@@ -1013,6 +1013,38 @@ void tools::addDTLTOOptions(const ToolChain &ToolChain, const ArgList &Args,
    }
  }
 
@@ -14,8 +14,22 @@ index 08c06951cf22..41ff8f891e37 100644
 +// files. Recognize both lld's spelling and its plugin-opt alias, forwarded through
 +// either -Wl, or -Xlinker. Do not claim the arguments: the linker still needs them.
 +static bool isThinLTOIndexOnly(const ArgList &Args) {
++  bool IsPluginValue = false;
 +  for (const Arg *A : Args.filtered(options::OPT_Wl_COMMA, options::OPT_Xlinker)) {
 +    for (StringRef Value : A->getValues()) {
++      // lld normalizes "-plugin-opt value" to "-plugin-opt=value". Keep
++      // this state across driver arguments, including mixed forwarding forms.
++      if (IsPluginValue) {
++        IsPluginValue = false;
++        if (Value == "thinlto-index-only" ||
++            Value.starts_with("thinlto-index-only="))
++          return true;
++        continue;
++      }
++      if (Value == "-plugin-opt" || Value == "--plugin-opt") {
++        IsPluginValue = true;
++        continue;
++      }
 +      if (!Value.consume_front("-"))
 +        continue;
 +      Value.consume_front("-");
@@ -31,7 +45,7 @@ index 08c06951cf22..41ff8f891e37 100644
  void tools::addLTOOptions(const ToolChain &ToolChain, const ArgList &Args,
                            ArgStringList &CmdArgs, const InputInfo &Output,
                            const InputInfoList &Inputs, bool IsThinLTO) {
-@@ -1022,8 +1040,14 @@ void tools::addLTOOptions(const ToolChain &ToolChain, const ArgList &Args,
+@@ -1022,8 +1054,14 @@ void tools::addLTOOptions(const ToolChain &ToolChain, const ArgList &Args,
    StringRef Linker = Args.getLastArgValue(options::OPT_fuse_ld_EQ);
    const char *LinkerPath = Args.MakeArgString(ToolChain.GetLinkerPath());
    const Driver &D = ToolChain.getDriver();
@@ -49,10 +63,10 @@ index 08c06951cf22..41ff8f891e37 100644
    assert(!Inputs.empty() && "Must have at least one input.");
 diff --git a/clang/test/Driver/elide-fat-lto-objects-default.c b/clang/test/Driver/elide-fat-lto-objects-default.c
 new file mode 100644
-index 000000000000..37e9f6862bec
+index 000000000000..a0e40e028d09
 --- /dev/null
 +++ b/clang/test/Driver/elide-fat-lto-objects-default.c
-@@ -0,0 +1,51 @@
+@@ -0,0 +1,75 @@
 +/// Elide: a Linux LTO link passes --fat-lto-objects to lld by default, so the
 +/// fat sysroot and runtime archives contribute bitcode. -fno-fat-lto-objects
 +/// opts out; index-only links, non-LTO links and non-Linux targets are unchanged.
@@ -81,18 +95,42 @@ index 000000000000..37e9f6862bec
 +// RUN:   -Xlinker -plugin-opt=thinlto-index-only=out.index 2>&1 | FileCheck --check-prefix=NOFAT %s
 +// RUN: %clang --target=aarch64-unknown-linux-gnu -fuse-ld=lld -flto=thin -### %s \
 +// RUN:   -Xlinker --thinlto-index-only 2>&1 | FileCheck --check-prefix=NOFAT %s
++/// Bazel also passes plugin options as separate linker arguments.
++// RUN: %clang --target=x86_64-unknown-linux-gnu -fuse-ld=lld -flto=thin -### %s \
++// RUN:   -Wl,-plugin-opt,thinlto-index-only=out.index,-plugin-opt,thinlto-emit-imports-files 2>&1 | FileCheck --check-prefix=NOFAT %s
++// RUN: %clang --target=aarch64-unknown-linux-musl -fuse-ld=lld -flto=thin -### %s \
++// RUN:   -Wl,--plugin-opt,thinlto-index-only 2>&1 | FileCheck --check-prefix=NOFAT %s
++// RUN: %clang --target=x86_64-unknown-linux-gnu -fuse-ld=lld -flto=thin -### %s \
++// RUN:   -Xlinker -plugin-opt -Xlinker thinlto-index-only=out.index 2>&1 | FileCheck --check-prefix=NOFAT %s
++// RUN: %clang --target=aarch64-unknown-linux-gnu -fuse-ld=lld -flto=thin -### %s \
++// RUN:   -Xlinker --plugin-opt -Xlinker thinlto-index-only 2>&1 | FileCheck --check-prefix=NOFAT %s
++// RUN: %clang --target=x86_64-unknown-linux-gnu -fuse-ld=lld -flto=thin -### %s \
++// RUN:   -Wl,-plugin-opt -Wl,thinlto-index-only=out.index 2>&1 | FileCheck --check-prefix=NOFAT %s
++// RUN: %clang --target=x86_64-unknown-linux-gnu -fuse-ld=lld -flto=thin -### %s \
++// RUN:   -Wl,-plugin-opt -Xlinker thinlto-index-only=out.index 2>&1 | FileCheck --check-prefix=NOFAT %s
++// RUN: %clang --target=x86_64-unknown-linux-gnu -fuse-ld=lld -flto=thin -### %s \
++// RUN:   -Xlinker -plugin-opt -Wl,thinlto-index-only=out.index 2>&1 | FileCheck --check-prefix=NOFAT %s
 +/// Driver response files are expanded before deciding the default.
 +// RUN: echo '-fuse-ld=lld -flto=thin -Wl,--thinlto-index-only=out.index' > %t.rsp
++// RUN: %clang --target=x86_64-unknown-linux-gnu @%t.rsp -### %s 2>&1 | FileCheck --check-prefix=NOFAT %s
++// RUN: echo '-fuse-ld=lld -flto=thin -Wl,-plugin-opt,thinlto-index-only=out.index' > %t.rsp
 +// RUN: %clang --target=x86_64-unknown-linux-gnu @%t.rsp -### %s 2>&1 | FileCheck --check-prefix=NOFAT %s
 +/// Explicit opt-in still wins, even for index-only links.
 +// RUN: %clang --target=x86_64-unknown-linux-gnu -fuse-ld=lld -flto=thin -### %s \
 +// RUN:   -Wl,--thinlto-index-only -ffat-lto-objects 2>&1 | FileCheck --check-prefix=FAT %s
++// RUN: %clang --target=x86_64-unknown-linux-gnu -fuse-ld=lld -flto=thin -### %s \
++// RUN:   -Wl,-plugin-opt,thinlto-index-only=out.index -ffat-lto-objects 2>&1 | FileCheck --check-prefix=FAT %s
 +/// Emitting index/import files during an in-process link must retain the default.
 +// RUN: %clang --target=x86_64-unknown-linux-gnu -fuse-ld=lld -flto=thin -### %s \
 +// RUN:   -Wl,--thinlto-emit-index-files,--thinlto-emit-imports-files 2>&1 | FileCheck --check-prefix=FAT %s
 +/// A path containing the option's name is not the option.
 +// RUN: %clang --target=x86_64-unknown-linux-gnu -fuse-ld=lld -flto=thin -### %s \
 +// RUN:   -Wl,-rpath,thinlto-index-only 2>&1 | FileCheck --check-prefix=FAT %s
++/// A plugin value is consumed once; unrelated plugin options retain the default.
++// RUN: %clang --target=x86_64-unknown-linux-gnu -fuse-ld=lld -flto=thin -### %s \
++// RUN:   -Wl,-plugin-opt,thinlto-emit-imports-files,-rpath,thinlto-index-only 2>&1 | FileCheck --check-prefix=FAT %s
++// RUN: %clang --target=x86_64-unknown-linux-gnu -fuse-ld=lld -flto=thin -### %s \
++// RUN:   -Wl,-plugin-opt,-plugin-opt,thinlto-index-only 2>&1 | FileCheck --check-prefix=FAT %s
 +
 +/// Compiles keep emitting plain (non-fat) bitcode unless -ffat-lto-objects is given.
 +// RUN: %clang --target=x86_64-unknown-linux-gnu -flto=thin -### -c %s 2>&1 \

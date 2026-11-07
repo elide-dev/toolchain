@@ -80,7 +80,12 @@ Issue #18 exposed that distributed index-only links cannot import archive-member
 paths into Bazel's backend sandboxes. Since 2026.11.4 the default is disabled when
 `thinlto-index-only` (with or without an output path) is forwarded through `-Wl,`
 or `-Xlinker`, using either lld's direct spelling or its `plugin-opt` alias.
+2026.11.4 missed split plugin options such as Bazel's
+`-Wl,-plugin-opt,thinlto-index-only=path`. Since 2026.11.5 the driver also
+recognizes separate plugin values across `-Wl,`, `-Xlinker`, and mixed forwarding
+forms, matching lld's plugin-option normalization.
 Explicit `-ffat-lto-objects` still opts in; `-fno-fat-lto-objects` opts out.
 The driver regression covers both forwarding forms and architectures. Stage 95's
 distributed ThinLTO regression exercises actual imports, isolated backends, a
-final executable, both opt-outs, and an explicit fat-LTO negative control.
+final-link response file with Bazel's prefix/suffix rewriting, executable and
+shared-library links, both opt-outs, and an explicit fat-LTO negative control.
