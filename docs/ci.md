@@ -22,7 +22,7 @@ changes, including the main push after merge. Release tags always build normally
 
 Fast shell/Python/action checks run on GitHub-hosted Ubuntu. Native Linux amd64,
 Linux arm64, and macOS arm64 jobs use the existing `*-cipool` runners. Fork code
-never executes on that pool. A non-Markdown fork PR's Gate fails until maintainers
+never executes on that pool. A native-input fork PR's Gate fails until maintainers
 review and promote it to a branch in this repository for native validation.
 Do not change this to `pull_request_target` plus a PR checkout. Same-repository
 write access is therefore a trust boundary; persistent runners need operational

@@ -100,7 +100,7 @@ The dependency-review job cannot discover every native dependency from shell pin
 
 Fork PRs run fast tests on GitHub-hosted runners. Native changes must be reviewed
 and promoted to a branch in this repository for the full build and action E2E
-matrix before merge. The Gate deliberately fails for non-Markdown fork changes;
+matrix before merge. The Gate deliberately fails for native-input fork changes;
 never use `pull_request_target` to execute untrusted PR code on persistent runners.
 
 ## First-party source notices
