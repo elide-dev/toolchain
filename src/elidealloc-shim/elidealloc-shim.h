@@ -1,3 +1,5 @@
+// Copyright the Elide Toolchain contributors.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 /*
  * elidealloc-shim.h: allocation-hint partitioning for elide-toolchain consumers (ABI v1).
  *

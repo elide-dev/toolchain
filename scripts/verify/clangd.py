@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright the Elide Toolchain contributors.
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 """Exercise the packaged clangd over LSP, using only the bundle's compiler driver."""
 import json
 import os

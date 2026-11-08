@@ -1,3 +1,5 @@
+// Copyright the Elide Toolchain contributors.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 /* Uninstrumented host (stand-in for the JVM): dlopen a sanitized library and call into it. */
 #include <dlfcn.h>
 #include <stdio.h>

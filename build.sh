@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright the Elide Toolchain contributors.
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 # Build an elide-toolchain bundle for the host OS/arch.
 # Spec: docs/superpowers/specs/2026-10-04-universal-native-toolchain-design.md
 set -euo pipefail

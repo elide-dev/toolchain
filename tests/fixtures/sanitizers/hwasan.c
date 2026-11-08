@@ -1,3 +1,5 @@
+// Copyright the Elide Toolchain contributors.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 /* HWASan trigger: out-of-bounds write (tag mismatch). */
 #include <stdlib.h>
 

@@ -1,4 +1,6 @@
 #!/bin/sh
+# Copyright the Elide Toolchain contributors.
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 # elide-toolchain — locate and configure an Elide toolchain bundle.
 #
 # Usage:

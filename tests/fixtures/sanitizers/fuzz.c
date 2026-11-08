@@ -1,3 +1,5 @@
+// Copyright the Elide Toolchain contributors.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 /* libFuzzer smoke target (-fsanitize=fuzzer,address); run with -runs=N, must not crash. */
 #include <stddef.h>
 #include <stdint.h>

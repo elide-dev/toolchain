@@ -1,0 +1,50 @@
+name: Merge queue
+
+on:
+  merge_group:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: "ci-queue-${{ github.event.number || github.ref }}"
+  cancel-in-progress: false
+
+jobs:
+  changes:
+    uses: ./.github/workflows/check.changes.yml
+  unit:
+    uses: ./.github/workflows/job.unit.yml
+  build:
+    needs: [changes, unit]
+    if: needs.changes.outputs.full == 'true'
+    uses: ./.github/workflows/job.build.yml
+    with:
+      sanitizer-addons: true
+  e2e:
+    needs: build
+    uses: ./.github/workflows/job.action-e2e.yml
+    with:
+      sanitizer-addons: true
+  gate:
+    name: Gate
+    if: always()
+    needs: [changes, unit, build, e2e]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require expected checks
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+          FULL: ${{ needs.changes.outputs.full }}
+          FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+        run: |
+          if [ "$FULL" = false ]; then
+            jq -e '.changes.result == "success" and .unit.result == "success" and
+              ([.build, .e2e] | all(.result == "skipped"))' <<< "$RESULTS"
+          elif [ "$FORK" = true ]; then
+            echo '::error::Native validation requires a reviewed branch in this repository; fork code cannot run on the persistent runner pool.'
+            exit 1
+          else
+            jq -e 'all(.[]; .result == "success")' <<< "$RESULTS"
+          fi

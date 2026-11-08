@@ -1,3 +1,5 @@
+# Copyright the Elide Toolchain contributors.
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 # shellcheck shell=bash
 # SQLCipher (static), installed under <prefix>/sqlcipher so it never shadows SQLite.
 build_sqlcipher() {

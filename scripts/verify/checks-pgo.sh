@@ -1,3 +1,5 @@
+# Copyright the Elide Toolchain contributors.
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 # shellcheck shell=bash
 # Feature checks for Propeller, DeduBB, MemProf and libelidealloc-shim
 # (docs/superpowers/specs/2026-10-05-memprof-dedubb-design.md §8). Sourced by checks.sh; uses its

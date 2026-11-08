@@ -1,0 +1,37 @@
+name: Repository hygiene
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  hygiene:
+    name: Repository hygiene
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: jdx/mise-action@f5be966e4a917d54244728e6a5fdcd1d93a35e6c # v5.2.6
+        with:
+          version: '2026.11.1'
+          install_args: --locked actionlint shellcheck
+      - name: Check contribution sign-offs
+        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+        env:
+          DCO_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          DCO_HEAD: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
+        run: python3 scripts/check-dco.py
+      - run: mise run lint
+      - run: python3 -m unittest discover -s tests -p 'test_*.py'

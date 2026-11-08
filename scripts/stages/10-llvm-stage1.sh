@@ -1,3 +1,5 @@
+# Copyright the Elide Toolchain contributors.
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 # shellcheck shell=bash
 # Stage 10. Linux: the stage-1 (bootstrap) clang/lld, not shipped: by default the pinned official
 # LLVM $LLVM_VERSION release (STAGE1_SOURCE=prebuilt), else built with the host compiler

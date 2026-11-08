@@ -1,3 +1,5 @@
+# Copyright the Elide Toolchain contributors.
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 # shellcheck shell=bash
 # Flags for target code: cflags profile + cflags.local overlay, filtered for the triple's
 # floors, followed by -march/-mtune (last one wins). Toolchain-layer builds (libc, runtimes,

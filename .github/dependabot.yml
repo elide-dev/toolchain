@@ -1,0 +1,21 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: daily
+    groups:
+      actions:
+        patterns: ['*']
+  - package-ecosystem: bun
+    directory: /action
+    schedule:
+      interval: weekly
+    groups:
+      action:
+        patterns: ['*']
+  - package-ecosystem: gitsubmodule
+    directory: /
+    schedule:
+      interval: weekly
+    # Every gitlink update must also update versions.env and pass check-versions.sh.

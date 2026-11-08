@@ -1,0 +1,616 @@
+{
+  "passing": {
+    "description_good": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Basics"
+    },
+    "interact": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Basics"
+    },
+    "contribution": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Basics"
+    },
+    "contribution_requirements": {
+      "category": "SHOULD",
+      "na_allowed": false,
+      "group": "Basics"
+    },
+    "floss_license": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Basics"
+    },
+    "floss_license_osi": {
+      "category": "SUGGESTED",
+      "na_allowed": false,
+      "group": "Basics"
+    },
+    "license_location": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Basics"
+    },
+    "documentation_basics": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Basics"
+    },
+    "documentation_interface": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Basics"
+    },
+    "sites_https": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Basics"
+    },
+    "discussion": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Basics"
+    },
+    "english": {
+      "category": "SHOULD",
+      "na_allowed": false,
+      "group": "Basics"
+    },
+    "maintained": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Basics"
+    },
+    "repo_public": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Change Control"
+    },
+    "repo_track": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Change Control"
+    },
+    "repo_interim": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Change Control"
+    },
+    "repo_distributed": {
+      "category": "SUGGESTED",
+      "na_allowed": false,
+      "group": "Change Control"
+    },
+    "version_unique": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Change Control"
+    },
+    "version_semver": {
+      "category": "SUGGESTED",
+      "na_allowed": false,
+      "group": "Change Control"
+    },
+    "version_tags": {
+      "category": "SUGGESTED",
+      "na_allowed": false,
+      "group": "Change Control"
+    },
+    "release_notes": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Change Control"
+    },
+    "release_notes_vulns": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Change Control"
+    },
+    "report_process": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Reporting"
+    },
+    "report_tracker": {
+      "category": "SHOULD",
+      "na_allowed": false,
+      "group": "Reporting"
+    },
+    "report_responses": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Reporting"
+    },
+    "enhancement_responses": {
+      "category": "SHOULD",
+      "na_allowed": false,
+      "group": "Reporting"
+    },
+    "report_archive": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Reporting"
+    },
+    "vulnerability_report_process": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Reporting"
+    },
+    "vulnerability_report_private": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Reporting"
+    },
+    "vulnerability_report_response": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Reporting"
+    },
+    "build": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Quality"
+    },
+    "build_common_tools": {
+      "category": "SUGGESTED",
+      "na_allowed": true,
+      "group": "Quality"
+    },
+    "build_floss_tools": {
+      "category": "SHOULD",
+      "na_allowed": true,
+      "group": "Quality"
+    },
+    "test": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Quality"
+    },
+    "test_invocation": {
+      "category": "SHOULD",
+      "na_allowed": false,
+      "group": "Quality"
+    },
+    "test_most": {
+      "category": "SUGGESTED",
+      "na_allowed": false,
+      "group": "Quality"
+    },
+    "test_continuous_integration": {
+      "category": "SUGGESTED",
+      "na_allowed": false,
+      "group": "Quality"
+    },
+    "test_policy": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Quality"
+    },
+    "tests_are_added": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Quality"
+    },
+    "tests_documented_added": {
+      "category": "SUGGESTED",
+      "na_allowed": false,
+      "group": "Quality"
+    },
+    "warnings": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Quality"
+    },
+    "warnings_fixed": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Quality"
+    },
+    "warnings_strict": {
+      "category": "SUGGESTED",
+      "na_allowed": true,
+      "group": "Quality"
+    },
+    "know_secure_design": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Security"
+    },
+    "know_common_errors": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Security"
+    },
+    "crypto_published": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Security"
+    },
+    "crypto_call": {
+      "category": "SHOULD",
+      "na_allowed": true,
+      "group": "Security"
+    },
+    "crypto_floss": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Security"
+    },
+    "crypto_keylength": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Security"
+    },
+    "crypto_working": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Security"
+    },
+    "crypto_weaknesses": {
+      "category": "SHOULD",
+      "na_allowed": true,
+      "group": "Security"
+    },
+    "crypto_pfs": {
+      "category": "SHOULD",
+      "na_allowed": true,
+      "group": "Security"
+    },
+    "crypto_password_storage": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Security"
+    },
+    "crypto_random": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Security"
+    },
+    "delivery_mitm": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Security"
+    },
+    "delivery_unsigned": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Security"
+    },
+    "vulnerabilities_fixed_60_days": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Security"
+    },
+    "vulnerabilities_critical_fixed": {
+      "category": "SHOULD",
+      "na_allowed": false,
+      "group": "Security"
+    },
+    "no_leaked_credentials": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Security"
+    },
+    "static_analysis": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Analysis"
+    },
+    "static_analysis_common_vulnerabilities": {
+      "category": "SUGGESTED",
+      "na_allowed": true,
+      "group": "Analysis"
+    },
+    "static_analysis_fixed": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Analysis"
+    },
+    "static_analysis_often": {
+      "category": "SUGGESTED",
+      "na_allowed": true,
+      "group": "Analysis"
+    },
+    "dynamic_analysis": {
+      "category": "SUGGESTED",
+      "na_allowed": false,
+      "group": "Analysis"
+    },
+    "dynamic_analysis_unsafe": {
+      "category": "SUGGESTED",
+      "na_allowed": true,
+      "group": "Analysis"
+    },
+    "dynamic_analysis_enable_assertions": {
+      "category": "SUGGESTED",
+      "na_allowed": false,
+      "group": "Analysis"
+    },
+    "dynamic_analysis_fixed": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Analysis"
+    }
+  },
+  "silver": {
+    "achieve_passing": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Basics"
+    },
+    "contribution_requirements": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Basics"
+    },
+    "dco": {
+      "category": "SHOULD",
+      "na_allowed": false,
+      "group": "Basics"
+    },
+    "governance": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Basics"
+    },
+    "code_of_conduct": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Basics"
+    },
+    "roles_responsibilities": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Basics"
+    },
+    "access_continuity": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Basics"
+    },
+    "bus_factor": {
+      "category": "SHOULD",
+      "na_allowed": false,
+      "group": "Basics"
+    },
+    "documentation_roadmap": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Basics"
+    },
+    "documentation_architecture": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Basics"
+    },
+    "documentation_security": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Basics"
+    },
+    "documentation_quick_start": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Basics"
+    },
+    "documentation_current": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Basics"
+    },
+    "documentation_achievements": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Basics"
+    },
+    "accessibility_best_practices": {
+      "category": "SHOULD",
+      "na_allowed": true,
+      "group": "Basics"
+    },
+    "internationalization": {
+      "category": "SHOULD",
+      "na_allowed": true,
+      "group": "Basics"
+    },
+    "sites_password_security": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Basics"
+    },
+    "maintenance_or_update": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Change Control"
+    },
+    "report_tracker": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Reporting"
+    },
+    "vulnerability_report_credit": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Reporting"
+    },
+    "vulnerability_response_process": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Reporting"
+    },
+    "coding_standards": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Quality"
+    },
+    "coding_standards_enforced": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Quality"
+    },
+    "build_standard_variables": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Quality"
+    },
+    "build_preserve_debug": {
+      "category": "SHOULD",
+      "na_allowed": true,
+      "group": "Quality"
+    },
+    "build_non_recursive": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Quality"
+    },
+    "build_repeatable": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Quality"
+    },
+    "installation_common": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Quality"
+    },
+    "installation_standard_variables": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Quality"
+    },
+    "installation_development_quick": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Quality"
+    },
+    "external_dependencies": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Quality"
+    },
+    "dependency_monitoring": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Quality"
+    },
+    "updateable_reused_components": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Quality"
+    },
+    "interfaces_current": {
+      "category": "SHOULD",
+      "na_allowed": true,
+      "group": "Quality"
+    },
+    "automated_integration_testing": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Quality"
+    },
+    "regression_tests_added50": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Quality"
+    },
+    "test_statement_coverage80": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Quality"
+    },
+    "test_policy_mandated": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Quality"
+    },
+    "tests_documented_added": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Quality"
+    },
+    "warnings_strict": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Quality"
+    },
+    "implement_secure_design": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Security"
+    },
+    "crypto_weaknesses": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Security"
+    },
+    "crypto_algorithm_agility": {
+      "category": "SHOULD",
+      "na_allowed": true,
+      "group": "Security"
+    },
+    "crypto_credential_agility": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Security"
+    },
+    "crypto_used_network": {
+      "category": "SHOULD",
+      "na_allowed": true,
+      "group": "Security"
+    },
+    "crypto_tls12": {
+      "category": "SHOULD",
+      "na_allowed": true,
+      "group": "Security"
+    },
+    "crypto_certificate_verification": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Security"
+    },
+    "crypto_verification_private": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Security"
+    },
+    "signed_releases": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Security"
+    },
+    "version_tags_signed": {
+      "category": "SUGGESTED",
+      "na_allowed": false,
+      "group": "Security"
+    },
+    "input_validation": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Security"
+    },
+    "hardening": {
+      "category": "SHOULD",
+      "na_allowed": true,
+      "group": "Security"
+    },
+    "assurance_case": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Security"
+    },
+    "static_analysis_common_vulnerabilities": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Analysis"
+    },
+    "dynamic_analysis_unsafe": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Analysis"
+    }
+  }
+}

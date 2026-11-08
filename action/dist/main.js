@@ -21698,7 +21698,6 @@ class RetryHelper {
 }
 
 // node_modules/@actions/tool-cache/lib/tool-cache.js
-var __dirname = "/home/sam/workspace/toolchains/native/action/node_modules/@actions/tool-cache/lib";
 var __awaiter8 = function(thisArg, _arguments, P, generator) {
   function adopt(value) {
     return value instanceof P ? value : new P(function(resolve) {

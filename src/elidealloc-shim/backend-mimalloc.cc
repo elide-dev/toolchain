@@ -1,3 +1,5 @@
+// Copyright the Elide Toolchain contributors.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 // mimalloc backend (#1): partition heaps are mimalloc 3.x first-class heaps (allocate and free
 // from any thread, separate pages), each bound to an exclusive arena when reserve_mb > 0, so
 // ownership is an arena-range check. musl: mimalloc is libc's allocator (libc.a's mimalloc.o);

@@ -1,3 +1,5 @@
+# Copyright the Elide Toolchain contributors.
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 # shellcheck shell=bash
 # Stage 45: llvm-propeller's generate_propeller_profiles (Propeller layout profiles and DeduBB
 # directives), linked against the stage-2 LLVM build tree's static libraries with the stage-1

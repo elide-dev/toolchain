@@ -1,3 +1,5 @@
+// Copyright the Elide Toolchain contributors.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 // core.cc: libelidealloc-shim frontend: hint/token policy, partition table, configuration,
 // statistics and the public C API. Allocator-agnostic: all allocation goes through backend.h.
 #include <atomic>

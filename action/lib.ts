@@ -1,3 +1,5 @@
+// Copyright the Elide Toolchain contributors.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 export type Os = "linux" | "darwin";
 export type Arch = "amd64" | "arm64";
 export interface Platform { os: Os; arch: Arch }

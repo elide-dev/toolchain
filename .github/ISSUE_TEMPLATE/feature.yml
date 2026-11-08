@@ -1,0 +1,10 @@
+name: Feature request
+description: Propose a toolchain capability or adoption improvement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem and proposed behavior
+      description: Include affected platforms, examples, alternatives, and compatibility implications.
+    validations:
+      required: true

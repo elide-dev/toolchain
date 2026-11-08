@@ -1,3 +1,5 @@
+# Copyright the Elide Toolchain contributors.
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 # shellcheck shell=bash
 # zlib-ng in zlib-compat mode (installs libz.a and zlib.h).
 build_zlib_ng() {

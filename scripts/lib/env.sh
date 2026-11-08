@@ -1,3 +1,5 @@
+# Copyright the Elide Toolchain contributors.
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 # shellcheck shell=bash
 # Load libraries and configuration; compute build directories. Sourced by build.sh
 # (and by tests/stages/*.check.sh). Requires ROOT_DIR.

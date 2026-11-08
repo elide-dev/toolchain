@@ -5,7 +5,7 @@
   "main": "main.ts",
   "type": "module",
   "scripts": {
-    "build": "bun build main.ts --outdir dist --target node",
+    "build": "bun build main.ts --outdir dist --target node --define '__dirname=import.meta.dirname'",
     "typecheck": "tsc --noEmit",
     "test": "bun test"
   },
@@ -18,5 +18,7 @@
   "devDependencies": {
     "@types/bun": "^1.4.4",
     "typescript": "^7.0.2"
-  }
+  },
+  "license": "Apache-2.0 OR MIT",
+  "packageManager": "bun@1.4.4"
 }

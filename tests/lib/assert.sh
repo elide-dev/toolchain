@@ -1,3 +1,5 @@
+# Copyright the Elide Toolchain contributors.
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 # shellcheck shell=bash
 # Minimal assertion helpers for shell unit tests. Source, assert, end with `finish`.
 ASSERTIONS=0

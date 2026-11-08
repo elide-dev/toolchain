@@ -1,3 +1,5 @@
+# Copyright the Elide Toolchain contributors.
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 # shellcheck shell=bash
 # Stage 60: sanitizer add-ons for the gnu triples (spec 2026-10-05 §4.2, §6.4). Per sanitizer:
 # instrumented libc++/libc++abi (never libunwind), every enabled component rebuilt by its normal

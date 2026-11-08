@@ -1,3 +1,5 @@
+// Copyright the Elide Toolchain contributors.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 /* LSan trigger: the only pointer to a heap block is dropped. */
 #include <stdlib.h>
 

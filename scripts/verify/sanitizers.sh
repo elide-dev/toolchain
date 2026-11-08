@@ -1,3 +1,5 @@
+# Copyright the Elide Toolchain contributors.
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 # shellcheck shell=bash
 # Sanitizer verification (spec 2026-10-05 §8). Sourced by scripts/verify/checks.sh; uses its
 # pass/fail helpers. run_sanitizer_checks covers the main bundle per triple;

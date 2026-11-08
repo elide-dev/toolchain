@@ -1,3 +1,5 @@
+# Copyright the Elide Toolchain contributors.
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 # shellcheck shell=bash
 # Stage 90: finalize the bundle (front-ends, helper, metadata, relocatable sysroots, stripped
 # tools) and write the archive, checksum and SBOM to $DIST_DIR.
@@ -7,7 +9,9 @@ stage_main() {
   install_frontends "$BUNDLE_DIR"
   install -m 0755 "$ROOT_DIR/src/elide-toolchain" "$BUNDLE_DIR/bin/elide-toolchain"
   install -m 0644 "$ROOT_DIR/rustversion" "$BUNDLE_DIR/rustversion"
-  mkdir -p "$meta/licenses/llvm"
+  mkdir -p "$meta/licenses/toolchain" "$meta/licenses/llvm"
+  install -m 0644 "$ROOT_DIR/LICENSE" "$ROOT_DIR/LICENSE-APACHE" "$ROOT_DIR/LICENSE-MIT" \
+    "$ROOT_DIR/THIRD_PARTY.md" "$meta/licenses/toolchain/"
   install -m 0644 "$ROOT_DIR/llvm/llvm/LICENSE.TXT" "$meta/licenses/llvm/LICENSE.TXT"
   install -m 0644 "$ROOT_DIR/llvm/clang-tools-extra/LICENSE.TXT" "$meta/licenses/llvm/clang-tools-extra.txt"
   printf '%s\n' "$TOOLCHAIN_VERSION" > "$meta/VERSION"

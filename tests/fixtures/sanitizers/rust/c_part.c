@@ -1,3 +1,5 @@
+// Copyright the Elide Toolchain contributors.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 /* C half of the Rust sanitizer check (tests/fixtures/sanitizers/rust/main.rs). */
 #include <stdlib.h>
 

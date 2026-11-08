@@ -1,3 +1,5 @@
+// Copyright the Elide Toolchain contributors.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 /* mimalloc API shim for sanitizer add-ons (spec 2026-10-05 §7.1, spike E).
  *
  * Under ASan/TSan/MSan the sanitizer runtime owns malloc. The real libmimalloc.a either

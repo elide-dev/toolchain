@@ -1,3 +1,5 @@
+# Copyright the Elide Toolchain contributors.
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 # shellcheck shell=bash
 # Stage 36: static zlib-ng + zstd for the gnu triple, built with stage-1 clang. Stage 2 links
 # them so the shipped lld supports --compress-debug-sections=zstd (used by cflags/linux-bin.txt).

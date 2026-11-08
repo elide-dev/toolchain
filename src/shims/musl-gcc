@@ -1,4 +1,6 @@
 #!/bin/sh
+# Copyright the Elide Toolchain contributors.
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 # GCC-named front-end for the musl target, for tools that look up
 # <cpu>-linux-musl-{gcc,g++,cc,c++,ar,ranlib,nm,strip} by name (e.g. GraalVM
 # `native-image --libc=musl`). Delegates to the bundle's clang and llvm tools.

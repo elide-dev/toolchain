@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright the Elide Toolchain contributors.
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 set -uo pipefail
 ROOT_DIR="${ROOT_DIR:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)}"
 # shellcheck source=tests/lib/assert.sh
@@ -40,7 +42,9 @@ assert_eq "$(sha256_of "$f")" "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb
 
 # is_elf
 assert_fails is_elf "$f"
-assert_ok is_elf "$(command -v ls)"
+# Test the file signature independently of the host executable format (Mach-O on macOS).
+printf '\177ELFfixture' > "$f"
+assert_ok is_elf "$f"
 
 # apply_patches — the directory lives inside this repo's work tree (as real stage dirs do),
 # to prove patches apply relative to DIR, not the enclosing repo.

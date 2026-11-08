@@ -1,3 +1,5 @@
+// Copyright the Elide Toolchain contributors.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 // forward backend: no partitions; everything is the C library's allocator. Used where the
 // process allocator cannot free partition-heap pointers (darwin, where static mimalloc does not
 // override free) or where musl is built without mimalloc.

@@ -1,3 +1,5 @@
+# Copyright the Elide Toolchain contributors.
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 # shellcheck shell=bash
 # Stage 21: musl phase 1 — static-only, native mallocng, built with stage-1 clang. Provides
 # headers and crt objects for the runtimes build (stage 30); stage 35 rebuilds musl fully.

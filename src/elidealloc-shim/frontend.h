@@ -1,3 +1,5 @@
+// Copyright the Elide Toolchain contributors.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 // frontend.h: shared between core.cc and hotcold.cc (internal, hidden).
 #pragma once
 #include <cstddef>

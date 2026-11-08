@@ -1,3 +1,5 @@
+# Copyright the Elide Toolchain contributors.
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 # shellcheck shell=bash
 # Stage 30: LLVM runtimes for each Linux triple, cross-built by stage-1 clang with bare
 # --target/--sysroot (NOT the cfg: its -rtlib=compiler-rt would break cmake probes before the

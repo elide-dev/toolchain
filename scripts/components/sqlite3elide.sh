@@ -1,3 +1,5 @@
+# Copyright the Elide Toolchain contributors.
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 # shellcheck shell=bash
 # libsqlite3elide: SQLite with the sqlite-jni shim (sqlite_* entry points behind Elide's Rust JNI
 # layer, elide-tools/sqlite-jni) compiled into the amalgamation; the drop-in for sqlite-jni's

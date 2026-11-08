@@ -1,3 +1,5 @@
+// Copyright the Elide Toolchain contributors.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 /* JNI-shaped native library: built -shared with -shared-libsan and loaded by an uninstrumented
    host (jni-host.c) with the sanitizer runtime LD_PRELOADed. */
 #include <stdlib.h>

@@ -1,3 +1,5 @@
+// Copyright the Elide Toolchain contributors.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 /* Clean use of the mimalloc API. Under a sanitizer add-on libmimalloc.a is the forwarding shim
    (src/mimalloc-sanitizer-shim.c), so these allocations are visible to, and clean under, every
    sanitizer. */

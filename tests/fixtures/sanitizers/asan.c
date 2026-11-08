@@ -1,3 +1,5 @@
+// Copyright the Elide Toolchain contributors.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 /* ASan trigger: heap-buffer-overflow (index depends on argc so it cannot be folded away). */
 #include <stdlib.h>
 
