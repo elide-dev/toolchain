@@ -1,3 +1,5 @@
+// Copyright the Elide Toolchain contributors.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 /* R23: ACCP/JNI-style shared object that statically embeds libssl.a/libcrypto.a. */
 #include <openssl/crypto.h>
 #include <openssl/ssl.h>

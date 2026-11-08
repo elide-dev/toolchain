@@ -1,3 +1,5 @@
+// Copyright the Elide Toolchain contributors.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 // Rust smoke test: links through <triple>-clang and exercises unwinding (catch_unwind), which
 // on gnu needs -lgcc_s to resolve (to libunwind, via the sysroot's libgcc_s.so linker script).
 fn main() {

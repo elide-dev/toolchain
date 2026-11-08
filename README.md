@@ -1,383 +1,115 @@
 # Elide Toolchain
 
-A self-contained native toolchain: LLVM 23 (clang, clangd, lld, BOLT, Polly), libc++ / libc++abi / libunwind, compiler-rt, and a full tree of pre-built static libraries (zlib-ng, zstd, brotli, snappy, lz4, crc32c, AWS-LC, mimalloc, libsqlite3elide, and optionally OpenSSL, zlib, SQLite, SQLCipher, Cap'n Proto, hiredis, LevelDB), all compiled with one consistent flags profile. Linux bundles carry two sysroots, fully static **musl** (with mimalloc built into `libc.a`) and **glibc 2.17**; macOS bundles carry a component overlay on top of the system SDK. It is built from source, one bundle per host OS/arch, and is used by Elide, Komodo, Bali (crema-jit) and GraalVM `native-image` builds (`--libc=musl`).
+A portable LLVM 23 toolchain with Clang, clangd, LLD, libc++, sanitizer runtimes,
+and static native libraries built with a consistent flags profile. Linux bundles
+include musl and glibc sysroots; macOS bundles use the system SDK. Use it for C,
+C++, Rust cross-language LTO, and GraalVM Native Image builds.
 
-Releases are `elide-toolchain-<version>-<os>-<arch>.tar.xz`, each with a `.sha256` and a CycloneDX SBOM, on [GitHub Releases](https://github.com/elide-dev/toolchain/releases) (tags `vYYYY.M.N`; the month is not zero-padded, e.g. `v2026.9.0`), mirrored to `https://static.elideusercontent.com/toolchain/<version>/`.
+[Install a release](https://github.com/elide-dev/toolchain/releases) ·
+[Toolchain reference](docs/reference.md) · [Build from source](docs/building.md) ·
+[Contribute](CONTRIBUTING.md) · [Security](SECURITY.md)
 
-## Bundles
+## Choose a bundle
 
-| Bundle | Triples |
-|---|---|
-| `linux-amd64` | `x86_64-unknown-linux-musl`, `x86_64-unknown-linux-gnu` |
-| `linux-arm64` | `aarch64-unknown-linux-musl`, `aarch64-unknown-linux-gnu` |
-| `darwin-arm64` | `arm64-apple-darwin` |
+| Host | Targets | Requirements |
+| --- | --- | --- |
+| Linux amd64 | `x86_64-unknown-linux-gnu`, `x86_64-unknown-linux-musl` | x86-64-v3 (AVX2), glibc 2.17+ host |
+| Linux arm64 | `aarch64-unknown-linux-gnu`, `aarch64-unknown-linux-musl` | ARMv8.2-A + crypto, CRC, dotprod; glibc 2.17+ host |
+| macOS arm64 | `arm64-apple-darwin` | macOS 12+, Xcode Command Line Tools |
 
-Each bundle targets its own OS and architecture (no cross-OS or cross-arch targeting).
+Each bundle targets its own OS and architecture. Choose **gnu** for normal Linux
+applications and **musl** for fully static Linux executables. macOS amd64 and
+cross-OS compilation are not supported. The compatibility floor is not a promise
+that an end-of-life operating system receives upstream security updates.
 
-Floors:
+## Quick start
 
-- **glibc 2.17.** Every glibc-targeted binary, including the bundled clang and lld, references no symbol version newer than `GLIBC_2.17` (RHEL/CentOS 7, Amazon Linux 2, Ubuntu 14.04, Debian 8 and newer). The gnu sysroot is CentOS 7.9's final glibc 2.17 build (prebuilt RPMs pinned by SHA256 in `versions.env`) over current Linux UAPI headers. Code built against it sees glibc 2.17 headers, so newer interfaces (`getrandom`, `getentropy`, `statx`, …) are absent and libraries fall back to their syscall or `/dev/urandom` paths.
-- **macOS 12.0** (`minos` <= 12.0).
-- **Host ISA:** x86-64-v3 (AVX2) on amd64, `armv8.2-a+crypto+crc+dotprod` on arm64. The shipped tools are built with the same `-march` as the code they produce, so they need such a host.
+This example installs the Linux amd64 bundle. Select the matching asset for your
+host from [Releases](https://github.com/elide-dev/toolchain/releases). Pin a version
+in production; `2026.11.5` is an example, not a moving “latest” alias.
 
-Every target library (each sysroot's static archives) and the libc++ runtimes (`lib/<triple>/libc++.a`, `libc++abi.a`, `libunwind.a`) carry LLVM 23 ThinLTO bitcode, so downstream links are `-flto=thin` end to end with lld. On Linux, components, musl `libc.a`, the allocator libraries and libc++/libc++abi/libunwind are fat objects (native code plus bitcode in `.llvm.lto`), so they also link without LTO; darwin archives are pure bitcode (Mach-O has no fat objects); compiler-rt, glibc's own archives and hand-written assembly members are native only. The LLVM/clang development libraries in `lib/` (`libLLVM*.a`, `libclang*.a`) are host tool libraries and are native code, not bitcode. Consumers using Rust need a rustc whose LLVM major is **<=** the bundle's (`llvmMajor` in `manifest.json`).
+```sh
+version=2026.11.5
+asset="elide-toolchain-$version-linux-amd64.tar.xz"
+base="https://github.com/elide-dev/toolchain/releases/download/v$version"
+curl --fail --location --remote-name "$base/$asset"
+curl --fail --location --remote-name "$base/$asset.sha256"
+shasum -a 256 -c "$asset.sha256"
+tar -xJf "$asset"
+export ELIDE_TOOLCHAIN_HOME="$PWD/elide-toolchain"
+export PATH="$ELIDE_TOOLCHAIN_HOME/bin:$PATH"
+elide-toolchain doctor
+printf '#include <stdio.h>
+int main(void) { puts("Hello, Elide!"); }
+' > hello.c
+x86_64-unknown-linux-gnu-clang hello.c -o hello
+./hello
+```
 
-Assets are named `elide-toolchain-<version>-<os>-<arch>.tar.xz` (`os` = `linux|darwin`, `arch` = `amd64|arm64`; macOS ships arm64 only), with one top-level directory, `elide-toolchain/`.
+For a fully static executable, use `x86_64-unknown-linux-musl-clang -static`.
+On arm64, substitute the corresponding target from the table. On macOS use
+`arm64-apple-darwin-clang`. See [release verification](docs/releases.md) for signed
+provenance: a checksum alone does not authenticate the publisher.
 
-## Install
+To uninstall a manual installation, remove its extracted directory and remove
+its `bin` entry and exported variables from your shell configuration. No system
+compiler is replaced.
 
 ### GitHub Actions
 
 ```yaml
-- uses: elide-dev/toolchain/action@<ref>
+- uses: elide-dev/toolchain/action@9087560dc52456a9ea1daf3708416295a9f3acc4 # replace with a reviewed full commit SHA
   with:
-    version: latest                    # or 2026.10.0 / v2026.10.0
-    target: x86_64-unknown-linux-gnu   # optional: exports CC, CXX, AR, ... for this triple
-    github-token: ${{ github.token }}  # optional
-    sanitizer: asan                    # optional (needs target): see Sanitizers
+    version: '2026.11.5'
+    target: x86_64-unknown-linux-gnu
 ```
 
-With no inputs it installs the latest bundle for the runner's OS/arch, exports `ELIDE_TOOLCHAIN_HOME` and adds `bin/` to `PATH`. Outputs: `home`, `version`, `targets`, `sanitizer-addon`. Inputs for testing and mirrors: `archive` (local `.tar.xz`), `sanitizer-archive` (local add-on `.tar.xz`), `base-url`, `repo`, `os`, `arch`. `latest` is resolved via the Releases API, falling back to the R2 mirror.
+The action adds tools to `PATH`, exports `ELIDE_TOOLCHAIN_HOME`, and sets `CC`,
+`CXX`, and build-system variables when `target` is provided. Pin the action commit
+and the bundle version separately. See [all inputs and outputs](action/action.yml).
 
 ### mise
 
 ```toml
 [tools]
-"github:elide-dev/toolchain" = "2026.10.0"
+"github:elide-dev/toolchain" = "2026.11.5"
 ```
 
-mise picks the asset by OS/arch and strips the single top-level directory, so `bin/` is found by default. If that auto-strip is ever unwanted, use the explicit form:
-
-```toml
-[tools]
-"github:elide-dev/toolchain" = { version = "2026.10.0", bin_path = "elide-toolchain/bin" }
-```
-
-mise only provides `PATH`; use `elide-toolchain env` (below) for target settings. Sanitizer add-ons are separate release assets (`…-<os>-<arch>-sanitizer-<san>.tar.xz`). mise always picks the main bundle (its asset matcher scores both equally on OS/arch/format and breaks the tie by the shorter name; see `docs/notes/mise-assets.md`); install an add-on with `elide-toolchain addon install sanitizer-<san>`.
-
-### Manual
-
-```sh
-v=2026.10.0; a=elide-toolchain-$v-linux-amd64.tar.xz
-curl -LO https://github.com/elide-dev/toolchain/releases/download/v$v/$a
-curl -LO https://github.com/elide-dev/toolchain/releases/download/v$v/$a.sha256
-shasum -a 256 -c $a.sha256
-tar -xJf $a
-export ELIDE_TOOLCHAIN_HOME=$PWD/elide-toolchain PATH=$PWD/elide-toolchain/bin:$PATH
-```
-
-## Use
-
-Invoke `<triple>-clang` / `<triple>-clang++`; clang loads `bin/<triple>.cfg`, which supplies `--target`, `--sysroot`, `-rtlib=compiler-rt`, `-unwindlib=libunwind`, `-stdlib=libc++` and `-fuse-ld=lld`. glibc 2.17 keeps `libpthread`, `libdl` and `librt` out of `libc`; the gnu sysroot's `libc.so` linker script pulls in `libpthread` and `libdl` as needed (as glibc 2.34+ does by merging them), so only `librt` users (`shm_open`, `timer_create`, …) must add `-lrt`. Plain `bin/clang` (and `clang --target=<triple>`) auto-loads the cfg too: plain `clang` loads the host's default-triple cfg, which is the gnu triple on Linux and the darwin triple on macOS. Pass `--no-default-config` for a bare clang. The bundle is relocatable. For fully static output use the musl triple with `-static`; static linking of the gnu triple is unsupported.
-
-```sh
-x86_64-unknown-linux-musl-clang hello.c -static -o hello
-x86_64-unknown-linux-gnu-clang++ hello.cpp -o hello
-```
-
-**Environment.** `elide-toolchain env --target <triple>` prints `CC`, `CXX`, `AR`, `NM`, `RANLIB`, `PKG_CONFIG_LIBDIR`, `PKG_CONFIG_SYSROOT_DIR`, `CMAKE_TOOLCHAIN_FILE`, the Cargo linker variable, and (macOS) `SDKROOT`. Formats: `--format sh|github|json`; `--static` for static mode.
+mise provides `PATH`; select a target with:
 
 ```sh
 eval "$(elide-toolchain env --target x86_64-unknown-linux-gnu)"
 ```
 
-**CMake.** `-DCMAKE_TOOLCHAIN_FILE=$ELIDE_TOOLCHAIN_HOME/share/elide-toolchain/cmake/<triple>.cmake`.
-
-**pkg-config.** `PKG_CONFIG_LIBDIR=<sysroot>/usr/lib/pkgconfig` and `PKG_CONFIG_SYSROOT_DIR=<sysroot>` (set by `env --target`); every component installs its `.pc` file there.
-
-**Rust.** The bundle root includes `rustversion`, the recommended Rust toolchain pin (`nightly-2026-10-09`, LLVM 23.1.3), paired with this bundle’s LLVM 23.1.4. Consumers can install it with `rustup toolchain install "$(cat /path/to/elide-toolchain/rustversion)"`. Link through the bundle for cross-language LTO: `CARGO_TARGET_<TRIPLE>_LINKER=<triple>-clang` (printed by `env --target`) with `-Clink-arg=-fuse-ld=lld`; on Linux also pass `-Clink-arg=-Wl,--fat-lto-objects`, since rustc never passes `-flto` to clang (see Link rules). `elide-toolchain flags --target <triple> lto` prints this set as `ELIDE_RUSTFLAGS`. rustc's LLVM major must be <= the bundle's. The gnu std always passes `-lgcc_s`; the gnu sysroot's `usr/lib/libgcc_s.so` is a linker script (`INPUT(-lunwind)`) that resolves it to the static libunwind, so outputs never need `libgcc_s.so.1`. For musl, add `-C target-feature=+crt-static`.
-
-**GraalVM native-image.** Linux bundles ship `<cpu>-linux-musl-gcc` / `-g++` (and `cc`, `c++`, `ar`, `ranlib`, `nm`, `strip`) as shims over clang and the llvm tools, so `native-image --libc=musl` works with `bin/` on `PATH`. The shims never add `-static`. For LTO into the shipped archives, give the final link `-flto=thin`: `-H:NativeLinkerOption=-flto=thin` (glibc: also `--native-compiler-path=<bundle>/bin/<triple>-clang`). Native Image's own object is machine code, so the LTO covers libc, libc++ and the components.
-
-**Sanitizers.** See [Sanitizers](#sanitizers).
-
-**Doctor.** `elide-toolchain doctor` compiles, links and runs a C and C++ hello world for every triple in the bundle. `doctor --sanitizers` also builds a clean C++ program and a known bug through every shipped sanitizer wrapper (with the add-on when installed) and checks the bug is reported. Other subcommands: `home`, `targets`, `version`, `flags` (see below).
-
-**Link rules.** Linux archives are fat ThinLTO objects. A link without `-flto` (dev builds, GNU ld, an older rust-lld) uses their native code. For Linux targets the bundle's clang passes lld `--fat-lto-objects` on in-process links that have `-flto` (a local driver patch, [#13](https://github.com/elide-dev/toolchain/issues/13)), so a plain `-flto=thin` link uses the bitcode and components, libc and libc++ join cross-module optimization. Index-only links retain the archives' native code for distributed ThinLTO (see Bazel below). `-fno-fat-lto-objects` on the link turns the default off; `-Wl,--no-fat-lto-objects` also overrides an explicit linker opt-in. Compiles are unchanged: `-flto=thin` still emits plain bitcode unless you also pass `-ffat-lto-objects`. Three cases need the flag themselves: a Linux link that is LTO only because its inputs are bitcode (rustc `-Clinker-plugin-lto`: rustc never passes `-flto`), another clang, and an older bundle. Pass `-Wl,--fat-lto-objects` (or `-flto=thin -ffat-lto-objects` to clang). `elide-toolchain flags --target <triple> lto [--format json]` prints the complete set for each stage: `ELIDE_CFLAGS` for compiles, `ELIDE_LDFLAGS` for final links, `ELIDE_RUSTFLAGS` for rustc; archiving needs no flags (`llvm-ar`). To see what a link actually does, add `-###`: on Linux the `ld.lld` line shows `"--fat-lto-objects"` when the archives' bitcode is used. Bitcode needs LLVM at least the bundle's major: the bundle's clang/lld, or rust-lld from a rustc whose LLVM major is <= the bundle's. darwin archives are pure ThinLTO bitcode, so link them through the bundle's `<triple>-clang` (its cfg sets `-fuse-ld=lld`), not Apple's `ld64`, which fails loudly on them.
-
-**Bazel.** Use the bundle's `<triple>-clang`/`-clang++` as the cc toolchain's compiler and linker. Turn on ThinLTO with the `thin_lto` feature (`--features=thin_lto`) or with `-flto=thin` in `copts` and `linkopts`. Starting with 2026.11.5, Linux index-only links (`--thinlto-index-only[=path]` or the `-plugin-opt` alias, forwarded by `-Wl,` or `-Xlinker`) do not enable fat-object bitcode by default. Both joined and split plugin options are recognized, including Bazel's `-Wl,-plugin-opt,thinlto-index-only=path`; 2026.11.4 missed that split form. Project bitcode still participates in distributed ThinLTO; sysroot archives use their native members at indexing time, so `.imports` never gains their absolute archive-member paths ([#18](https://github.com/elide-dev/toolchain/issues/18)). Ordinary in-process links retain the fat-LTO default. Do not add `-ffat-lto-objects` or `-Wl,--fat-lto-objects` to distributed index actions: explicit opt-ins still win. On 2026.11.2 or 2026.11.4, pass `--linkopt=-fno-fat-lto-objects` as a workaround; `--linkopt=-Wl,--no-fat-lto-objects` also works when placed after an explicit linker opt-in. Ensure the option reaches the LTO indexing action in your cc toolchain. For in-process links that are LTO only through Rust bitcode, add `--linkopt=-Wl,--fat-lto-objects`. To check a target, inspect its link/index arguments with `bazel aquery`, then run them with `-###` added.
-
-**SQLite for Elide.** `libsqlite3elide.a` is SQLite (`SQLITE_VERSION` in `versions.env`, aligned with the sqlite-jdbc jar Elide ships) with the [sqlite-jni](https://github.com/elide-tools/sqlite-jni) shim (`sqlite_*` entry points that Elide's Rust JNI layer forwards to) compiled into the amalgamation, built with `SQLITE_GVM_STATIC` and sqlite-jdbc's compile options (`MAX_ATTACHED=25`, `MAX_VARIABLE_NUMBER=250000`, `API_ARMOR`, FTS3/FTS5, RTREE, STAT4, geopoly, column metadata, update/delete limit; math functions off). It replaces sqlite-jni's release tarballs: `lib/libsqlite3elide.a` and `include/{sqlite3.h,sqlite3ext.h,sqlite3jni.h}` sit in each sysroot's `usr/`, with `sqlite3elide.pc`. `sqlite3jni.h` includes `<jni.h>`, which comes from the consumer's JDK.
-
-C++ implies libc++ on every target; there is no libstdc++ in the bundle, so drop any `-lstdc++`.
-
-## Profile-guided layout, deduplication and memory hints
-
-Design: `docs/superpowers/specs/2026-10-05-memprof-dedubb-design.md`. LLVM carries a few local patches (MemProf backports, DeduBB, the Linux fat-LTO link default), tracked in [#4](https://github.com/elide-dev/toolchain/issues/4) and `docs/notes/llvm-patches.md`. `elide-toolchain flags --target <triple> <mode>...` prints `ELIDE_CFLAGS`, `ELIDE_CXXFLAGS`, `ELIDE_LDFLAGS` and `ELIDE_RUSTFLAGS` (linker-plugin LTO) for each step below. Modes combine.
-
-| Feature | Linux x86_64 | Linux aarch64 | macOS |
-|---|---|---|---|
-| Propeller (`bin/generate_propeller_profiles`) | yes (LBR profiles) | yes (SPE profiles, unverified) | no (ELF only) |
-| DeduBB (code-size deduplication) | yes | yes (tail-call folds only) | no |
-| MemProf profile collection | gnu only | no | no |
-| MemProf use + `libelidealloc-shim` | yes | yes | shim forwards (no partitions) |
-
-**Propeller.** Profiles come from `perf` with branch sampling (LBR on x86, SPE on arm64), recorded **by you on your own perf-capable hosts** with real workloads. The bundle ships the tool and compiler support; our CI cannot branch-sample and verifies from fixtures (`docs/notes/propeller-fixtures.md`).
-```sh
-eval "$(elide-toolchain flags --target x86_64-unknown-linux-gnu propeller-baseline)"   # labelled build
-perf record -e cycles:u -j any,u -o perf.data -- ./app <workload>
-generate_propeller_profiles --binary=./app --profile=perf.data --cc_profile=cc.txt --ld_profile=ld.txt
-eval "$(elide-toolchain flags --target x86_64-unknown-linux-gnu propeller-use=cc.txt,ld.txt)"  # relink
-```
-
-**DeduBB** ([LCTES '26](https://dl.acm.org/doi/10.1145/3814943.3816169)) folds identical basic blocks across the whole program into jumps or calls to one copy. It is static: directives come from the labelled binary alone, with no profile needed. The patched compiler is unchanged unless you pass a directive file.
-```sh
-generate_propeller_profiles --binary=./app --dedubb_profile=dedubb.txt [--dedubb_subsequence]
-eval "$(elide-toolchain flags --target x86_64-unknown-linux-gnu dedubb-apply=dedubb.txt)"     # relink
-```
-Add `--dedubb_cold_only --profile=perf.data` to fold only never-executed blocks, and combine with `propeller-use=` for one relink. Apply it to final links only, never to static archives you ship. Never collect profiles from a DeduBB binary.
-
-**MemProf.** Collect on `x86_64-unknown-linux-gnu` (the only runtime upstream supports); use the profile on any triple. Hints need ThinLTO and an allocator: `libelidealloc-shim` (below).
-```sh
-eval "$(elide-toolchain flags --target x86_64-unknown-linux-gnu memprof-instrument)"; ./app   # memprof.profraw.<pid>
-llvm-profdata merge memprof.profraw.* --profiled-binary ./app -o app.memprofdata
-eval "$(elide-toolchain flags --target <triple> memprof-use=app.memprofdata)"
-```
-Only C++ `operator new` sites are hinted (not `malloc`, not Rust allocations). Rust binaries that link C++ through `-Clinker-plugin-lto` get hints for the C++ parts. Name profile and directive files by content hash: ThinLTO and compiler caches key on the path, not the contents.
-
-**libelidealloc-shim** (`-lelidealloc-shim`, `elidealloc-shim.h`, `pkg-config elidealloc-shim`; gnu also needs `-lmimalloc`; musl links static, and its mimalloc lives in `libc.a`, with an empty `libmimalloc.a` stub and `mimalloc.pc` so `-lmimalloc` still resolves). Provides the tcmalloc-compatible `operator new(size_t, __hot_cold_t)` that MemProf calls, plus a small C API (`elidealloc_malloc(size, ELIDEALLOC_COLD, 0)`, `elidealloc_partition_of`, stats). Hint ≤ 63 goes to a dedicated COLD heap and ≥ 240 to a HOT heap. `notcold` (128) and `ambiguous` (222) stay with the stock allocator. The backend is mimalloc on Linux and `forward` on macOS. Tune with `ELIDEALLOC_COLD_MAX`, `ELIDEALLOC_HOT_MIN`, `ELIDEALLOC_{COLD,HOT}_RESERVE_MB`, `ELIDEALLOC_HOT_LARGE_PAGES`; `ELIDEALLOC_DISABLE=1` for A/B runs, `ELIDEALLOC_STATS=1` for counters at exit. ABI v1 is frozen (`src/elidealloc-shim/abi-v1.symbols`); allocation tokens will arrive as an additive v2.
-
-**GraalVM native-image** Java code cannot take part (Graal compiles it). Separately built C/C++ (JNI libraries) can.
-
-## Sanitizers
-
-Design: [`docs/superpowers/specs/2026-10-05-sanitizer-variants-design.md`](docs/superpowers/specs/2026-10-05-sanitizer-variants-design.md).
-
-| Sanitizer | `*-linux-gnu` | `*-linux-musl` | `arm64-apple-darwin` |
-|---|---|---|---|
-| `asan` (+ leak checking) | runtime in bundle; add-on recommended | — | runtime (dylib) |
-| `tsan` | runtime in bundle; add-on recommended | — | runtime (dylib) |
-| `msan` | runtime in bundle; **add-on required** | — | — |
-| `ubsan` (standalone + minimal) | runtime in bundle | runtime, fully static | runtime (dylib) |
-| `lsan` (standalone) | runtime in bundle | — | — |
-| `hwasan` | aarch64 only (kernel needs the tagged-address ABI) | — | — |
-| libFuzzer (`-fsanitize=fuzzer`) | in bundle | — | in bundle |
-
-musl is static-only by design, and ASan/TSan/MSan/LSan need dynamic linking, so on musl only UBSan is offered: sanitize on the gnu triple.
-
-**Use.** `bin/<triple>-<san>-clang` / `-clang++` are wrappers that add the sanitizer to the triple's normal cfg (and, once installed, the add-on's instrumented sysroot and libc++); `share/elide-toolchain/cmake/<triple>-<san>.cmake` is the matching toolchain file. The helper sets it all up:
-
-```sh
-eval "$(elide-toolchain env --target x86_64-unknown-linux-gnu --sanitizer asan)"
-# CC/CXX = the wrappers, CMAKE_TOOLCHAIN_FILE, PKG_CONFIG_* (add-on sysroot when installed),
-# CARGO_TARGET_<T>_LINKER + CARGO_TARGET_<T>_RUSTFLAGS="-Zsanitizer=address -Zexternal-clangrt",
-# ELIDE_SANITIZER, ELIDE_SANITIZER_RUNTIME (shared runtime, for LD_PRELOAD)
-elide-toolchain sanitizers            # what is supported and installed
-elide-toolchain doctor --sanitizers   # clean program + known bug through every wrapper
-```
-
-**Add-ons.** Each release also publishes, for linux-amd64 only (`SANITIZER_VARIANT_CPUS`), one archive per sanitizer, `elide-toolchain-<ver>-linux-amd64-sanitizer-{asan,tsan,msan}.tar.xz` (+ `.sha256`), with libc++/libc++abi and every component instrumented for that sanitizer, a mimalloc forwarding shim, and a sysroot `sysroot/<triple>+<san>/` that layers them over the normal one. Each extracts over the main bundle of the same version, independently of the others: `elide-toolchain addon install sanitizer-msan` (GitHub release, then the R2 mirror; checksum and version checked), the action's `sanitizer:` input, or `tar -xJf <addon> -C <dir containing elide-toolchain/>`. MSan needs its add-on (anything uninstrumented produces false positives), so on linux-arm64 use ASan, TSan or HWASan; ASan/TSan work without one but cannot see inside libc++ and the components. Add-ons are built on pushes to `main` and on releases, not on pull requests; locally, `BUILD_SANITIZER_VARIANTS=yes ./build.sh`.
-
-**Caveats.**
-- Sanitizers own `malloc`: do not link the main sysroot's `libmimalloc.a` (it overrides `malloc`) into a sanitized program; the add-ons' `libmimalloc.a` forwards `mi_*` to the sanitized libc allocator. Disable Rust's `mimalloc` global allocator in sanitizer builds.
-- Rust (nightly): one runtime only. `env --sanitizer` uses clang's (`-Zexternal-clangrt`, linked by the wrapper); passing `-fsanitize` to the linker *and* letting rustc link its own runtime fails with duplicate symbols. MSan/TSan need `-Zbuild-std`.
-- GraalVM native-image output cannot be sanitized with ASan/TSan/MSan/LSan (static, uninstrumented image with its own heap and signal handling). Sanitize the JNI/native libraries instead: in test executables on the gnu triple, or loaded by a JVM with `-shared-libsan` and `LD_PRELOAD=$ELIDE_SANITIZER_RUNTIME ASAN_OPTIONS=detect_leaks=0:handle_segv=0:allow_user_segv_handler=1`.
-- ASan/TSan/MSan cannot link `-static`; `env --static --sanitizer` refuses everything but `ubsan`.
-- darwin: clang links the sanitizer dylibs with an absolute rpath into the bundle, so sanitized test binaries do not survive moving the bundle.
-
-## Layout
-
-```
-elide-toolchain/
-  bin/
-    clang clang++ clang-cpp clangd ld.lld lld llvm-ar llvm-nm llvm-ranlib llvm-objcopy llvm-strip ...
-    llvm-bolt perf2bolt merge-fdata llvm-profgen llvm-profdata llvm-dwarfdump llvm-dwp   (Linux)
-    generate_propeller_profiles           # Propeller layout profiles + DeduBB directives (Linux)
-    elide-toolchain                       # helper CLI (POSIX sh)
-    <triple>.cfg                          # clang config per target triple
-    <triple>-clang  -> clang
-    <triple>-clang++ -> clang++
-    <arch>-linux-musl-gcc, <arch>-linux-musl-g++   # Linux GCC-named shims
-    <triple>-<san>-clang, <triple>-<san>-clang++   # sanitizer front-ends (POSIX sh)
-  lib/
-    clang/<major>/include/                # resource dir
-    clang/<major>/lib/<triple>/libclang_rt.*   # Linux: builtins, crtbegin/crtend, profile, sanitizers, libFuzzer; memprof (x86_64 gnu)
-    clang/<major>/lib/darwin/libclang_rt.*     # macOS
-    <triple>/libc++.a libc++abi.a libunwind.a  # Linux
-  include/
-    c++/v1/                               # libc++ headers (Linux)
-    <triple>/c++/v1/__config_site
-  sysroot/
-    <arch>-unknown-linux-musl/usr/{include,lib}   # musl+mimalloc, kernel headers, components
-    <arch>-unknown-linux-gnu/usr/{include,lib}    # glibc 2.17, kernel headers, components, libmimalloc.a
-    <every sysroot>/usr/lib/libelidealloc-shim.a, usr/include/elidealloc-shim.h
-    <arch>-apple-darwin/usr/{include,lib}         # macOS component overlay (no SDK)
-  share/elide-toolchain/
-    manifest.json
-    sbom.cdx.json
-    cmake/<triple>.cmake, cmake/<triple>-<san>.cmake
-    sanitizers/<triple>-<san>.cfg         # sanitizer runtime layer
-```
-
-A sanitizer add-on adds `lib/<triple>/<san>/` (instrumented libc++), `sysroot/<triple>+<san>/`, `include/<triple>/asan/` (asan) and `share/elide-toolchain/sanitizers/{<triple>-<san>.addon.cfg,<san>.addon.json}`.
-
-`manifest.json` records the version, revision, host floors (`glibcFloor`, `march`), per-target libc and march/mtune, component versions, `llvmMajor`, the cflags profile, and `features` (Propeller tool and pin, DeduBB, MemProf runtime targets and backports, shim ABI and per-triple backend, and `fatLto`: the Linux targets whose driver passes `--fat-lto-objects` on `-flto` links, plus the explicit link flag and opt-out).
-
-## Migrating from musl-toolchain
-
-| Old (`$MUSL_HOME` = `…/1.2.5`) | New (`$ELIDE_TOOLCHAIN_HOME`) |
-|---|---|
-| `bin/clang`, `bin/llvm-bolt`, … | `bin/clang`, `bin/llvm-bolt`, … (unchanged names) |
-| `lib/libz.a`, `lib/libcrypto.a`, `include/…` | `sysroot/<triple>/usr/lib/…`, `sysroot/<triple>/usr/include/…` |
-| `x86_64-linux-musl/lib/libc++.a` | `lib/x86_64-unknown-linux-musl/libc++.a` |
-| `lib/mimalloc-2.2/`, `lib/mimalloc-3.3/` | musl: built into `libc.a`; gnu/macOS: `sysroot/<triple>/usr/lib/libmimalloc.a` |
-| `lib/clang/22/…` | `lib/clang/<llvmMajor>/…` (read `llvmMajor` from `share/elide-toolchain/manifest.json`) |
-| `--sysroot=$MUSL_HOME/x86_64-linux-musl --gcc-toolchain=$MUSL_HOME` | `x86_64-unknown-linux-musl-clang` (cfg supplies everything) |
-| `x86_64-linux-musl-gcc` | still present, as a shim over clang |
-| `-lstdc++` | drop it; libc++ is implied |
-| `musl-toolchain-<sha>-amd64.txz` | `elide-toolchain-<ver>-linux-amd64.tar.xz` |
-
-Other changes to plan for:
-
-- This is a clean break from the old layout; consumers migrate when they bump their pin.
-- glibc 2.17 is the baseline for all consumers (Elide/WHIPLASH, Bali/crema-jit, Komodo).
-- The default TLS library is AWS-LC 5.x (`libcrypto.a`, `libssl.a`); OpenSSL is off by default. The Elide ACCP fork (`elide-tools/amazon-corretto-crypto-provider`) must be synced to upstream `main` to build against AWS-LC v5.
-- Host GCC is no longer part of the bundle; `musl-cross-make` is gone.
-
-## Building
-
-Host requirements:
-
-- **Linux:** `build-essential bison gawk python3 ninja-build cmake rsync xz-utils curl clang lld llvm` (apt), bash >= 4, and optionally `ccache` (see [Build speed](#build-speed)) and `docker` for the container checks. No `sudo` is used by the build.
-- **macOS:** Xcode Command Line Tools, then `brew install bash ninja cmake rsync xz` (optionally `ccache`). bash >= 4 is required, so run `build.sh` with Homebrew bash. GNU rsync is required because the build uses `rsync --from0 --files-from`, which macOS's bundled openrsync lacks. Homebrew's bin directory must precede `/usr/bin` on `PATH`. Homebrew's standard shell setup does this, and the CI build job checks that GNU rsync is the one found.
-
-```sh
-git submodule update --init --depth=1 --recursive
-./build.sh
-```
-
-glibc is not a submodule: stage 20 downloads CentOS 7.9's `glibc`, `glibc-devel`, `glibc-headers` and `glibc-static` RPMs (release `GLIBC_RPM_RELEASE`) from vault.centos.org, checks each against its pinned SHA256 (the repodata digest), and unpacks them with `scripts/rpm-extract.py`. glibc 2.17 cannot be built with a current GCC or clang.
-
-Options:
-
-| Option | Meaning |
-|---|---|
-| `--from STAGE` | run STAGE and every later stage, ignoring (and clearing) their stamps |
-| `--only STAGE` | run only STAGE |
-| `--targets LIST` | comma-separated triples for per-target stages (default: all in the bundle) |
-| `--clean` | delete `out/<os>-<arch>` first |
-| `--dry-run` | print the stages that would run |
-
-Output goes to `out/<os>-<arch>/` (stamps in `stamps/`); the packaged archive, checksum and SBOM land in `dist/`. Completed stages are skipped on re-run. Stage names are checked before `--clean` deletes anything.
-
-Logs: each stage's full output goes to `out/<os>-<arch>/logs/<stage>.log`. The console shows one start and one finish line per stage, plus the verification results; when a stage fails, the last 200 lines of its log are printed (`FAIL_TAIL_LINES=N` changes that). Set `VERBOSE=yes` to stream every stage's output. In CI, each stage is a collapsible log group and the `logs/` directory is uploaded as the `build-logs-<os>-<arch>` artifact on every run, pass or fail.
-
-To rebuild stage 1, use `--from 10-llvm-stage1`, not `--only 10-llvm-stage1`. Stage 10 wipes `out/<os>-<arch>/stage1`, and the runtimes and cfgs that stage 30 installs there would then be missing.
-
-Stages:
-
-| # | Stage | What it does |
-|---|---|---|
-| 00 | `sources` | Check submodule pins; fetch Linux kernel headers (checksummed) into each Linux sysroot (macOS: check Xcode CLT) |
-| 10 | `llvm-stage1` | Linux: the bootstrap clang/lld (not shipped), by default the pinned official LLVM release (`STAGE1_SOURCE`), else built by the host compiler. macOS: builds the full LLVM (floor 12.0) and compiler-rt directly into the bundle |
-| 20 | `libc-gnu` | Unpack the pinned glibc 2.17 RPMs into the gnu sysroot (Linux) |
-| 21 | `libc-musl` | Stage-1 clang builds musl phase 1 (Linux) |
-| 30 | `runtimes` | compiler-rt, libunwind, libc++abi, libc++ per Linux triple, as fat ThinLTO archives; the memprof runtime for x86_64 gnu |
-| 31 | `sanitizer-runtimes` | compiler-rt sanitizer runtimes and libFuzzer per Linux triple (matrix in `versions.env`) |
-| 35 | `mimalloc` | musl: mimalloc into musl phase 2; gnu/macOS: standalone `libmimalloc.a`; `libelidealloc-shim.a` for every triple |
-| 36 | `llvm-deps` | Static zlib-ng and zstd for the stage-2 LLVM build (Linux, not shipped) |
-| 40 | `llvm-stage2` | Rebuild clang/clangd/lld/bolt/polly against the gnu 2.17 sysroot with static libc++ (Linux); these are the shipped tools |
-| 45 | `propeller` | `generate_propeller_profiles` (with DeduBB) linked against the stage-2 LLVM build tree, offline from cached deps (Linux) |
-| 50 | `components` | Build each enabled component per triple with the bundle's own `<triple>-clang`, installing `.pc` files |
-| 60 | `sanitizer-addons` | With `BUILD_SANITIZER_VARIANTS=yes`: per sanitizer (asan/tsan/msan, gnu), instrumented libc++ and components and the `sysroot/<triple>+<san>` farm |
-| 90 | `package` | Helper CLI, cfgs, shims, CMake files, manifest and SBOM; strip; `tar -cJf` plus `.sha256`; one archive per sanitizer add-on |
-| 95 | `verify` | Run every check (see Verification) against a fresh extraction of the archive |
-
-**`vars.sh` toggles** (each may also be set in the environment):
-
-- Components: `BUILD_ZLIB_NG`, `BUILD_ZSTD`, `BUILD_BROTLI`, `BUILD_SNAPPY`, `BUILD_LZ4`, `BUILD_CRC32C`, `BUILD_AWS_LC`, `BUILD_SQLITE3ELIDE` (default yes); `BUILD_OPENSSL`, `BUILD_ZLIB`, `BUILD_SQLITE`, `BUILD_SQLCIPHER`, `BUILD_CAPNP`, `BUILD_HIREDIS`, `BUILD_LEVELDB` (default no).
-- musl: `MUSL_USE_MIMALLOC`, `MUSL_USE_LTO`. mimalloc: `MIMALLOC_SECURE`, `MIMALLOC_GUARDED`.
-- LLVM features: `LLVM_DEDUBB` (DeduBB patch, default yes), `BUILD_PROPELLER` (stage 45, default yes).
-- `USE_CCACHE`, `USE_SCCACHE`, `STAGE1_SOURCE` (see Build speed), `REQUIRE_CONTAINER_CHECKS` (fail instead of skip when docker is missing), `REQUIRE_LBR` (fail instead of skip when the live Propeller check finds no LBR/SPE).
-- Local patches live in `src/patches/<component>/`. Stage 00 un-applies them before its clean-submodule check, and the stages that build a component apply them again.
-- Sanitizers: `BUILD_SANITIZERS` (runtimes and libFuzzer in the bundle, default yes), `BUILD_SANITIZER_VARIANTS` (add-on archives, default no; CI sets yes on push to `main` and on release).
-
-> [!IMPORTANT]
-> Switching providers (zlib vs zlib-ng, OpenSSL vs AWS-LC) or disabling components requires `./build.sh --clean`. Otherwise stale archives and shared objects already in the sysroot shadow the new ones.
-
-### Build speed
-
-| Knob | Default | Meaning |
-|---|---|---|
-| `STAGE1_SOURCE` | `prebuilt` on Linux when `versions.env` pins a release for the host arch, else `build` | `prebuilt`: stage 10 downloads the official LLVM `LLVM_VERSION` release (`LLVM_PREBUILT_LINUX_<ARCH>_{URL,SHA256}`, checksummed) and uses it as the bootstrap compiler, with its bundled runtimes removed. `build`: build clang/lld from the patched tree with the host compiler. macOS always builds (its stage 10 is the shipped LLVM). |
-| `USE_CCACHE` | `auto` (on when `ccache` is on `PATH`) | `yes`/`no`/`auto`. When on, CMake builds use `ccache` as the compiler launcher, and it takes precedence over `USE_SCCACHE`. Unset settings default to `CCACHE_BASEDIR=<repo>`, `CCACHE_COMPILERCHECK=content`, `CCACHE_NOHASHDIR=1` and `CCACHE_MAXSIZE=50G`. Autotools components are not cached. |
-| `JOBS` | min(CPUs, available GiB / 2) | Compile parallelism. |
-| `LINK_JOBS` | available GiB / 8, clamped to 1..4 | Concurrent links in LLVM builds (`LLVM_PARALLEL_LINK_JOBS`) and in stage 45 (a Ninja link pool). |
-| `ELIDE_MEM_GB`, `ELIDE_CPU_COUNT` | detected | Override the detected memory (Linux `MemAvailable`, macOS `hw.memsize`) and CPU count. |
-| `XZ_LEVEL` | `9` for releases, `6` otherwise | xz level for the archive and the sanitizer add-ons. A release is a `TOOLCHAIN_VERSION` with no `-dev` or `+` suffix, or `RELEASE_BUILD=yes` (`RELEASE_BUILD=no` forces non-release). |
-
-`build.sh` logs the chosen `JOBS`/`LINK_JOBS`, the compiler launcher and the stage-1 source when it starts.
-
-Persistent caches: downloads (kernel headers, Propeller deps, the prebuilt LLVM tarball) go to `ELIDE_CACHE_DIR` (default `out/cache`), and ccache uses `CCACHE_DIR` (default `~/.cache/ccache`). CI sets both under `$HOME/.cache/elide-toolchain/` because `actions/checkout` cleans ignored files in the workspace, and prints `ccache --show-stats` after every build. The prebuilt stage 1 is safe to use because the version is the same, so stage 1 produces bitcode the shipped LLVM reads. Our LLVM patches only affect the shipped stage 2 and compiler-rt, which stage 30 builds from the patched tree (spec §3.3b). Changing `STAGE1_SOURCE` takes effect on `--from 10-llvm-stage1`.
-
-LLVM builds disable precompiled headers when ccache or sccache is active. LLVM 23's
-default PCH otherwise makes most of its compilations uncacheable with strict ccache
-settings. Builds without a compiler cache retain LLVM's PCH defaults. The first build
-after this change populates the cache; subsequent builds benefit. CI reports verbose
-ccache statistics, including reasons for uncacheable calls.
-
-**Build times.** See [`docs/notes/build-timings.md`](docs/notes/build-timings.md) for per-stage wall times and the host they were measured on.
-
-## Versions
-
-`versions.env` is the single source of truth: toolchain version, floors, `-march`/`-mtune`, libc versions, kernel headers (with checksum), and a generated pin (`*_REV`, `*_VERSION`) per submodule. Components track the latest stable release.
-
-- `scripts/bump-submodules.sh` moves every submodule to its latest stable tag (or branch tip) and regenerates the pin block.
-- `scripts/check-versions.sh` verifies the pins against `git submodule status` (run in CI and in stage 00).
-- Releases are CalVer, `vYYYY.M.N`, with the month not zero-padded (`v2026.9.0`, not `v2026.09.0`; CI rejects padded versions). `git tag vYYYY.M.N && git push --tags` builds all three bundles, publishes the GitHub Release (archives, checksums, SBOMs) and mirrors it to R2.
-
-## Verification
-
-Stage 95 (`scripts/verify/checks.sh`) runs against a fresh extraction of the packaged archive and ends with `verification: N failure(s)`:
-
-- **manifest:** `manifest.json` parses; its `version` (and `elide-toolchain version`) is the build's version, `llvmMajor` is the LLVM major, and every submodule's recorded revision is its `*_REV` pin in `versions.env`.
-- **no build paths:** no text file mentions the build directory and there are no absolute symlinks.
-- **smoke:** per triple, compile, link and run C and C++ (iostream, exceptions, threads); musl output is static.
-- **werror:** `<triple>-clang -Werror -c` is clean (cfg flags raise no unused-argument warnings).
-- **components:** a program links against every enabled component. On Linux, a `-shared` object also links `libssl.a`/`libcrypto.a` cleanly under `-z defs` (the ACCP/JNI case), and for gnu it stays within the glibc floor.
-- **SQLite authorizer:** each `libsqlite3elide.a`, including sanitizer add-ons, exports `sqlite_set_1authorizer` and `sqlite_clear_1authorizer`; the installed JNI header declares both.
-- **bitcode:** every member of every sysroot archive and of the libc++ runtimes is LLVM bitcode (raw or the Mach-O wrapper) or an object with a `.llvm.lto` section, produced by the bundle's LLVM major. Each occurrence of a duplicated member name is checked. Exempt: compiler-rt, glibc's own archives (gnu only), musl's empty stub archives, and hand-written assembly. A member counts as assembly only if it is a native object with no `.llvm.lto` and no compiler `.comment`, and its source is assembly (a CMake `*.S.o`/`*.s.o`/`*.asm.o` object, or a musl `src/*/<arch>/*.s` source).
-- **fat LTO (Linux):** issue [#13](https://github.com/elide-dev/toolchain/issues/13). A C program calls `ZSTD_versionNumber` from the shipped fat `libzstd.a`. With a plain `-flto=thin` link, the driver passes `--fat-lto-objects` and the function is inlined and dropped (no symbol left). With `-fno-fat-lto-objects` or without `-flto`, the archive's native global is linked. Every variant runs. When `rustc` (LLVM <= the bundle's) and the target's std are installed, a Rust caller linked with `elide-toolchain flags lto`'s `ELIDE_RUSTFLAGS` must not end up with the archive's native global.
-- **distributed ThinLTO (Linux):** issue [#18](https://github.com/elide-dev/toolchain/issues/18). Index-only C++ links use Bazel's split plugin options, prefix/suffix rewriting, and final-link response file; joined options are also covered. Imports and the response file must contain only relative project paths. Isolated backend compilations receive only their bitcode, index and declared imports, then executables link and run with libc++ and zstd; glibc also checks a shared-library link. Both opt-outs are checked, and an explicit fat-LTO control reproduces the unsafe archive imports and response-file entries.
-- **rust:** when `rustc` and the target's std are installed, a hello world with a caught panic links through `<triple>-clang` and runs (musl: `+crt-static`; gnu: within the glibc floor, no `libgcc_s`). Otherwise it is skipped with a warning.
-- **glibc floor (gnu):** no `GLIBC_x.y` above 2.17 and no `GLIBC_ABI_DT_RELR` in outputs or bundled ELFs; no `libstdc++`/`libgcc_s` in `NEEDED`.
-- **interp (gnu):** `PT_INTERP` is the canonical loader path.
-- **musl libc (musl):** a `libc.a` member carries bitcode for the musl triple and native code, and a `-fno-lto` link works.
-- **gcc shims (musl):** `<arch>-linux-musl-gcc hello.c -static` links and runs.
-- **macOS minos / dylibs (macOS):** `minos` <= 12.0 and no unexpected dylib dependencies.
-- **containers (Linux):** gnu smoke binaries and `clang --version` run inside `centos:7` (glibc 2.17), `amazonlinux:2` and `ubuntu:20.04` (skipped without docker unless `REQUIRE_CONTAINER_CHECKS=yes`).
-- **propeller (Linux):** the shipped tool reproduces upstream's golden profile from checked-in perf data; a relink of upstream's fixture with the generated profiles shows functions in profile order, `.text.hot`/`.text.split`, and cold parts in `.text.split`. A live check runs only on hosts with LBR/SPE (otherwise a warned skip; `REQUIRE_LBR=yes` makes it fail).
-- **dedubb (Linux):** directives from a labelled binary; a relink with them folds the duplicate into a branch to `DeduBB.master.0` and the program still works. Without directives, the compiler's output is deterministic and has no DeduBB trace.
-- **elidealloc shim:** the shim test (hot/cold/default mapping, all eight overloads, alignment, OOM, cross-thread frees, C API, stats, env tuning) links through the shipped `.pc` and passes.
-- **memprof:** on x86_64 gnu, instrument, run, merge `--profiled-binary`. On every triple, a YAML profile is matched, the ThinLTO link clones the allocation context and calls `_Znam12__hot_cold_t`, and the cold object lands in the COLD partition. Without `-supports-hot-cold-new` no hint survives. No memprof runtime ships for other triples.
-- **relocatable:** the bundle is copied elsewhere and smoke tests plus `elide-toolchain doctor` rerun.
-- **sanitizers** (`scripts/verify/sanitizers.sh`): the runtimes match the matrix (musl has no dynamic-only runtime); every sanitizer's fixture bug (`tests/fixtures/sanitizers/`) is reported through its wrapper, and the msan wrapper refuses to work without its add-on; `-static` is refused for the dynamic-only runtimes; a `-shared-libsan` library loaded by an uninstrumented host trips with the runtime `LD_PRELOAD`ed; a libFuzzer target runs.
-- **sanitizer add-ons:** each add-on archive is checksummed, has the single root and shares no entry with the main archive; it is extracted over its own hardlinked copy of the main bundle (so add-ons are independent) and checked there: every archive in its sysroot and libc++ dir is instrumented, no libunwind is shipped, the farm has no dangling or absolute links and no `.so` beside a replaced `.a`; the fixture bug trips; libc++, every component (round-tripping real data in heap buffers) and the mimalloc shim run with no report, with and without `-flto=thin`; a CMake consumer resolves the add-on's archives; its archives pass the bitcode check; ASan sees `mi_malloc` overflows; `env --sanitizer` points at the add-on; and (asan) Rust nightly + C trips with clang's runtime when a nightly rustc is available.
-
-Unit tests and shellcheck: `tests/run.sh`. Per-stage checks: `tests/stages/*.check.sh`. Action tests: `cd action && bun test`.
-
-## Flags
-
-Component and consumer flags come from the `cflags/` submodule profiles: `cflags/cli/cflags.sh <os> <arch>`, then the `cflags.local/` overlay, then `-march`/`-mtune` from `versions.env`. Compile profiles (`base`, `linux`, `linux-amd64`, ...) apply to every compilation unit and intermediate link; binary profiles (`*-bin`) apply only to a consumer's final link. Both Linux libcs use the `linux-<arch>` profile. The toolchain layer (libc, runtimes, LLVM, mimalloc) keeps its own tuned flags.
-
-The shared profiles enable strong stack canaries while retaining `-O3`, ThinLTO, PIC,
-unwind information and full RELRO. Linux x86-64 follows `MARCH_AMD64` without extra
-crypto/GFNI/RNG ISA switches; crypto libraries may still select optimized implementations
-at runtime. Relative C++ vtables and aggressive constant merging are disabled. Rebuild
-all component archives when adopting the 2026.11 profiles; do not reuse archives compiled
-with the previous C++ ABI settings.
-
-The GNU `libgcc_s.so` compatibility script groups libunwind with compiler-rt builtins,
-so Rust's `-nodefaultlibs` links also resolve `__gcc_personality_v0` (including TSAN).
-For TSAN hosted inside a JVM, set `TSAN_OPTIONS=ignore_noninstrumented_modules=1` to
-avoid reports from the uninstrumented VM; this reduces coverage of those modules.
-
-`clangd` comes from the same LLVM revision as clang. Stage 95 runs a real LSP session
-from a renamed bundle under a path containing spaces, checking standard-library header
-resolution, diagnostics, definition and rename for each target. LLVM license notices and
-an explicit clangd SBOM entry accompany it.
-
-See [2026.11 dependency migration](docs/notes/2026-11-dependency-migration.md) for the
-required Elide consumer updates (AWS-LC, ACCP and SQLite).
-
-**glibc and DT_RELR.** `cflags/linux.txt` carries `-Wl,-z,pack-relative-relocs`, which makes lld emit a `GLIBC_ABI_DT_RELR` version need (glibc 2.36+). The build removes that flag for gnu triples whenever the glibc floor is below 2.36. Consumers applying the cflags profile themselves to gnu targets must drop it too, or their binaries will not load on older glibc.
+## Integrate with your build
+
+| Task | Where to start |
+| --- | --- |
+| CMake, pkg-config, Rust, Native Image | [Usage and link rules](docs/reference.md#use) |
+| ASan, TSan, MSan and sanitizer add-ons | [Sanitizer support and limits](docs/reference.md#sanitizers) |
+| ThinLTO, profile-guided optimization, BOLT, Propeller | [Optimization reference](docs/reference.md#profile-guided-layout-deduplication-and-memory-hints) |
+| Compiler and linker flags | [Flags reference](docs/reference.md#flags) |
+| Moving from musl-toolchain | [Migration guide](docs/reference.md#migrating-from-musl-toolchain) |
+| Build stages, dependencies, caching and tests | [Building](docs/building.md), [CI](docs/ci.md) |
+
+Use the bundle's target-prefixed Clang drivers to select its sysroot and libc++.
+Do not add `-lstdc++`. Linux libraries contain native code and LLVM bitcode;
+macOS libraries require the bundled LLVM linker. Match Rust's LLVM version to
+these link requirements; see the reference and the bundled `rustversion` pin.
+
+## Help and development
+
+Report reproducible bugs through [GitHub Issues](https://github.com/elide-dev/toolchain/issues).
+Include the bundle version, host OS/CPU, target, command, and a reduced example.
+For install failures, include `elide-toolchain doctor` output if available. Report
+suspected vulnerabilities privately using [SECURITY.md](SECURITY.md).
+
+New contributors can run fast tests without building LLVM; start with
+[CONTRIBUTING.md](CONTRIBUTING.md), including the
+[contributor agreement](CONTRIBUTOR_AGREEMENT.md) and [DCO](DCO). [AGENTS.md](AGENTS.md) describes implementation
+constraints. See [architecture](docs/architecture.md), [roadmap](docs/roadmap.md),
+and [OpenSSF evidence and remaining work](docs/openssf.md).
+
+First-party code is licensed under **Apache-2.0 OR MIT**, at your option:
+[Apache](LICENSE-APACHE), [MIT](LICENSE-MIT). Bundled components retain their
+[third-party licenses](THIRD_PARTY.md). Follow our [code of conduct](CODE_OF_CONDUCT.md).

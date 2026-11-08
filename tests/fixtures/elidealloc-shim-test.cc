@@ -1,3 +1,5 @@
+// Copyright the Elide Toolchain contributors.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 // libelidealloc-shim behaviour test (spec §5). Exit 0 = pass; prints the first failure.
 // Expectations depend on the backend the library reports (forward = no partitions).
 // Modes: no argument = full test; "disabled" = run under ELIDEALLOC_DISABLE=1;

@@ -1,3 +1,5 @@
+// Copyright the Elide Toolchain contributors.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 /* Links one symbol from each covered component. HAVE_* macros come from
    component_link in scripts/lib/components.sh. */
 #include <stdint.h>

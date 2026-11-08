@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright the Elide Toolchain contributors.
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 set -uo pipefail
 ROOT_DIR="${ROOT_DIR:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)}"
 # shellcheck source=tests/lib/assert.sh
@@ -186,7 +188,7 @@ rd="$T/prune/lib/clang/$LLVM_MAJOR/lib/$M"; mkdir -p "$rd"
 for r in builtins profile memprof asan lsan ubsan_standalone ubsan_minimal stats fuzzer dd; do : > "$rd/libclang_rt.$r.a"; done
 : > "$rd/libclang_rt.ubsan_standalone.so"
 prune_sanitizer_runtimes "$T/prune" $M
-assert_eq "$(find "$rd" -type f -printf '%f\n' | sort | xargs)" "libclang_rt.builtins.a libclang_rt.memprof.a libclang_rt.profile.a libclang_rt.ubsan_minimal.a libclang_rt.ubsan_standalone.a"
+assert_eq "$(find "$rd" -type f -exec basename {} \; | sort | xargs)" "libclang_rt.builtins.a libclang_rt.memprof.a libclang_rt.profile.a libclang_rt.ubsan_minimal.a libclang_rt.ubsan_standalone.a"
 
 rm -rf "$T"
 finish

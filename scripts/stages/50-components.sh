@@ -1,3 +1,5 @@
+# Copyright the Elide Toolchain contributors.
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 # shellcheck shell=bash
 # Stage 50: build every enabled component for each target into its sysroot (Linux) or
 # overlay sysroot (macOS), using the bundle's own <triple>-clang.

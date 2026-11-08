@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright the Elide Toolchain contributors.
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 set -uo pipefail
 ROOT_DIR="${ROOT_DIR:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)}"
 # shellcheck source=scripts/lib/env.sh

@@ -1,3 +1,5 @@
+# Copyright the Elide Toolchain contributors.
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 # shellcheck shell=bash
 # CMake helper for target code built with a toolchain's <triple>-clang and toolchain file.
 

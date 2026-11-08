@@ -1,3 +1,5 @@
+// Copyright the Elide Toolchain contributors.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 // hotcold.cc: tcmalloc-compatible MemProf hot/cold operator new overloads. LLVM's
 // SimplifyLibCalls (-optimize-hot-cold-new, enabled in the ThinLTO link together with
 // -supports-hot-cold-new) rewrites hinted `new` calls to these. Hints map to partitions via

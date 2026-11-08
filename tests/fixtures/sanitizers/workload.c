@@ -1,3 +1,5 @@
+// Copyright the Elide Toolchain contributors.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 /* Sanitizer add-on false-positive check: push real data through every enabled component and
    branch on everything they write. Buffers are heap-allocated on purpose: MSan treats static
    storage as initialised, which would hide stores made by uninstrumented code (spike D).

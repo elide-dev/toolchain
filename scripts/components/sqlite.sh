@@ -1,3 +1,5 @@
+# Copyright the Elide Toolchain contributors.
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 # shellcheck shell=bash
 # SQLite (static, all features).
 build_sqlite() {

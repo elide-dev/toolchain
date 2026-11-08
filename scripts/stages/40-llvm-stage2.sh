@@ -1,3 +1,5 @@
+# Copyright the Elide Toolchain contributors.
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 # shellcheck shell=bash
 # Stage 40: the shipped LLVM, built by stage-1 clang (via the gnu cfg) against our glibc 2.17
 # sysroot, with static libc++/libunwind/compiler-rt and no shared libLLVM/libclang, so the

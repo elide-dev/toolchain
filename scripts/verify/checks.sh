@@ -1,3 +1,5 @@
+# Copyright the Elide Toolchain contributors.
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 # shellcheck shell=bash
 # Bundle verification (spec §6). Operates on an extracted bundle ROOT, never on the build tree.
 

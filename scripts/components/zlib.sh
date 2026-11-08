@@ -1,3 +1,5 @@
+# Copyright the Elide Toolchain contributors.
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 # shellcheck shell=bash
 # Cloudflare's accelerated zlib fork (alternative to zlib-ng; mutually exclusive).
 build_zlib() {

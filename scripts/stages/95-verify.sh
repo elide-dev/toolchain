@@ -1,3 +1,5 @@
+# Copyright the Elide Toolchain contributors.
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 # shellcheck shell=bash
 # Stage 95: verify the packaged archive (not the build tree): checksum, then every check in
 # scripts/verify/checks.sh against a fresh extraction.

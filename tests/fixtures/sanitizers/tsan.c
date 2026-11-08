@@ -1,3 +1,5 @@
+// Copyright the Elide Toolchain contributors.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 /* TSan trigger: two threads increment a global without synchronisation. */
 #include <pthread.h>
 

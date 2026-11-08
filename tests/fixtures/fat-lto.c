@@ -1,3 +1,5 @@
+// Copyright the Elide Toolchain contributors.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 /* Cross-module optimization through a shipped fat archive (issue #13): with the bundle's
  * default Linux LTO link, ZSTD_versionNumber's bitcode from libzstd.a is imported and inlined
  * into main, and the member's unused ZSTD_versionString is dropped. A non-LTO link (or

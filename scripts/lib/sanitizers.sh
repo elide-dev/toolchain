@@ -1,3 +1,5 @@
+# Copyright the Elide Toolchain contributors.
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 # shellcheck shell=bash
 # Sanitizer support (spec docs/superpowers/specs/2026-10-05-sanitizer-variants-design.md):
 # the shipped matrix, front-ends (cfg layers, wrappers, CMake toolchain files), the compile layer

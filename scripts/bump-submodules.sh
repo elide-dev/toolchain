@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright the Elide Toolchain contributors.
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 # Move every submodule to its latest stable release tag (or branch tip), stage the new
 # gitlinks, and regenerate the component pin block in versions.env.
 # Usage: scripts/bump-submodules.sh   (submodules must be initialized)

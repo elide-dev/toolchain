@@ -1,3 +1,5 @@
+# Copyright the Elide Toolchain contributors.
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 # shellcheck shell=bash
 # Stage 20: glibc at GLIBC_FLOOR, from CentOS 7's prebuilt glibc RPMs (pinned in versions.env;
 # 2.17 does not build with a current GCC or clang). Only libraries, crt objects, linker scripts

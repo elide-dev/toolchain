@@ -1,0 +1,10 @@
+Elide Toolchain first-party code is licensed under either of the following,
+at your option:
+
+- Apache License, Version 2.0 (LICENSE-APACHE)
+- MIT license (LICENSE-MIT)
+
+SPDX-License-Identifier: Apache-2.0 OR MIT
+
+Third-party code, submodules and distributed libraries retain their upstream
+licenses. See THIRD_PARTY.md; this grant does not relicense those components.

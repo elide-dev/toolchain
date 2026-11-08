@@ -1,3 +1,5 @@
+// Copyright the Elide Toolchain contributors.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 // backend.h: libelidealloc-shim's internal allocator interface (not installed, not ABI).
 // Exactly one backend-<name>.cc is compiled in, selected at build time
 // (-DELIDEALLOC_BACKEND_MIMALLOC or -DELIDEALLOC_BACKEND_FORWARD). A backend must be the

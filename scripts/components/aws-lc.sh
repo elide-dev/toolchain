@@ -1,3 +1,5 @@
+# Copyright the Elide Toolchain contributors.
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 # shellcheck shell=bash
 # AWS-LC (libcrypto/libssl). Static (PIC) everywhere; shared libraries as well on Linux (not in
 # sanitizer add-on builds, which are static-only: SANITIZER_LAYER, stage 60).

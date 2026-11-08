@@ -1,3 +1,5 @@
+// Copyright the Elide Toolchain contributors.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 /* MSan trigger: branch on an uninitialised local. */
 #include <stdio.h>
 

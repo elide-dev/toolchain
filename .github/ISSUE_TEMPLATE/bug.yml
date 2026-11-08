@@ -1,0 +1,25 @@
+name: Bug report
+description: Report a reproducible installation, compilation, or runtime problem
+body:
+  - type: markdown
+    attributes:
+      value: Report vulnerabilities privately using SECURITY.md; omit secrets and private source.
+  - type: input
+    id: version
+    attributes:
+      label: Toolchain version or commit
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Host OS, CPU, and target triple
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal example and exact commands
+      description: Include expected and observed behavior, install method, and relevant doctor or stage logs.
+    validations:
+      required: true

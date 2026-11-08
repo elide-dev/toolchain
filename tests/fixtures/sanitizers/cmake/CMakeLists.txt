@@ -1,3 +1,5 @@
+# Copyright the Elide Toolchain contributors.
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 # Sanitizer add-on CMake consumer: under share/elide-toolchain/cmake/<triple>-<san>.cmake,
 # find_package/find_library must resolve the add-on's instrumented archives (sysroot/<triple>+<san>).
 cmake_minimum_required(VERSION 3.20)

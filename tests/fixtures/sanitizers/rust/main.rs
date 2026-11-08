@@ -1,3 +1,5 @@
+// Copyright the Elide Toolchain contributors.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 // Rust + C under ASan with clang's runtime (-Zsanitizer=address -Zexternal-clangrt, linked by
 // <triple>-asan-clang). `main trip` makes the C side overflow a heap block.
 extern "C" {

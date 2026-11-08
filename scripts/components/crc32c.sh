@@ -1,3 +1,5 @@
+# Copyright the Elide Toolchain contributors.
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 # shellcheck shell=bash
 # Google CRC32C (static; no tests/benchmarks/glog, so no nested submodules are needed).
 build_crc32c() {

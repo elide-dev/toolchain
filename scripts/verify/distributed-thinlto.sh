@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright the Elide Toolchain contributors.
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 # Issue #18: reproduce Bazel's index -> isolated backend -> final link protocol.
 # Usage: distributed-thinlto.sh BUNDLE TRIPLE (Linux, zstd enabled).
 set -euo pipefail

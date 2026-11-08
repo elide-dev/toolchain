@@ -1,3 +1,5 @@
+# Copyright the Elide Toolchain contributors.
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 # shellcheck shell=bash
 # Stage 31: compiler-rt sanitizer runtimes (and libFuzzer) for each Linux triple, per the matrix in
 # versions.env (spec 2026-10-05 §3, §6.2). Runs after stage 30 because libFuzzer and the *_cxx

@@ -1,7 +1,17 @@
 #!/usr/bin/env bash
+# Copyright the Elide Toolchain contributors.
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 # Run shell unit tests (tests/unit/*.test.sh) and shellcheck.
 # Usage: tests/run.sh [name-filter]
 set -uo pipefail
+if [ "${BASH_VERSINFO[0]}" -lt 4 ]; then
+  echo "ERROR: tests require Bash >= 4 (macOS: install Homebrew Bash and add it to PATH)" >&2
+  exit 1
+fi
+command -v shellcheck >/dev/null 2>&1 || {
+  echo "ERROR: shellcheck is required (mise install)" >&2
+  exit 1
+}
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 export ROOT_DIR
 filter="${1:-}"

@@ -1,3 +1,5 @@
+# Copyright the Elide Toolchain contributors.
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 # shellcheck shell=bash
 # Stage 00: verify host tools and submodule pins; install Linux UAPI headers into each
 # Linux sysroot from a pinned kernel tarball (never from the host's /usr/include).

@@ -1,0 +1,22 @@
+min_version = "2026.11.1"
+
+[tools]
+bun = "1.4.4"
+actionlint = "1.7.12"
+shellcheck = "0.11.0"
+
+[tasks.setup]
+description = "Prepare fast tests without fetching LLVM"
+run = ["git submodule update --init --depth=1 cflags", "cd action && bun install --frozen-lockfile"]
+
+[tasks.test]
+description = "Run shell, CI policy, and action tests"
+run = ["bash tests/run.sh", "python3 -m unittest discover -s tests -p 'test_*.py'", "bun test tests/best-practices.test.ts", "cd action && bun run typecheck && bun test"]
+
+[tasks.lint]
+description = "Check workflow syntax, repository hygiene, and source pins"
+run = ["actionlint", "python3 scripts/check-hygiene.py", "bash scripts/check-versions.sh"]
+
+[tasks."openssf"]
+description = "Generate the standalone OpenSSF autofill page"
+run = "python3 scripts/best-practices.py"

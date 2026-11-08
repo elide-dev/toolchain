@@ -1,3 +1,5 @@
+// Copyright the Elide Toolchain contributors.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 #include <cstddef>
 __attribute__((noinline)) char *alloc(size_t n) {
   return new char[n];

@@ -1,3 +1,5 @@
+# Copyright the Elide Toolchain contributors.
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 # shellcheck shell=bash
 # hiredis with TLS. Its install target also links the shared library, so use the
 # non-static link flags even for musl. USE_WERROR=0: our clang flags newer warnings the

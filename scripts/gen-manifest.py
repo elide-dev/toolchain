@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright the Elide Toolchain contributors.
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 """Generate an elide-toolchain manifest.json or CycloneDX 1.6 SBOM on stdout.
 
 Usage: gen-manifest.py manifest|sbom

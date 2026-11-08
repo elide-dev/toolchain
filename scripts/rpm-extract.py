@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright the Elide Toolchain contributors.
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 """Extract an RPM's payload (gzip or xz cpio newc) into DEST. Stdlib only.
 
 Usage: rpm-extract.py RPM DEST

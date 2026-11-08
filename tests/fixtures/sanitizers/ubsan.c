@@ -1,3 +1,5 @@
+// Copyright the Elide Toolchain contributors.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 /* UBSan trigger: signed integer overflow. */
 #include <limits.h>
 #include <stdio.h>

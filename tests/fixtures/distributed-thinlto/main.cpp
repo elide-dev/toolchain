@@ -1,3 +1,5 @@
+// Copyright the Elide Toolchain contributors.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 // Keep a project-to-project import as well as references to the shipped libc++.
 #include <iostream>
 #include <zstd.h>

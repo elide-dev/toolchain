@@ -1,3 +1,5 @@
+// Copyright the Elide Toolchain contributors.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 /* ASan trigger through the mimalloc API: detected only because the add-on's libmimalloc.a
    forwards to the intercepted libc allocator. */
 #include <mimalloc.h>

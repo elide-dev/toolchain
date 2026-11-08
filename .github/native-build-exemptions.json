@@ -1,0 +1,14 @@
+[
+  {
+    "path": "scripts/stages/90-package.sh",
+    "before": "5ed607c1d89fe9a403ec516d0fe294957fedd6e5",
+    "after": "3fd0fc1973dcc106135c1dcb0b911d661c25b16b",
+    "reason": "Reviewed metadata-only change: package and check first-party license texts; no compiler, sysroot, library or native fixture behavior changes."
+  },
+  {
+    "path": "tests/stages/90-package.check.sh",
+    "before": "c2f1e9e2232b43f4b0ea7690d43c325d901664c0",
+    "after": "ac6e72f1a7eb095dc20c5a73254ad84656241064",
+    "reason": "Reviewed metadata-only change: package and check first-party license texts; no compiler, sysroot, library or native fixture behavior changes."
+  }
+]

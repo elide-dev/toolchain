@@ -1,3 +1,5 @@
+// Copyright the Elide Toolchain contributors.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 #include <stdio.h>
 long master_fn(const long *p);
 __attribute__((noinline)) long fold_fn(const long *p) { return p[0] * 3 + p[1] * 5 + p[2]; }

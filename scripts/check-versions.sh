@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright the Elide Toolchain contributors.
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 # Verify every submodule's (staged) gitlink matches its *_REV pin in versions.env, and that no
 # initialized checkout differs from its gitlink. Works on shallow clones.
 set -euo pipefail

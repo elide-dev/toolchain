@@ -1,3 +1,5 @@
+# Copyright the Elide Toolchain contributors.
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 # shellcheck shell=bash
 # Stage 35: mimalloc for every target. On Linux, musl is rebuilt (phase 2) with mimalloc as
 # its allocator and, with MUSL_USE_LTO, as fat ThinLTO objects (bitcode + native code) so lld

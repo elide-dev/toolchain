@@ -1,3 +1,5 @@
+# Copyright the Elide Toolchain contributors.
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 # shellcheck shell=bash
 # Target front-ends for a toolchain prefix (stage 1 or the bundle): clang config files,
 # <triple>-clang symlinks, GCC-named musl shims, and CMake toolchain files. All paths are
