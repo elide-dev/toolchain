@@ -34,8 +34,7 @@ export function proposalLinks(data, { projectId = '', published = false, edits =
       if (status === '?') continue; // Unknown must never clear a user's saved answer.
       if (!['Met', 'Unmet', 'N/A'].includes(status)) throw new Error(`Invalid status for ${name}.`);
       if (status === 'N/A' && !definition.na_allowed) throw new Error(`N/A is not permitted for ${name}.`);
-      if (!reason?.trim()) throw new Error(`${name}: provide evidence or an explanation.`);
-      add({ [`${name}_status`]: status, [`${name}_justification`]: reason.trim() }, name);
+      add({ [`${name}_status`]: status, [`${name}_justification`]: (reason ?? '').trim() }, name);
     }
     flush();
   }
@@ -82,13 +81,13 @@ export function mount(data) {
       const row = document.createElement('details');
       const summary = document.createElement('summary');
       const status = data.answers[`${name}_status`];
-      const phase = data.evidence.phases[name] === 'published' ? 'after publication' : 'reviewed public evidence';
-      summary.textContent = `${name} — ${status === '?' ? 'needs evidence' : status} · ${level} · ${definition.category}`;
+      const phase = data.evidence.phases[name] === 'published' ? 'project policy' : 'project reference';
+      summary.textContent = `${name} — ${status === '?' ? 'unanswered' : status} · ${level} · ${definition.category}`;
       row.append(summary);
       const note = document.createElement('p');
-      note.textContent = status === '?' ? 'Not sent in autofill links. Add your own verified answer below.' : `Default proposal: ${phase}.`;
+      note.textContent = status === '?' ? 'No answer selected.' : `Default proposal: ${phase}.`;
       row.append(note);
-      const selectLabel = document.createElement('label'); selectLabel.textContent = 'Your reviewed answer';
+      const selectLabel = document.createElement('label'); selectLabel.textContent = 'Answer';
       const select = document.createElement('select'); select.id = `status-${name}`; selectLabel.htmlFor = select.id;
       for (const value of ['?', 'Met', 'Unmet', ...(definition.na_allowed ? ['N/A'] : [])]) {
         const option = document.createElement('option'); option.value = value; option.textContent = value === '?' ? 'Leave unanswered' : value;
@@ -98,7 +97,7 @@ export function mount(data) {
       const textLabel = document.createElement('label'); textLabel.textContent = 'Evidence / justification';
       const reason = document.createElement('textarea'); reason.id = `reason-${name}`; textLabel.htmlFor = reason.id;
       reason.value = data.answers[`${name}_justification`]; reason.rows = 4;
-      const apply = document.createElement('button'); apply.type = 'button'; apply.textContent = 'Use my reviewed answer';
+      const apply = document.createElement('button'); apply.type = 'button'; apply.textContent = 'Use this answer';
       const confirmed = document.createElement('span'); confirmed.className = 'confirmation'; confirmed.setAttribute('aria-live', 'polite');
       apply.addEventListener('click', () => {
         edits[name] = { status: select.value, justification: reason.value };

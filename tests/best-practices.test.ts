@@ -56,6 +56,16 @@ describe('OpenSSF proposal links', () => {
     expect(() => proposalLinks(data, { edits: { description_good: { status: 'N/A', justification: 'No' } } })).toThrow();
     expect(() => proposalLinks(data, { edits: { description_good: { status: 'Met', justification: 'x'.repeat(6000) } } })).toThrow();
   });
+  test('passes entered answers through without requiring a justification', () => {
+    const values = fields(proposalLinks(data, { edits: { know_secure_design: { status: 'Met', justification: '' } } }));
+    expect(values.know_secure_design_status).toBe('Met');
+    expect(values.know_secure_design_justification).toBe('');
+    for (const [key, value] of Object.entries(data.answers)) {
+      if (key.endsWith('_status') && value === '?') {
+        expect(data.answers[key.slice(0, -7) + '_justification']).toBe('');
+      }
+    }
+  });
   test('leaving a criterion unanswered does not clear the server answer', () => {
     const values = fields(proposalLinks(data, { edits: { version_unique: { status: '?', justification: '' } } }));
     expect(values.version_unique_status).toBeUndefined();
