@@ -37,13 +37,13 @@ jobs:
         env:
           RESULTS: ${{ toJSON(needs) }}
           FULL: ${{ needs.changes.outputs.full }}
-          FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+          REVIEW_REQUIRED: ${{ github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]') }}
         run: |
           if [ "$FULL" = false ]; then
             jq -e '.changes.result == "success" and .unit.result == "success" and
               ([.build, .e2e] | all(.result == "skipped"))' <<< "$RESULTS"
-          elif [ "$FORK" = true ]; then
-            echo '::error::Native validation requires a reviewed branch in this repository; fork code cannot run on the persistent runner pool.'
+          elif [ "$REVIEW_REQUIRED" = true ]; then
+            echo '::error::Native validation requires a maintainer-reviewed branch and push; fork code and automated dependency proposals cannot allocate the persistent runner pool.'
             exit 1
           else
             jq -e 'all(.[]; .result == "success")' <<< "$RESULTS"

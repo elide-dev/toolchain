@@ -24,6 +24,10 @@ Fast shell/Python/action checks run on GitHub-hosted Ubuntu. Native Linux amd64,
 Linux arm64, and macOS arm64 jobs use the existing `*-cipool` runners. Fork code
 never executes on that pool. A native-input fork PR's Gate fails until maintainers
 review and promote it to a branch in this repository for native validation.
+Automated Dependabot PR events also skip native allocation and fail the native
+Gate until a maintainer reviews and pushes the accepted change. Merely enabling
+dependency scans must not start a fleet of expensive compiler builds. Fast checks
+also validate submodule pins before native jobs can start.
 Do not change this to `pull_request_target` plus a PR checkout. Same-repository
 write access is therefore a trust boundary; persistent runners need operational
 isolation and routine rebuilding, especially for releases.
