@@ -30,7 +30,7 @@ class GateTest(unittest.TestCase):
                 with self.subTest(workflow=workflow, full=full, fork=fork, results=results):
                     result = subprocess.run(
                         ['bash', '-e', '-c', script], capture_output=True,
-                        env={**os.environ, 'FULL': full, 'FORK': fork, 'RESULTS': json.dumps(results)},
+                        env={**os.environ, 'FULL': full, 'REVIEW_REQUIRED': fork, 'RESULTS': json.dumps(results)},
                     )
                     self.assertEqual(result.returncode == 0, expected, result.stderr.decode())
 

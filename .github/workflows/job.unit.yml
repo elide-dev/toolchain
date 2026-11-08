@@ -25,6 +25,7 @@ jobs:
       - name: Install test prerequisites
         run: sudo apt-get update -qq && sudo apt-get install -qq -y --no-install-recommends rsync
       - run: mise run setup
+      - run: bash scripts/check-versions.sh
       - run: mise run test
       - name: Check bundled action is current
         run: |
