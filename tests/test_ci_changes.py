@@ -18,7 +18,8 @@ class ClassificationTest(unittest.TestCase):
     def test_paths(self):
         self.assertFalse(CI.requires_full(['README.md', 'docs/design.MD']))
         self.assertFalse(CI.requires_full(['LICENSE', 'action/main.ts', '.github/workflows/on.push.yml']))
-        for paths in ([], ['docs/tool.py'], ['README.md', 'build.sh'],
+        self.assertFalse(CI.requires_full(['.clusterfuzzlite/allocator-fuzz.cc', '.clusterfuzzlite/build.sh']))
+        for paths in ([], ['src/elidealloc-shim/core.cc'], ['docs/tool.py'], ['README.md', 'build.sh'],
                       ['src/elide-toolchain'], ['llvm'], ['versions.env']):
             with self.subTest(paths=paths):
                 self.assertTrue(CI.requires_full(paths))
