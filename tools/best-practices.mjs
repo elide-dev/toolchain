@@ -66,6 +66,7 @@ export function mount(data) {
     output.replaceChildren();
     byId('error').textContent = '';
     byId('cleanup-links').replaceChildren();
+    byId('cleanup-card').hidden = !Object.keys(data.evidence.cleanup_justifications ?? {}).length;
     try {
       for (const link of cleanupLinks(data, { projectId: byId('project-id').value.trim() })) {
         const item = document.createElement('p');
@@ -76,9 +77,9 @@ export function mount(data) {
         item.append(a, fields); byId('cleanup-links').append(item);
       }
       const links = proposalLinks(data, { projectId: byId('project-id').value.trim(), published: byId('published').checked, edits });
-      for (const level of ['passing', 'silver']) {
-        const section = document.createElement('section');
-        const heading = document.createElement('h3'); heading.textContent = level === 'passing' ? 'Passing' : 'Silver';
+      for (const level of Object.keys(data.criteria)) {
+        const section = document.createElement('section'); section.id = level;
+        const heading = document.createElement('h3'); heading.textContent = level[0].toUpperCase() + level.slice(1);
         section.append(heading);
         const parts = links.filter((link) => link.level === level);
         const list = document.createElement('ol');

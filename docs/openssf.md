@@ -18,11 +18,10 @@ Criteria metadata follows the official `ossf/best-practices-badge` schema.
 
 The live review policy requires **one approving reviewer**, with the extra-approval
 setting disabled. Branch and version-tag protections are active. The November 8,
-2026 Scorecard run after Silver recognition and provenance publication reported **8.0/10**.
+2026 Scorecard run after Hadolint integration reported **9.0/10**, including
+10/10 for SAST, fuzzing, licensing, and signed releases.
 
-The standalone page also provides targeted cleanup links for older generated
-notes. They override only the listed justification fields, preserving saved status
-answers. Open each link and choose Save and exit.
+Saved-note cleanup is complete. Autofill proposals preserve existing saved answers.
 
 ## Repository evidence
 
@@ -76,3 +75,38 @@ Original GitHub attestation bundles for v2026.11.0, v2026.11.1, v2026.11.2,
 v2026.11.4, and v2026.11.5 are attached to their releases. All 30 archive digests
 match the existing signed provenance. No binaries or tags were changed.
 Signed-Releases scores 10/10 in the November 8 assessment.
+
+## Gold application
+
+The standalone page includes all 23 official Gold criteria and proposals for the
+16 criteria covered by the saved Silver answers and the additional repository
+work. Open the Gold links in `dist/openssf.html` and save each part. Unanswered
+criteria remain blank, and existing saved answers are preserved.
+
+New references include [starter tasks and review guidance](../CONTRIBUTING.md),
+organization 2FA, source-notice checks, and the
+[November security review](security-review-2026-11.md).
+The review policy remains one reviewer; Gold's two-person criterion means the
+author and a separate reviewer, not two reviewers.
+
+| Workstream | Next concrete step |
+| --- | --- |
+| Coverage | Extend coverage to the installer entry point, shell/Python code, and mimalloc paths; retain whole-project statement and branch measurements. |
+| Reproducible builds | Compare complete native release archives from independently provisioned builds using the same declared inputs. The action bundle's existing repeatability check covers only that artifact. |
+| Release review history | Record author-independent reviews before release; Gold's threshold covers at least half of proposed modifications. |
+| Contributor independence | Add the independent-contributor reference to the application. |
+| Strong 2FA | Record the cryptographic authentication methods used for repository and sensitive-data access. Organization-wide 2FA is already enabled. |
+| Website hardening | Check the homepage and download-origin configuration alongside GitHub's existing security headers. |
+
+### Coverage reports
+
+The `Coverage` workflow retains action LCOV and LLVM line/branch reports as the
+`first-party-coverage` artifact. It compiles only the small allocator shim using the
+hosted runner's compiler, without building LLVM or fetching its submodules.
+
+The November 8 local baseline reports 70/70 instrumented lines for `action/lib.ts`;
+`action/main.ts` is not imported by that unit suite. The allocator forwarding target
+reports 138/167 lines (82.63%) and 58/92 branches (63.04%) across `core.cc`,
+`hotcold.cc`, and `backend-forward.cc`. Line coverage is reported as line coverage,
+not relabeled as statement coverage. These scoped reports are the starting point
+for Gold's 90% statement and 80% branch goals, not whole-project totals.
