@@ -110,3 +110,36 @@ a copyright notice and `SPDX-License-Identifier: Apache-2.0 OR MIT`. Run
 headers. Executable shebangs stay first. Hygiene enforces this convention.
 Submodules, upstream patches, generated action bundles and lockfiles retain their
 upstream/generated contents; do not relicense those with this tool.
+
+## Starter tasks
+
+These tasks are small enough for a first contribution; each can use fast tests:
+
+| Task | Completion check |
+| --- | --- |
+| Add negative tests for malformed mirror version responses in `action/lib.test.ts` | Cover empty responses, embedded whitespace, and unsupported version strings with mocked fetchers. Run the action tests and type check. |
+| Add shell-quoting regression cases for paths containing apostrophes in `tests/unit/` | Exercise the installed helper's shell output and show that evaluating it round-trips the original path. |
+| Add a bundle-upgrade example to `docs/releases.md` | Show separate installation directories, provenance verification, application testing, and rollback without overwriting the old bundle. |
+
+## Review checklist
+
+One reviewer other than the author reviews the final diff and relevant test results.
+Reviewers check the problem and expected behavior, public interfaces and compatibility,
+input handling and trust boundaries, error paths, dependency changes, license notices,
+and test coverage. For native changes, check ABI, target floors, allocator ownership,
+and sanitizer compatibility against the building guide. For workflow changes, check
+runner eligibility, token permissions, pinned actions, cache isolation, and triage.
+
+Use inline comments for concrete defects and the review summary for the overall
+assessment. Approval means the change is useful, the checks appropriate to its risk
+have passed, blocking findings are resolved, and the documentation describes the
+resulting behavior. Re-review changed portions after a new push. Administrators may
+use the documented PR bypass for exceptions; ordinary changes retain one approval.
+
+## Account security
+
+The elide-dev organization requires 2FA for accounts with repository access. Use a
+passkey or hardware security key where possible; an authenticator app is preferable
+to SMS. Keep recovery codes in protected storage separate from the primary device.
+Review collaborator access when responsibilities change. Never share personal access
+tokens or recovery codes in issues, pull requests, or build logs.

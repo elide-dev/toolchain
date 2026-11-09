@@ -73,7 +73,9 @@ describe('OpenSSF proposal links', () => {
     expect(values.version_unique_status).toBeUndefined();
   });
   test('cleanup overrides only targeted notes and never answer statuses', () => {
-    const links = cleanupLinks(data);
+    const fixture = structuredClone(data);
+    fixture.evidence.cleanup_justifications = { warnings_strict_justification: '' };
+    const links = cleanupLinks(fixture);
     expect(links.map((link) => link.level)).toEqual(['passing', 'silver']);
     for (const link of links) {
       const url = new URL(link.url);
@@ -83,6 +85,16 @@ describe('OpenSSF proposal links', () => {
       expect([...url.searchParams.keys()].some((key) => key.endsWith('_status'))).toBe(false);
       expect(url.searchParams.has('warnings_strict_justification')).toBe(true);
       expect(url.searchParams.get('warnings_strict_justification')).toBe('');
+    }
+  });
+  test('Gold links include the Silver prerequisite and leave unanswered criteria untouched', () => {
+    const links = proposalLinks(data, { projectId: '16468', published: true });
+    const gold = links.filter((link) => link.level === 'gold');
+    expect(gold.length).toBeGreaterThan(0);
+    expect(fields(gold).achieve_silver_status).toBe('Met');
+    expect(fields(gold).build_reproducible_status).toBeUndefined();
+    for (const link of gold) {
+      expect(new URL(link.url).pathname).toBe('/en/projects/16468/gold/edit');
     }
   });
   test('branch policy requires one reviewer, never multiple', () => {

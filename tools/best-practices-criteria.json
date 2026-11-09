@@ -612,5 +612,122 @@
       "na_allowed": true,
       "group": "Analysis"
     }
+  },
+  "gold": {
+    "achieve_silver": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Basics"
+    },
+    "bus_factor": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Basics"
+    },
+    "contributors_unassociated": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Basics"
+    },
+    "copyright_per_file": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Basics"
+    },
+    "license_per_file": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Basics"
+    },
+    "repo_distributed": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Change Control"
+    },
+    "small_tasks": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Change Control"
+    },
+    "require_2FA": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Change Control"
+    },
+    "secure_2FA": {
+      "category": "SHOULD",
+      "na_allowed": false,
+      "group": "Change Control"
+    },
+    "code_review_standards": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Quality"
+    },
+    "two_person_review": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Quality"
+    },
+    "build_reproducible": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Quality"
+    },
+    "test_invocation": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Quality"
+    },
+    "test_continuous_integration": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Quality"
+    },
+    "test_statement_coverage90": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Quality"
+    },
+    "test_branch_coverage80": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Quality"
+    },
+    "crypto_used_network": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Security"
+    },
+    "crypto_tls12": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Security"
+    },
+    "hardened_site": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Security"
+    },
+    "security_review": {
+      "category": "MUST",
+      "na_allowed": false,
+      "group": "Security"
+    },
+    "hardening": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Security"
+    },
+    "dynamic_analysis": {
+      "category": "MUST",
+      "na_allowed": true,
+      "group": "Analysis"
+    },
+    "dynamic_analysis_enable_assertions": {
+      "category": "SHOULD",
+      "na_allowed": true,
+      "group": "Analysis"
+    }
   }
 }
