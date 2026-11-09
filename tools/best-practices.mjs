@@ -78,7 +78,7 @@ export function mount(data) {
       }
       const links = proposalLinks(data, { projectId: byId('project-id').value.trim(), published: byId('published').checked, edits });
       for (const level of Object.keys(data.criteria)) {
-        const section = document.createElement('section');
+        const section = document.createElement('section'); section.id = level;
         const heading = document.createElement('h3'); heading.textContent = level[0].toUpperCase() + level.slice(1);
         section.append(heading);
         const parts = links.filter((link) => link.level === level);

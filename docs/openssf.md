@@ -18,7 +18,8 @@ Criteria metadata follows the official `ossf/best-practices-badge` schema.
 
 The live review policy requires **one approving reviewer**, with the extra-approval
 setting disabled. Branch and version-tag protections are active. The November 8,
-2026 Scorecard run after Silver recognition and provenance publication reported **8.0/10**.
+2026 Scorecard run after Hadolint integration reported **9.0/10**, including
+10/10 for SAST, fuzzing, licensing, and signed releases.
 
 Saved-note cleanup is complete. Autofill proposals preserve existing saved answers.
 
