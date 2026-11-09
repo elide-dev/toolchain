@@ -18,7 +18,7 @@ Criteria metadata follows the official `ossf/best-practices-badge` schema.
 
 The live review policy requires **one approving reviewer**, with the extra-approval
 setting disabled. Branch and version-tag protections are active. The November 8,
-2026 Scorecard run after Silver recognition reported **7.2/10**.
+2026 Scorecard run after Silver recognition and provenance publication reported **8.0/10**.
 
 The standalone page also provides targeted cleanup links for older generated
 notes. They override only the listed justification fields, preserving saved status
@@ -51,7 +51,7 @@ explicit. First-party source notices are automatically checked.
 - Audit compiler/linker environment-variable handling and debug-info preservation
   across the staged build.
 - Complete the per-component distribution license/source-offer inventory.
-- Extend allocator fuzzing to the mimalloc backend and persist a shared corpus.
+- Extend allocator fuzzing to the mimalloc backend.
 
 ## Static analysis and fuzzing
 
@@ -67,3 +67,12 @@ alignment, partition reporting, writable allocations, and matching deallocation.
 Only the shim and harness are compiled with the supplied fuzzing compiler; the
 native toolchain pipeline is not invoked. Mimalloc partition heaps are outside
 this target's coverage. See [.clusterfuzzlite](../.clusterfuzzlite).
+
+The fuzz workflow uses the pinned ClusterFuzzLite builder directly with a sparse
+checkout, avoiding recursive LLVM submodule downloads. Corpus caches are isolated
+by Git ref; failures retain crash reproducers as workflow artifacts.
+
+Original GitHub attestation bundles for v2026.11.0, v2026.11.1, v2026.11.2,
+v2026.11.4, and v2026.11.5 are attached to their releases. All 30 archive digests
+match the existing signed provenance. No binaries or tags were changed.
+Signed-Releases scores 10/10 in the November 8 assessment.
