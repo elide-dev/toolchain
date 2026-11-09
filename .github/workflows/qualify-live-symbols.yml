@@ -20,7 +20,7 @@ jobs:
       DEBUGINFO_DEV_QUALIFY_COMMIT: ${{ vars.DEBUGINFO_DEV_QUALIFY_COMMIT }}
       DEBUGINFO_DEV_FOREIGN_DEBUG_ID: ${{ vars.DEBUGINFO_DEV_FOREIGN_DEBUG_ID }}
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: elide-dev/debuginfo-client@47894d0764ff0c7f4763b3e8289e94376c36aa1b

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright the Elide Toolchain contributors.
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 """Retain final tool/shared-library peers; static inputs keep their DWARF in the bundle."""
 
 import importlib.util

@@ -18,7 +18,8 @@ HASH = {'.sh', '.py', '.cmake'}
 
 def comment_for(name):
     path = Path(name)
-    if name.startswith(('action/dist/', 'src/patches/')):
+    # Canonical symbol tooling retains the exact bytes/hashes in its UPSTREAM manifests.
+    if name.startswith(('action/dist/', 'src/patches/', 'tools/symbol-coverage/')):
         return None
     if path.suffix in CODE:
         return '//'

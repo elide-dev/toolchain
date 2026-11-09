@@ -45,7 +45,7 @@ jobs:
         run: |
           echo "Private symbols require configured repository destinations and the linked trusted branch: $TRUSTED_BRANCH."
           echo "PR builds and unconfigured repositories retain their existing private build artifacts without service upload."
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: github.event_name != 'pull_request' && github.event_name != 'pull_request_target' && github.ref == format('refs/heads/{0}', vars.DEBUGINFO_DEV_BRANCH || 'main') && vars.DEBUGINFO_DEV_PROJECT_ID != ''
         with:
           persist-credentials: false

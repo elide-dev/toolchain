@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright the Elide Toolchain contributors.
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 """Inventory the final main bundle AND sanitizer add-ons after stage 90."""
 
 import importlib.util

@@ -3,10 +3,6 @@ name: "Job - Build"
 on:
   workflow_dispatch:
     inputs:
-      runner:
-        description: "Optional runner override for a single-platform qualification"
-        type: string
-        default: ""
       platform:
         description: "Platform subset for build qualification"
         type: choice
@@ -28,10 +24,6 @@ on:
         required: false
         type: boolean
         default: false
-      runner:
-        required: false
-        type: string
-        default: ""
       platform:
         required: false
         type: string
@@ -53,8 +45,8 @@ permissions:
 jobs:
   build:
     name: "Bundle (${{ matrix.os }}-${{ matrix.arch }})"
-    # Release callers always use the disposable pool, regardless of diagnostic inputs.
-    runs-on: ${{ inputs.isolated-release && matrix.release-runner || (inputs.platform != 'all' && inputs.runner || matrix.runner) }}
+    # Release jobs always use the disposable pool; diagnostic selection changes only the platform.
+    runs-on: ${{ inputs.isolated-release && matrix.release-runner || matrix.runner }}
     permissions:
       contents: read
     timeout-minutes: ${{ matrix.timeout }}
