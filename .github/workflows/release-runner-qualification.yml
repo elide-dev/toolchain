@@ -1,0 +1,83 @@
+name: Release runner qualification
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Disposable runner platform to qualify (no native toolchain build)
+        required: true
+        type: choice
+        options: [linux-amd64, linux-arm64, darwin-arm64]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-runner-qualification-${{ inputs.platform }}
+  cancel-in-progress: false
+
+jobs:
+  first:
+    name: First disposable guest
+    runs-on:
+      group: Toolchain Releases
+      labels: ${{ format('{0}-toolchain-release', inputs.platform) }}
+    timeout-minutes: 10
+    outputs:
+      runner: ${{ steps.probe.outputs.runner }}
+    steps:
+      - name: Check guest and write isolation sentinel
+        id: probe
+        env:
+          RUNNER_NAME_VALUE: ${{ runner.name }}
+          PLATFORM: ${{ inputs.platform }}
+        run: |
+          test "$RUNNER_ENVIRONMENT" = self-hosted
+          test -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}"
+          test ! -e "$HOME/.toolchain-isolation-probe"
+          test ! -d "$HOME/.cache/elide-toolchain"
+          case "$PLATFORM:$(uname -m)" in
+            linux-amd64:x86_64|linux-arm64:aarch64|darwin-arm64:arm64) ;;
+            *) echo 'Unexpected guest architecture'; exit 1 ;;
+          esac
+          sudo -n true
+          if [ "$RUNNER_OS" = Linux ]; then
+            accounts=$(curl -fsS -H Metadata-Flavor:Google http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/)
+            test -z "$accounts"
+            docker info >/dev/null
+          else
+            xcrun --find clang
+            xcrun --show-sdk-path
+          fi
+          printf '%s\n' "$GITHUB_RUN_ID" > "$HOME/.toolchain-isolation-probe"
+          printf 'runner=%s\n' "$RUNNER_NAME_VALUE" >> "$GITHUB_OUTPUT"
+          printf 'first guest: %s\nplatform: %s\n' "$RUNNER_NAME_VALUE" "$PLATFORM" > qualification-first.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: qualification-first
+          path: qualification-first.txt
+          if-no-files-found: error
+  second:
+    name: Fresh guest after predecessor
+    needs: first
+    runs-on:
+      group: Toolchain Releases
+      labels: ${{ format('{0}-toolchain-release', inputs.platform) }}
+    timeout-minutes: 10
+    steps:
+      - name: Reject inherited state
+        env:
+          PREVIOUS_RUNNER: ${{ needs.first.outputs.runner }}
+          CURRENT_RUNNER: ${{ runner.name }}
+        run: |
+          test "$RUNNER_ENVIRONMENT" = self-hosted
+          test "$CURRENT_RUNNER" != "$PREVIOUS_RUNNER"
+          test ! -e "$HOME/.toolchain-isolation-probe"
+          test ! -d "$HOME/.cache/elide-toolchain"
+          test -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}"
+          printf 'previous: %s\nfresh: %s\nsentinel: absent\n' "$PREVIOUS_RUNNER" "$CURRENT_RUNNER" > qualification-second.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: qualification-second
+          path: qualification-second.txt
+          if-no-files-found: error

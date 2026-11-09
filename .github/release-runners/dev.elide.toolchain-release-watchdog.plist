@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>dev.elide.toolchain-release-watchdog</string>
+  <key>UserName</key><string>elide</string>
+  <key>ProgramArguments</key><array>
+    <string>/usr/bin/python3</string>
+    <string>/opt/toolchain-release/macos-watchdog.py</string>
+  </array>
+  <key>EnvironmentVariables</key><dict>
+    <key>HOME</key><string>/Users/elide</string>
+    <key>PATH</key><string>/opt/toolchain-release/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>StartInterval</key><integer>60</integer>
+  <key>StandardOutPath</key><string>/var/log/toolchain-release-watchdog.log</string>
+  <key>StandardErrorPath</key><string>/var/log/toolchain-release-watchdog.log</string>
+</dict>
+</plist>
