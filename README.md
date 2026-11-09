@@ -4,6 +4,7 @@
 [![Fuzzing](https://github.com/elide-dev/toolchain/actions/workflows/fuzzing.yml/badge.svg?branch=main)](https://github.com/elide-dev/toolchain/actions/workflows/fuzzing.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/elide-dev/toolchain/badge)](https://scorecard.dev/viewer/?uri=github.com/elide-dev/toolchain)
 [![OpenSSF Best Practices Gold](https://www.bestpractices.dev/projects/16468/badge)](https://www.bestpractices.dev/en/projects/16468)
+[![Sigstore](https://img.shields.io/badge/Sigstore-signed_provenance-blue?logo=sigstore)](docs/releases.md#consumer-verification)
 [![Release](https://img.shields.io/github/v/release/elide-dev/toolchain)](https://github.com/elide-dev/toolchain/releases/latest)
 [![License: Apache-2.0 OR MIT](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue)](LICENSE)
 [![Discord](https://img.shields.io/discord/1119121740161884252?logo=discord&logoColor=white&label=Discord)](https://elide.dev/discord)

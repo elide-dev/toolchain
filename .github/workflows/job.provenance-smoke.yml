@@ -1,0 +1,49 @@
+name: "Job - Provenance smoke test"
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: Sigstore verification and rejection tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
+        with:
+          egress-policy: audit
+      - name: Create test subject
+        # Deliberately not a toolchain archive; this workflow cannot certify releases.
+        run: printf 'Toolchain provenance verification fixture\n' > provenance-smoke.txt
+      - name: Sign test subject
+        id: provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: provenance-smoke.txt
+      - name: Verify identity, source and tamper rejection
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUNDLE_PATH: ${{ steps.provenance.outputs.bundle-path }}
+        run: |
+          verify=(gh attestation verify provenance-smoke.txt --bundle "$BUNDLE_PATH"
+            --repo "$GITHUB_REPOSITORY" --source-ref "$GITHUB_REF"
+            --signer-digest "$GITHUB_SHA" --deny-self-hosted-runners)
+          signer="$GITHUB_REPOSITORY/.github/workflows/job.provenance-smoke.yml"
+          "${verify[@]}" --signer-workflow "$signer" --source-digest "$GITHUB_SHA"
+          if "${verify[@]}" --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/job.release-build.yml"; then
+            echo '::error::Fixture incorrectly accepted as release provenance'; exit 1
+          fi
+          if "${verify[@]}" --signer-workflow "$signer" --source-digest 0000000000000000000000000000000000000000; then
+            echo '::error::Wrong source revision accepted'; exit 1
+          fi
+          printf 'tampered\n' >> provenance-smoke.txt
+          if "${verify[@]}" --signer-workflow "$signer" --source-digest "$GITHUB_SHA"; then
+            echo '::error::Tampered artifact accepted'; exit 1
+          fi
