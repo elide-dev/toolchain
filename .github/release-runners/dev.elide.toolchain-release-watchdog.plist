@@ -14,7 +14,7 @@
   </dict>
   <key>RunAtLoad</key><true/>
   <key>StartInterval</key><integer>60</integer>
-  <key>StandardOutPath</key><string>/var/log/toolchain-release-watchdog.log</string>
-  <key>StandardErrorPath</key><string>/var/log/toolchain-release-watchdog.log</string>
+  <key>StandardOutPath</key><string>/Users/elide/.local/state/toolchain-release/toolchain-release-watchdog.log</string>
+  <key>StandardErrorPath</key><string>/Users/elide/.local/state/toolchain-release/toolchain-release-watchdog.log</string>
 </dict>
 </plist>

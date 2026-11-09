@@ -158,3 +158,53 @@ The qualification workflow does not build native toolchains or publish a release
 Keep `RELEASE_ISOLATION_READY` unset until the lifecycle qualification passes on
 all three platforms. The achieved SLSA badge follows the verified `2026.11.6`
 release; dependency PRs remain a separate integration step.
+
+
+## Lifecycle evidence (2026-11-09 UTC)
+
+The deployed images pin GitHub Actions runner 2.338.2 and its published SHA-256
+checksums. The initial 2.336.0 image was rejected by GitHub as deprecated; its guests
+were removed and the image references were replaced before release enablement.
+
+The macOS [qualification run](https://github.com/elide-dev/toolchain/actions/runs/42554544027)
+passed on two different arm64 guests. The successor had no predecessor sentinel,
+shared toolchain cache, or signing credentials. A separate registered idle guest
+was cancelled through the controller; the guest and GitHub registration disappeared.
+The host watchdog also removed an expired job clone without a controller present.
+
+A GCE guest configured with a 60-second maximum running lifetime and `DELETE`
+termination action disappeared with its boot disk without controller cleanup.
+The production controllers use the same provider lifetime mechanism with a
+13-hour limit. Cancelling the initial Linux controllers removed their guests and
+boot disks. Rejected runner registrations were removed as well. Image-builder
+VMs and their disks were deleted after sealing the replacement images.
+
+
+The arm64 pool uses `c4a-standard-16` (64 GiB RAM). During qualification,
+`c4a-highmem-8` hit a zonal capacity shortage after its first successful job;
+three bounded retries stopped allocation, and the standard shape started
+successfully with the same sealed image and isolation policy.
+
+
+Both [Linux amd64](https://github.com/elide-dev/toolchain/actions/runs/42554538464)
+and [Linux arm64](https://github.com/elide-dev/toolchain/actions/runs/42554541292)
+qualification runs passed. Each successor used a different runner identity and
+reported the predecessor sentinel absent. All three platforms passed the
+no-signing-credentials checks; Linux also verified an empty instance service-account
+list and working Docker. These runs qualify runner infrastructure, not a released
+toolchain: the first release and achieved badge remain tied to `2026.11.6`.
+
+
+## Ordinary macOS CI
+
+The old host-native runner is replaced by `macsandbox-arm64-ci-vm-1` inside the
+persistent `toolchain-ci-macos-arm64` VM (8 CPUs, 48 GiB RAM). It retains the
+`darwin-arm64-cipool` label in repository-restricted runner group 19 (`Toolchain CI`).
+Ordinary CI can keep its caches inside this guest. Release jobs use separate,
+disposable clones of the sealed image and never clone or mount the CI guest.
+
+The host runs only the VM process through
+`dev.elide.toolchain-ci-macos.plist`; the Actions runner service is installed inside
+the guest. The CI VM has the same host/private-network and device-sharing restrictions
+as release guests. Its name is outside the release watchdog namespace. This keeps
+ordinary macOS CI available without executing build code on the release hypervisor.

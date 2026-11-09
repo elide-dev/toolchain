@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>HOME</key>
+		<string>/Users/elide</string>
+		<key>PATH</key>
+		<string>/opt/toolchain-release/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+	</dict>
+	<key>KeepAlive</key>
+	<true/>
+	<key>Label</key>
+	<string>dev.elide.toolchain-ci-macos</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/opt/toolchain-release/bin/tart</string>
+		<string>run</string>
+		<string>toolchain-ci-macos-arm64</string>
+		<string>--no-graphics</string>
+		<string>--no-audio</string>
+		<string>--no-usb-accessories</string>
+		<string>--no-clipboard</string>
+		<string>--net-softnet</string>
+		<string>--net-softnet-allow=out proto udp @host port 53,out proto tcp @host port 53</string>
+		<string>--net-softnet-block=out @host,out @peers,out 10.0.0.0/8,out 172.16.0.0/12,out 192.168.0.0/16,out 100.64.0.0/10,in 0.0.0.0/0</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StandardErrorPath</key>
+	<string>/Users/elide/.local/state/toolchain-release/toolchain-ci-macos.log</string>
+	<key>StandardOutPath</key>
+	<string>/Users/elide/.local/state/toolchain-release/toolchain-ci-macos.log</string>
+	<key>ThrottleInterval</key>
+	<integer>30</integer>
+	<key>UserName</key>
+	<string>elide</string>
+</dict>
+</plist>
