@@ -184,3 +184,12 @@ The arm64 pool uses `c4a-standard-16` (64 GiB RAM). During qualification,
 `c4a-highmem-8` hit a zonal capacity shortage after its first successful job;
 three bounded retries stopped allocation, and the standard shape started
 successfully with the same sealed image and isolation policy.
+
+
+Both [Linux amd64](https://github.com/elide-dev/toolchain/actions/runs/42554538464)
+and [Linux arm64](https://github.com/elide-dev/toolchain/actions/runs/42554541292)
+qualification runs passed. Each successor used a different runner identity and
+reported the predecessor sentinel absent. All three platforms passed the
+no-signing-credentials checks; Linux also verified an empty instance service-account
+list and working Docker. These runs qualify runner infrastructure, not a released
+toolchain: the first release and achieved badge remain tied to `2026.11.6`.
