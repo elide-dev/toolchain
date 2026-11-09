@@ -25,6 +25,18 @@ class DCOTest(unittest.TestCase):
                         'Signed-off-by: ' + author + '\n\nBody after the alleged trailer'):
             self.assertFalse(dco.valid_signoff(message, author, committer))
 
+    def test_dependency_metadata_is_not_a_patch_divider(self):
+        author = 'dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>'
+        committer = 'Maintainer <maintainer@example.org>'
+        body = ('Update dependency\n\n---\nupdated-dependencies:\n'
+                '- dependency-name: example\n...\n\n')
+        self.assertFalse(dco.valid_signoff(
+            body + 'Signed-off-by: dependabot[bot] <support@github.com>', author, committer))
+        self.assertTrue(dco.valid_signoff(
+            body + 'Signed-off-by: ' + committer, author, committer))
+        self.assertFalse(dco.valid_signoff(
+            body + 'Signed-off-by: Stranger <other@example.org>', author, committer))
+
     def test_range(self):
         with tempfile.TemporaryDirectory() as directory:
             env = {**os.environ, 'GIT_AUTHOR_NAME': 'Contributor',
