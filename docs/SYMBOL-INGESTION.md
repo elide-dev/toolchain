@@ -1,7 +1,9 @@
 # Private final-symbol ingestion
 
-`.github/workflows/on.symbols.yml` observes successful producer workflows and calls
-`job.symbols.yml`. The latter can also ingest an earlier successful producer run
+`.github/workflows/on.symbols.yml` observes successful CI, manual build, and Release
+workflows and calls `job.symbols.yml` when preserved native symbol artifacts exist.
+Maintenance runs without native artifacts skip ingestion and the downstream remote
+symbolication gate. Explicit manual symbolication still requires valid receipts. The latter can also ingest an earlier successful producer run
 without recompiling it. It runs from the repository's linked trusted upload branch,
 uses the shared `elide-dev/setup-debuginfo` action (or its byte-identical official
 `elide-dev/debuginfo-client` distribution) for a project-scoped 15-minute GitHub credential,

@@ -12,8 +12,29 @@ on:
 permissions:
   contents: read
 jobs:
-  symbolicate:
+  receipts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    outputs:
+      available: ${{ steps.artifacts.outputs.available }}
     if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main'))
+    steps:
+      - name: Check whether ingestion produced receipts
+        id: artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INGESTION_RUN: ${{ inputs.ingestion_run || github.event.workflow_run.id }}
+        run: |
+          available=$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/runs/$INGESTION_RUN/artifacts?per_page=100" |
+            jq 'any(.[].artifacts[]; (.expired == false) and (.name | startswith("symbol-ingestion-")))')
+          # Explicit qualification must still fail on absent or invalid receipts.
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then available=true; fi
+          echo "available=$available" >> "$GITHUB_OUTPUT"
+  symbolicate:
+    needs: receipts
+    if: needs.receipts.outputs.available == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     permissions:
