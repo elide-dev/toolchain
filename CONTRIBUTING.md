@@ -89,7 +89,12 @@ project achievements in the README within 48 hours.
 
 ## Dependency review
 
-Dependabot proposes Actions, Bun, and submodule updates. Review every submodule PR
+Dependabot proposes Actions, Bun, and branch-tracked submodule updates. LevelDB,
+Zstd, Brotli, and zlib-ng follow stable release tags through
+`scripts/bump-submodules.sh`; generic submodule branch-tip updates are ignored for
+these components because they can select development snapshots or omit release
+security backports. Review release notes and advisories before changing those pins.
+Review every submodule PR
 against `versions.env`; automation does not update the corresponding pins for you.
 Before releases and at least monthly, review upstream advisories for all bundled
 libraries and checksum-pinned downloads, including glibc RPMs, Linux headers,
