@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright the Elide Toolchain contributors.
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 """Read one hashed member of this repository's GitHub artifact using HTTP ranges.
 
 GitHub authorization is sent only to api.github.com. The temporary storage URL is

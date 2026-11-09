@@ -6,6 +6,8 @@ Submodules, upstream patches, generated bundles and lockfiles retain their bytes
 Existing different SPDX expressions require review and are never overwritten.
 """
 import argparse
+import hashlib
+import json
 from pathlib import Path
 import subprocess
 
@@ -18,8 +20,7 @@ HASH = {'.sh', '.py', '.cmake'}
 
 def comment_for(name):
     path = Path(name)
-    # Canonical symbol tooling retains the exact bytes/hashes in its UPSTREAM manifests.
-    if name.startswith(('action/dist/', 'src/patches/', 'tools/symbol-coverage/')):
+    if name.startswith(('action/dist/', 'src/patches/')):
         return None
     if path.suffix in CODE:
         return '//'
@@ -40,12 +41,24 @@ def check(fix=False):
     names = subprocess.check_output(
         ['git', 'ls-files', '--cached', '--others', '--exclude-standard', '-z'], cwd=ROOT,
     ).decode().split('\0')
+    # Exempt only hash-verified canonical snapshots, not first-party helpers in
+    # the same directory. A changed snapshot must update its provenance record.
+    vendored = set()
+    canonical = ROOT / 'tools/symbol-coverage'
+    for manifest in canonical.glob('*UPSTREAM.json'):
+        for name, digest in json.loads(manifest.read_text())['files'].items():
+            if Path(name).name != name:
+                raise SystemExit(f'Invalid canonical source path: {name}')
+            source = canonical / name
+            if hashlib.sha256(source.read_bytes()).hexdigest() != digest:
+                raise SystemExit(f'Canonical source hash mismatch: {source}')
+            vendored.add(source.relative_to(ROOT).as_posix())
     failures = []
     count = 0
     for name in sorted(set(filter(None, names))):
         comment = comment_for(name)
         path = ROOT / name
-        if not comment or not path.is_file():
+        if name in vendored or not comment or not path.is_file():
             continue
         text = path.read_text()
         header = text[:1024]
