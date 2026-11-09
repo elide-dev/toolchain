@@ -158,3 +158,29 @@ The qualification workflow does not build native toolchains or publish a release
 Keep `RELEASE_ISOLATION_READY` unset until the lifecycle qualification passes on
 all three platforms. The achieved SLSA badge follows the verified `2026.11.6`
 release; dependency PRs remain a separate integration step.
+
+
+## Lifecycle evidence (2026-11-09 UTC)
+
+The deployed images pin GitHub Actions runner 2.338.2 and its published SHA-256
+checksums. The initial 2.336.0 image was rejected by GitHub as deprecated; its guests
+were removed and the image references were replaced before release enablement.
+
+The macOS [qualification run](https://github.com/elide-dev/toolchain/actions/runs/42554544027)
+passed on two different arm64 guests. The successor had no predecessor sentinel,
+shared toolchain cache, or signing credentials. A separate registered idle guest
+was cancelled through the controller; the guest and GitHub registration disappeared.
+The host watchdog also removed an expired job clone without a controller present.
+
+A GCE guest configured with a 60-second maximum running lifetime and `DELETE`
+termination action disappeared with its boot disk without controller cleanup.
+The production controllers use the same provider lifetime mechanism with a
+13-hour limit. Cancelling the initial Linux controllers removed their guests and
+boot disks. Rejected runner registrations were removed as well. Image-builder
+VMs and their disks were deleted after sealing the replacement images.
+
+
+The arm64 pool uses `c4a-standard-16` (64 GiB RAM). During qualification,
+`c4a-highmem-8` hit a zonal capacity shortage after its first successful job;
+three bounded retries stopped allocation, and the standard shape started
+successfully with the same sealed image and isolation policy.

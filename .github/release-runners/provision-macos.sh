@@ -15,8 +15,8 @@ test ! -e "$runner/.credentials"
 mkdir -p "$runner"
 archive=$(mktemp)
 trap 'rm -f "$archive"' EXIT
-curl -fL --retry 3 -o "$archive" https://github.com/actions/runner/releases/download/v2.336.0/actions-runner-osx-arm64-2.336.0.tar.gz
-printf '%s  %s\n' 8e8839c49b7060b6b2154f4931f815df330c27f167d53ef2239ee3dfce28b079 "$archive" | shasum -a 256 -c -
+curl -fL --retry 3 -o "$archive" https://github.com/actions/runner/releases/download/v2.338.2/actions-runner-osx-arm64-2.338.2.tar.gz
+printf '%s  %s\n' 25a065af409ffa317ab4d5a3b614dd15fc9c40f2172bc1b35a1b1258e919a388 "$archive" | shasum -a 256 -c -
 tar -xzf "$archive" -C "$runner"
 # The controller uses the guest agent, never these template SSH credentials.
 rm -f "$HOME/.ssh/authorized_keys" "$HOME/.bash_history" "$HOME/.zsh_history"
@@ -24,6 +24,6 @@ rm -rf "$HOME/.cache/ccache" "$HOME/Library/Caches/ccache" "$HOME/.cache/elide-t
 mkdir -p "$HOME/toolchain-release-image"
 brew list --versions > "$HOME/toolchain-release-image/packages.txt"
 sw_vers > "$HOME/toolchain-release-image/macos.txt"
-printf 'runner=2.336.0\nsha256=8e8839c49b7060b6b2154f4931f815df330c27f167d53ef2239ee3dfce28b079\n' > "$HOME/toolchain-release-image/runner.txt"
+printf 'runner=2.338.2\nsha256=25a065af409ffa317ab4d5a3b614dd15fc9c40f2172bc1b35a1b1258e919a388\n' > "$HOME/toolchain-release-image/runner.txt"
 test ! -d "$runner/_work"
 printf 'Release macOS image provisioning complete\n'

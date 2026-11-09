@@ -19,11 +19,11 @@ printf 'ci-agent ALL=(ALL) NOPASSWD:ALL\n' > /etc/sudoers.d/toolchain-release
 chmod 0440 /etc/sudoers.d/toolchain-release
 visudo -cf /etc/sudoers.d/toolchain-release
 case "$(uname -m)" in
-  x86_64) arch=x64; digest=04cf0be1aff4c3ec3554466c39124ca250e3effd8873bb7e8d68535aa9505d5d ;;
-  aarch64) arch=arm64; digest=58b758e420b87093fbd4bfddd368074960053e2f1388f01848c82624b90f27d1 ;;
+  x86_64) arch=x64; digest=baebf204307bac6193480852732f0aba2ae97b6c5597c244f4d5558390147c40 ;;
+  aarch64) arch=arm64; digest=670adb2f268fe21dcbb58b3db0e0aa9d5b3bddfe2c651481336e561ff86de945 ;;
   *) echo 'Unsupported image architecture' >&2; exit 1 ;;
 esac
-runner_version=2.336.0
+runner_version=2.338.2
 archive=$(mktemp)
 trap 'rm -f "$archive"' EXIT
 curl --fail --location --retry 3 -o "$archive" \
