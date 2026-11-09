@@ -2,8 +2,9 @@
 
 Toolchain targets [SLSA v1.2 Build L3](https://slsa.dev/spec/v1.2/build-requirements)
 using disposable native build guests and GitHub-hosted Sigstore signing. The
-repository implements the release workflow and Linux guest lifecycle controller.
-Infrastructure rollout and a qualifying native release are the remaining steps;
+repository implements the release workflow, Linux/macOS guest lifecycle controllers,
+and a supervisor for explicitly selected Actions runs. The first qualifying native
+release is planned as `2026.11.6`, after the dependency updates and additional fixes;
 existing release archives retain their original provenance and build properties.
 
 ## Release boundary
@@ -85,9 +86,13 @@ Use a dedicated repository runner group where available and restrict admission t
 the reviewed reusable release workflows. Do not reuse an organization-wide runner
 registration credential inside guests.
 
-macOS requires an equivalent single-job VM lifecycle on Apple hardware. The Linux
-GCE controller does not provision macOS. Do not assign the release label to a
-persistent Mac worker.
+macOS uses `.github/scripts/release-macos-runner.py` on the arm64 host
+`elide@10.5.0.15`. Each job receives an APFS clone of the sealed macOS image, with
+no mounted host folders, clipboard, audio, or USB access. Softnet blocks guest
+connections to the host, peers, and private networks; only DNS to the gateway is
+allowed. Commands and JIT configuration travel over Tart's guest-agent channel,
+not guest SSH. A separate launchd watchdog deletes job VMs after 13 hours, including
+controller-loss cases. The previous persistent host runner has been uninstalled.
 
 ## Enable and qualify
 
@@ -114,3 +119,42 @@ cache separation, publication rejection, and VM cleanup after failures.
 See [GitHub's reusable-workflow guidance](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/increase-security-rating)
 and [release verification](releases.md). SLSA levels describe artifact build
 processes; adding a signature to an old archive does not change its build level.
+
+## Deployed pool and qualification
+
+The checked-in [pool configuration](../.github/release-runners/pool.json) records
+Linux image names and numeric IDs, the immutable macOS base-image digest, the
+controller host, and organization runner group 18 (`Toolchain Releases`). The
+GCP network is `toolchain-release` in `us-east1`, with no peering, IAP-only SSH,
+private-range egress denial, and NAT. Image-builder VMs are deleted after sealing.
+Provisioning and installation scripts live in `.github/release-runners/`.
+
+The runner group is restricted to this repository and explicitly selected workflow
+references. GitHub requires those references to exist. Before `v2026.11.6` runs,
+add its exact `job.build.yml` and `job.action-e2e.yml` workflow references to the
+group; qualification uses only `release-runner-qualification.yml@refs/heads/main`.
+Never add wildcard repository access or remove the workflow restriction.
+
+Dispatch **Release runner qualification** once per platform. Each run creates two
+sequential guests: the first writes an isolation sentinel and the second must have
+a new runner identity and no sentinel. Both lack signing credentials. Supply their
+run IDs to the supervisor from a trusted controller with `gh`, `gcloud`, Python,
+and SSH access to the Mac:
+
+```sh
+python3 .github/scripts/release-pool.py \
+  --run-id "$linux_amd64_run" --run-id "$linux_arm64_run" --run-id "$macos_run" \
+  --logs "$HOME/toolchain-release-logs"
+```
+
+The supervisor starts at most one worker per platform, only for queued jobs in the
+explicitly selected qualification or `v2026.11.6` release runs. It stops allocating
+when those runs finish, retains controller logs, cleans up guests, and stops after
+three worker failures on a platform. Run it on the trusted controller throughout a
+release; no controller credentials are copied into guests. The GCE lifetime limit
+and macOS watchdog remain active independently of the supervisor.
+
+The qualification workflow does not build native toolchains or publish a release.
+Keep `RELEASE_ISOLATION_READY` unset until the lifecycle qualification passes on
+all three platforms. The achieved SLSA badge follows the verified `2026.11.6`
+release; dependency PRs remain a separate integration step.

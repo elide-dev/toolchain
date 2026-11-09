@@ -25,6 +25,7 @@ def parser():
     p.add_argument('--machine-type', required=True)
     p.add_argument('--subnet', required=True)
     p.add_argument('--repository', default='elide-dev/toolchain')
+    p.add_argument('--organization', help='Register in an organization runner group instead of directly in the repository')
     p.add_argument('--disk-size', default='300GB')
     p.add_argument('--runner-group-id', type=int, default=1)
     p.add_argument('--execute', action='store_true', help='Create a billable VM; default only prints the plan')
@@ -36,6 +37,8 @@ def plan(args, name):
         raise ValueError('Use a specific approved image, not a family or URL')
     if not re.fullmatch(r'[\w.-]+/[\w.-]+', args.repository):
         raise ValueError('Invalid repository')
+    if args.organization and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9-]*', args.organization):
+        raise ValueError('Invalid organization')
     for value in (args.project, args.zone, args.machine_type, args.subnet, args.disk_size):
         if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9./_-]*', value):
             raise ValueError('Invalid infrastructure identifier')
@@ -65,6 +68,7 @@ def run(args):
         print(json.dumps({'create': create, 'registration': jit, 'delete': delete}, indent=2))
         return
     runner_id = None
+    runner_api = f'orgs/{args.organization}/actions/runners' if args.organization else f'repos/{args.repository}/actions/runners'
     # Even a create timeout may leave a VM behind. Delete this unique name in finally;
     # GCE's independent maximum lifetime also covers controller loss/SIGKILL.
     try:
@@ -81,7 +85,7 @@ def run(args):
         # The image contains a pinned runner under /opt/actions-runner, owned by
         # ci-agent. Never copy a PAT, GitHub App key, or gcloud credentials there.
         response = command(['gh', 'api', '--method', 'POST',
-                            f'repos/{args.repository}/actions/runners/generate-jitconfig',
+                            f'{runner_api}/generate-jitconfig',
                             '--input', '-'], input=json.dumps(jit), capture_output=True, timeout=30)
         config = json.loads(response.stdout)
         runner_id = config['runner']['id']
@@ -103,7 +107,7 @@ def run(args):
             if runner_id is not None:
                 try:
                     subprocess.run(['gh', 'api', '--method', 'DELETE',
-                                    f'repos/{args.repository}/actions/runners/{runner_id}'],
+                                    f'{runner_api}/{runner_id}'],
                                    text=True, timeout=30, check=False, stdout=subprocess.DEVNULL,
                                    stderr=subprocess.DEVNULL)
                 except (subprocess.TimeoutExpired, OSError):

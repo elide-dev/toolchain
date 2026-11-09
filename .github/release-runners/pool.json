@@ -1,0 +1,25 @@
+{
+  "repository": "elide-dev/toolchain",
+  "organization": "elide-dev",
+  "runner_group_id": 18,
+  "runner_group_name": "Toolchain Releases",
+  "release": "v2026.11.6",
+  "gcp": {
+    "project": "elide-cloud-sandbox",
+    "zone": "us-east1-b",
+    "subnet": "toolchain-release",
+    "images": {
+      "amd64": "projects/elide-cloud-sandbox/global/images/toolchain-release-linux-amd64-20261108",
+      "arm64": "projects/elide-cloud-sandbox/global/images/toolchain-release-linux-arm64-20261108"
+    },
+    "image_ids": {"amd64": "7960946701930105723", "arm64": "4617051092736052091"},
+    "machine_types": {"amd64": "c4d-highmem-8", "arm64": "c4a-highmem-8"}
+  },
+  "macos": {
+    "host": "elide@10.5.0.15",
+    "image": "toolchain-release-macos-image-20261108",
+    "source": "ghcr.io/cirruslabs/macos-tahoe-base@sha256:65c3133a633fda8753cf1f71f2d55727792d534a2125b0032466563dcc8e58fd",
+    "tart": "2.41.1",
+    "softnet": "0.25.0"
+  }
+}
