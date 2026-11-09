@@ -193,3 +193,18 @@ reported the predecessor sentinel absent. All three platforms passed the
 no-signing-credentials checks; Linux also verified an empty instance service-account
 list and working Docker. These runs qualify runner infrastructure, not a released
 toolchain: the first release and achieved badge remain tied to `2026.11.6`.
+
+
+## Ordinary macOS CI
+
+The old host-native runner is replaced by `macsandbox-arm64-ci-vm-1` inside the
+persistent `toolchain-ci-macos-arm64` VM (8 CPUs, 48 GiB RAM). It retains the
+`darwin-arm64-cipool` label in repository-restricted runner group 19 (`Toolchain CI`).
+Ordinary CI can keep its caches inside this guest. Release jobs use separate,
+disposable clones of the sealed image and never clone or mount the CI guest.
+
+The host runs only the VM process through
+`dev.elide.toolchain-ci-macos.plist`; the Actions runner service is installed inside
+the guest. The CI VM has the same host/private-network and device-sharing restrictions
+as release guests. Its name is outside the release watchdog namespace. This keeps
+ordinary macOS CI available without executing build code on the release hypervisor.
