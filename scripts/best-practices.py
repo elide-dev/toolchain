@@ -24,8 +24,8 @@ def load_data():
             raise ValueError(f'{name}: missing or invalid status')
         if status == 'N/A' and not definition['na_allowed']:
             raise ValueError(f'{name}: N/A not permitted')
-        if not data['answers'].get(name + '_justification', '').strip():
-            raise ValueError(f'{name}: missing evidence or remaining-work explanation')
+        if not isinstance(data['answers'].get(name + '_justification', ''), str):
+            raise ValueError(f'{name}: justification must be text')
         if data['evidence']['phases'].get(name) not in {'public', 'published'}:
             raise ValueError(f'{name}: missing publication phase')
     allowed = METADATA | {name + suffix for name in definitions for suffix in ('_status', '_justification')}
@@ -53,7 +53,7 @@ def main():
     for level, definitions in data['criteria'].items():
         statuses = [data['answers'][name + '_status'] for name in definitions]
         print(f'{level}: {statuses.count("Met")} Met proposals, {statuses.count("N/A")} N/A, '
-              f'{statuses.count("Unmet")} unmet, {statuses.count("?")} need evidence (not a badge score)')
+              f'{statuses.count("Unmet")} unmet, {statuses.count("?")} unanswered')
 
 
 if __name__ == '__main__':

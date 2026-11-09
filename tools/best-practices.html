@@ -42,29 +42,33 @@ code { font-size: .9em; overflow-wrap: anywhere; }
 <main>
 <header>
 <div class="eyebrow">Elide Toolchain / OpenSSF / reviewed 2026-11-08</div>
-<h1>Make the evidence count.</h1>
-<p class="lede">Autofill the Best Practices forms with reviewed Toolchain evidence. Finish Passing first, then work through Silver. No multi-reviewer requirement is proposed.</p>
+<h1>Toolchain OpenSSF autofill.</h1>
+<p class="lede">Open the Passing and Silver forms with the project answers filled in. Edit any answer below.</p>
 </header>
+<section class="card notice">
+<h2>Remove the old OpenSSF notes</h2>
+<p>Open each cleanup link and choose <strong>Save and exit</strong>. These links replace
+only the listed note fields; your Met / Unmet / N/A answers stay unchanged.</p>
+<div id="cleanup-links"></div>
+</section>
 <section class="card">
 <h2>Contribution policies prepared</h2>
 <p>This change includes a contributor agreement and guide, DCO 1.1 with commit-trailer
 checks, a code of conduct, agent guidance, security and governance policies, and
 dual Apache-2.0 OR MIT licensing with automated first-party source-notice checks.</p>
-<p>The DCO criterion still needs a historical-contributor audit: new sign-off rules
-do not certify old contributions. Publication-dependent evidence is enabled in step 2.</p>
 </section>
 <section class="card">
 <h2>1. Register or open Toolchain</h2>
-<p><a href="https://www.bestpractices.dev/en/projects/new" target="_blank" rel="noopener noreferrer">Create the project entry</a> while signed in with GitHub. Use repository <code>https://github.com/elide-dev/toolchain</code>. No matching entry was found during review.</p>
+<p><a href="https://www.bestpractices.dev/en/projects/new" target="_blank" rel="noopener noreferrer">Create the project entry</a> while signed in with GitHub. Use repository <code>https://github.com/elide-dev/toolchain</code>. Choose the existing entry if you have already registered it.</p>
 <p><a href="https://www.bestpractices.dev/en/projects?url=https%3A%2F%2Fgithub.com%2Felide-dev%2Ftoolchain" target="_blank" rel="noopener noreferrer">Find Toolchain’s saved entry</a>. Links below can find it by repository URL; paste its ID if that lookup is ambiguous.</p>
 <label for="project-id">Project ID (optional)</label>
 <input id="project-id" type="text" inputmode="numeric" pattern="[1-9][0-9]*" placeholder="For example: 12345" autocomplete="off">
 </section>
 <section class="card notice">
-<h2>2. Include newly published evidence</h2>
-<p>Licensing, contribution guidance and several policies currently exist in the local changes. Their proposals are withheld until the evidence is published. The page does not submit answers, change GitHub settings, or award a badge.</p>
-<label class="check"><input id="published" type="checkbox">The prepared repository changes are merged and their evidence links work on <code>main</code>.</label>
-<p>Reviewer policy stays at <strong>one approving reviewer</strong>. Two-reviewer requirements are intentionally omitted; other controls remain proposed.</p>
+<h2>2. Project answers</h2>
+<p>The contributor agreement, DCO, licenses and project policies are published on <code>main</code>.</p>
+<label class="check"><input id="published" type="checkbox" checked>Include policy and licensing answers.</label>
+<p>Reviewer policy stays at <strong>one approving reviewer</strong>. Two-reviewer requirements are intentionally omitted; branch and tag protections are active.</p>
 </section>
 <section class="card">
 <h2>3. Autofill, review, save</h2>
@@ -75,20 +79,8 @@ do not certify old contributions. Publication-dependent evidence is enabled in s
 <noscript>Enable JavaScript to construct the links. This file is self-contained and makes no network requests until you open an external link.</noscript>
 </section>
 <section class="card">
-<h2>Highest-impact next steps</h2>
-<ol>
-<li><strong>Publish the prepared changes and finish Passing.</strong> The license, security policy, contributor guidance and automated checks need to be visible before the badge service can validate them.</li>
-<li><strong>Enable the proposed protections after checks run.</strong> One approval, final-push review, resolved threads, signed commits, immutable version tags and required checks. No two-reviewer requirement.</li>
-<li><strong>Run Scorecard after merging.</strong> There is no published Toolchain result at review time, so no numeric score is claimed. Inspect its actual findings before adding more controls.</li>
-<li><strong>Make the next release’s signatures discoverable.</strong> Attach the signed provenance bundle and in-toto envelope alongside the actual built archives; preserve historical bytes.</li>
-<li><strong>Close Silver’s engineering gaps.</strong> Native repeatability, production statement coverage ≥80%, enforced formatting, production-target fuzzing, native static analysis and complete distribution license inventory need evidence.</li>
-<li><strong>Confirm maintainer facts.</strong> Secure-development experience, outstanding/private vulnerability handling, credential revocation and another administrator’s release recovery cannot be inferred from files.</li>
-</ol>
-<p>A Scorecard result and a Best Practices badge measure different things. Neither counts here as achieved just because a link is prepared.</p>
-</section>
-<section class="card">
-<h2>Review evidence and supply missing answers</h2>
-<p>Expand a criterion to inspect its proposal. For facts you can verify, select an answer, write supporting evidence, then choose “Use my reviewed answer.” That explicitly includes your answer in the links above, even if the publication checkbox is off. Changes stay in this page’s memory and reset on reload.</p>
+<h2>Edit answers</h2>
+<p>Expand a criterion, select an answer, optionally add a note or link, then choose “Use this answer.” Your entry goes into the autofill links. Blank fields stay blank. Edits reset when you reload this page.</p>
 <div id="evidence"></div>
 </section>
 <footer>

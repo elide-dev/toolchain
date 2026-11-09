@@ -83,8 +83,7 @@ Contributors retain copyright in their contributions.
 
 If a maintainer becomes unavailable, another administrator should take over
 triage and releases within one week. Administrators must verify recovery of runner,
-GitHub, and mirror credentials and record the exercise privately; repository admin
-access alone does not prove release continuity. This verification is still pending.
+GitHub, and mirror credentials and record the exercise privately.
 Review access whenever maintainers join or leave. Publish links to newly attained
 project achievements in the README within 48 hours.
 

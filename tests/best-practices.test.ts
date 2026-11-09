@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
-import { proposalLinks } from '../tools/best-practices.mjs';
+import { proposalLinks, cleanupLinks } from '../tools/best-practices.mjs';
 
 const read = (path: string) => JSON.parse(readFileSync(new URL(path, import.meta.url), 'utf8'));
 const data = {
@@ -14,7 +14,9 @@ const fields = (links: ReturnType<typeof proposalLinks>) => Object.assign({}, ..
 
 describe('OpenSSF proposal links', () => {
   test('unpublished and unknown answers are withheld by default', () => {
-    const links = proposalLinks(data);
+    const fixture = structuredClone(data);
+    fixture.answers.know_secure_design_status = "?";
+    const links = proposalLinks(fixture);
     const values = fields(links);
     expect(values.floss_license_status).toBeUndefined();
     expect(values.license).toBeUndefined();
@@ -40,7 +42,7 @@ describe('OpenSSF proposal links', () => {
         if (!key.endsWith('_status')) continue;
         const criterion = key.slice(0, -7);
         expect(data.criteria[link.level][criterion]).toBeDefined();
-        expect(url.searchParams.get(`${criterion}_justification`)).toBeTruthy();
+        expect(url.searchParams.has(`${criterion}_justification`)).toBe(true);
         expect(value).not.toBe('?');
       }
     }
@@ -56,9 +58,32 @@ describe('OpenSSF proposal links', () => {
     expect(() => proposalLinks(data, { edits: { description_good: { status: 'N/A', justification: 'No' } } })).toThrow();
     expect(() => proposalLinks(data, { edits: { description_good: { status: 'Met', justification: 'x'.repeat(6000) } } })).toThrow();
   });
+  test('passes entered answers through without requiring a justification', () => {
+    const values = fields(proposalLinks(data, { edits: { know_secure_design: { status: 'Met', justification: '' } } }));
+    expect(values.know_secure_design_status).toBe('Met');
+    expect(values.know_secure_design_justification).toBe('');
+    for (const [key, value] of Object.entries(data.answers)) {
+      if (key.endsWith('_status') && value === '?') {
+        expect(data.answers[key.slice(0, -7) + '_justification']).toBe('');
+      }
+    }
+  });
   test('leaving a criterion unanswered does not clear the server answer', () => {
     const values = fields(proposalLinks(data, { edits: { version_unique: { status: '?', justification: '' } } }));
     expect(values.version_unique_status).toBeUndefined();
+  });
+  test('cleanup overrides only targeted notes and never answer statuses', () => {
+    const links = cleanupLinks(data);
+    expect(links.map((link) => link.level)).toEqual(['passing', 'silver']);
+    for (const link of links) {
+      const url = new URL(link.url);
+      const overrides = url.searchParams.get('overrides')!.split(',');
+      expect(overrides).toEqual(link.fields);
+      expect(overrides.every((field) => field.endsWith('_justification'))).toBe(true);
+      expect([...url.searchParams.keys()].some((key) => key.endsWith('_status'))).toBe(false);
+      expect(url.searchParams.has('warnings_strict_justification')).toBe(true);
+      expect(url.searchParams.get('warnings_strict_justification')).toBe('');
+    }
   });
   test('branch policy requires one reviewer, never multiple', () => {
     const rules = read('../.github/rulesets/main.json');

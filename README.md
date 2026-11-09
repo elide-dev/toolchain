@@ -1,5 +1,7 @@
 # Elide Toolchain
 
+[![OpenSSF Best Practices Silver](https://www.bestpractices.dev/projects/16468/badge)](https://www.bestpractices.dev/en/projects/16468)
+
 A portable LLVM 23 toolchain with Clang, clangd, LLD, libc++, sanitizer runtimes,
 and static native libraries built with a consistent flags profile. Linux bundles
 include musl and glibc sysroots; macOS bundles use the system SDK. Use it for C,

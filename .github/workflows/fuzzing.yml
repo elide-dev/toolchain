@@ -1,0 +1,61 @@
+name: ClusterFuzzLite
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '27 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fuzz:
+    name: Allocator fuzzing
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: false
+          sparse-checkout: |
+            src/elidealloc-shim
+            .clusterfuzzlite
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: dist/fuzz/corpus
+          key: allocator-corpus-v1-${{ github.ref }}-${{ github.run_id }}
+          restore-keys: allocator-corpus-v1-${{ github.ref }}-
+      - name: Build allocator fuzz target
+        # Use the ClusterFuzzLite build interface directly. Its checkout action
+        # recursively fetches submodules, which would fetch all of LLVM.
+        run: |
+          mkdir -p dist/fuzz/corpus dist/fuzz/crashes
+          docker build -t toolchain-fuzz -f .clusterfuzzlite/Dockerfile .
+          docker run --rm --network none \
+            -e FUZZING_ENGINE=libfuzzer -e SANITIZER=address \
+            -e ARCHITECTURE=x86_64 -e FUZZING_LANGUAGE=c++ \
+            -v "$PWD/dist/fuzz:/out" toolchain-fuzz compile
+      - name: Fuzz allocator API and hint dispatch
+        run: |
+          docker run --rm --network none \
+            -v "$PWD/dist/fuzz:/out" toolchain-fuzz \
+            /out/allocator_fuzz -max_total_time=120 -max_len=1024 \
+            -timeout=10 -rss_limit_mb=1024 -artifact_prefix=/out/crashes/ /out/corpus
+      - name: Retain crash reproducers
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: allocator-crashes
+          path: dist/fuzz/crashes
+          if-no-files-found: ignore
