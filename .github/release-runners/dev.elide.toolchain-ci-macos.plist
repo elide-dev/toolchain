@@ -29,9 +29,9 @@
 	<key>RunAtLoad</key>
 	<true/>
 	<key>StandardErrorPath</key>
-	<string>/var/log/toolchain-ci-macos.log</string>
+	<string>/Users/elide/.local/state/toolchain-release/toolchain-ci-macos.log</string>
 	<key>StandardOutPath</key>
-	<string>/var/log/toolchain-ci-macos.log</string>
+	<string>/Users/elide/.local/state/toolchain-release/toolchain-ci-macos.log</string>
 	<key>ThrottleInterval</key>
 	<integer>30</integer>
 	<key>UserName</key>
