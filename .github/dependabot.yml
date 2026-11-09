@@ -18,4 +18,12 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    # Every gitlink update must also update versions.env and pass check-versions.sh.
+    # These components follow stable release tags via scripts/bump-submodules.sh.
+    # Git-submodule updates follow branch tips and can undo security backports
+    # (for example, Brotli 1.2.1's CVE-2026-111497 fix).
+    ignore:
+      - dependency-name: leveldb
+      - dependency-name: zstd
+      - dependency-name: brotli
+      - dependency-name: zlib-ng
+    # Every remaining gitlink update must also update versions.env and pass check-versions.sh.
