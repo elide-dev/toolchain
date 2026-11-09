@@ -1,0 +1,21 @@
+name: Provenance verification
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/*provenance*.yml'
+      - '.github/workflows/job.release-build.yml'
+      - '.github/workflows/on.release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/job.provenance-smoke.yml

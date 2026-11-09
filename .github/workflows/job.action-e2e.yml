@@ -3,6 +3,11 @@ name: "Job - Action E2E"
 on:
   workflow_call:
     inputs:
+      isolated-release:
+        description: "Run release verification on disposable guests"
+        required: false
+        type: boolean
+        default: false
       sanitizer-addons:
         description: "The build produced sanitizer add-on archives: also test the action's sanitizer input"
         required: false
@@ -15,17 +20,17 @@ permissions:
 jobs:
   e2e:
     name: "Action (${{ matrix.os }}-${{ matrix.arch }} ${{ matrix.target }})"
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ inputs.isolated-release && matrix.release-runner || matrix.runner }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { os: linux, arch: amd64, runner: linux-amd64-cipool, target: x86_64-unknown-linux-gnu }
-          - { os: linux, arch: amd64, runner: linux-amd64-cipool, target: x86_64-unknown-linux-musl }
-          - { os: linux, arch: arm64, runner: linux-arm64-cipool, target: aarch64-unknown-linux-gnu }
-          - { os: linux, arch: arm64, runner: linux-arm64-cipool, target: aarch64-unknown-linux-musl }
-          - { os: darwin, arch: arm64, runner: darwin-arm64-cipool, target: arm64-apple-darwin }
+          - { os: linux, arch: amd64, runner: linux-amd64-cipool, release-runner: linux-amd64-toolchain-release, target: x86_64-unknown-linux-gnu }
+          - { os: linux, arch: amd64, runner: linux-amd64-cipool, release-runner: linux-amd64-toolchain-release, target: x86_64-unknown-linux-musl }
+          - { os: linux, arch: arm64, runner: linux-arm64-cipool, release-runner: linux-arm64-toolchain-release, target: aarch64-unknown-linux-gnu }
+          - { os: linux, arch: arm64, runner: linux-arm64-cipool, release-runner: linux-arm64-toolchain-release, target: aarch64-unknown-linux-musl }
+          - { os: darwin, arch: arm64, runner: darwin-arm64-cipool, release-runner: darwin-arm64-toolchain-release, target: arm64-apple-darwin }
     steps:
       - name: "Setup: Harden Runner"
         if: runner.os == 'Linux'
@@ -67,14 +72,14 @@ jobs:
   sanitizer:
     name: "Action sanitizer (${{ matrix.arch }} ${{ matrix.sanitizer }})"
     if: inputs.sanitizer-addons
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ inputs.isolated-release && matrix.release-runner || matrix.runner }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { arch: amd64, runner: linux-amd64-cipool, target: x86_64-unknown-linux-gnu, sanitizer: msan }
-          - { arch: amd64, runner: linux-amd64-cipool, target: x86_64-unknown-linux-gnu, sanitizer: asan }
+          - { arch: amd64, runner: linux-amd64-cipool, release-runner: linux-amd64-toolchain-release, target: x86_64-unknown-linux-gnu, sanitizer: msan }
+          - { arch: amd64, runner: linux-amd64-cipool, release-runner: linux-amd64-toolchain-release, target: x86_64-unknown-linux-gnu, sanitizer: asan }
     steps:
       - name: "Setup: Harden Runner"
         if: runner.os == 'Linux'

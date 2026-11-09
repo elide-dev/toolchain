@@ -14,6 +14,11 @@ on:
         default: false
   workflow_call:
     inputs:
+      isolated-release:
+        description: "Use the single-job release runner pool and private caches"
+        required: false
+        type: boolean
+        default: false
       version:
         required: false
         type: string
@@ -31,15 +36,18 @@ permissions:
 jobs:
   build:
     name: "Bundle (${{ matrix.os }}-${{ matrix.arch }})"
-    runs-on: ${{ matrix.runner }}
+    # These labels belong only to disposable guests in the restricted release group.
+    runs-on: ${{ inputs.isolated-release && matrix.release-runner || matrix.runner }}
+    permissions:
+      contents: read
     timeout-minutes: ${{ matrix.timeout }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { os: linux, arch: amd64, runner: linux-amd64-cipool, timeout: 720 }
-          - { os: linux, arch: arm64, runner: linux-arm64-cipool, timeout: 720 }
-          - { os: darwin, arch: arm64, runner: darwin-arm64-cipool, timeout: 720 }
+          - { os: linux, arch: amd64, runner: linux-amd64-cipool, release-runner: linux-amd64-toolchain-release, timeout: 720 }
+          - { os: linux, arch: arm64, runner: linux-arm64-cipool, release-runner: linux-arm64-toolchain-release, timeout: 720 }
+          - { os: darwin, arch: arm64, runner: darwin-arm64-cipool, release-runner: darwin-arm64-toolchain-release, timeout: 720 }
     env:
       REQUIRE_CONTAINER_CHECKS: ${{ matrix.os == 'linux' && 'yes' || 'no' }}
       INPUT_VERSION: ${{ inputs.version }}
@@ -93,7 +101,24 @@ jobs:
           v="$(rsync --version 2>&1 || true)"
           echo "rsync: $(command -v rsync): ${v%%$'\n'*}"
           case "$v" in *"rsync  version"*) ;; *) echo "::error::GNU rsync is not first on PATH"; exit 1 ;; esac
+      - name: "Setup: Isolated release caches"
+        if: inputs.isolated-release
+        # The provisioning service destroys the whole guest after one job. A unique,
+        # empty directory also prevents accidentally restoring normal CI caches.
+        run: |
+          cache_root=$(mktemp -d "$RUNNER_TEMP/toolchain-release.XXXXXXXX")
+          mkdir -p "$cache_root/downloads" "$cache_root/ccache"
+          {
+            echo "ELIDE_CACHE_DIR=$cache_root/downloads"
+            echo "CCACHE_DIR=$cache_root/ccache"
+            echo "USE_SCCACHE=no"
+            echo "CCACHE_REMOTE_STORAGE="
+            echo "CCACHE_SECONDARY_STORAGE="
+            echo "CCACHE_CONFIGPATH=$cache_root/ccache.conf"
+          } >> "$GITHUB_ENV"
+          printf 'remote_storage =\n' > "$cache_root/ccache.conf"
       - name: "Setup: Build caches"
+        if: ${{ !inputs.isolated-release }}
         # Persistent caches live outside the workspace: actions/checkout cleans ignored files, so
         # out/cache would not survive between jobs on these self-hosted runners. Downloads (kernel
         # headers, Propeller deps, the prebuilt stage-1 LLVM) are checksummed by fetch_pinned.

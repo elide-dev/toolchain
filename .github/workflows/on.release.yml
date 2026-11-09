@@ -12,22 +12,16 @@ jobs:
     uses: ./.github/workflows/job.unit.yml
   build:
     needs: unit
-    uses: ./.github/workflows/job.build.yml
-    with:
-      version: ${{ github.ref_name }}
-      sanitizer-addons: true
-  e2e:
-    needs: build
-    uses: ./.github/workflows/job.action-e2e.yml
-    with:
-      sanitizer-addons: true
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/job.release-build.yml
   publish:
-    needs: [build, e2e]
+    needs: build
     runs-on: ubuntu-24.04
     permissions:
       contents: write
-      id-token: write
-      attestations: write
     steps:
       - name: "Setup: Harden Runner"
         uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
@@ -61,26 +55,22 @@ jobs:
             done
           done
           exit "$missing"
-      - name: "Provenance"
-        id: provenance
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-path: "dist/*.tar.xz"
-      - name: "Retain signed provenance"
-        env:
-          BUNDLE_PATH: ${{ steps.provenance.outputs.bundle-path }}
-        run: |
-          cp "$BUNDLE_PATH" dist/toolchain-provenance.sigstore.json
-          jq -ce '.dsseEnvelope | select(.payloadType == "application/vnd.in-toto+json" and (.signatures | length > 0))' \
-            "$BUNDLE_PATH" > dist/toolchain-provenance.intoto.jsonl
-      - name: "Artifact: Signed provenance"
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      - name: "Download signed provenance"
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-provenance
-          if-no-files-found: error
-          path: |
-            dist/toolchain-provenance.sigstore.json
-            dist/toolchain-provenance.intoto.jsonl
+          path: dist
+      - name: "Verify release provenance"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for asset in dist/*.tar.xz; do
+            gh attestation verify "$asset" --bundle dist/toolchain-provenance.sigstore.json \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/job.release-build.yml" \
+              --signer-digest "$GITHUB_SHA" --source-digest "$GITHUB_SHA" \
+              --source-ref "$GITHUB_REF" --deny-self-hosted-runners
+          done
       - name: "GitHub Release"
         # dist/* = per platform: bundle, SBOM, sanitizer add-ons (Linux), each archive's .sha256.
         env:

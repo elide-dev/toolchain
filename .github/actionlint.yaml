@@ -3,3 +3,6 @@ self-hosted-runner:
     - linux-amd64-cipool
     - linux-arm64-cipool
     - darwin-arm64-cipool
+    - linux-amd64-toolchain-release
+    - linux-arm64-toolchain-release
+    - darwin-arm64-toolchain-release
