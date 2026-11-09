@@ -15,7 +15,7 @@ def git(*args, input_text=None):
 
 
 def valid_signoff(message, author, committer):
-    trailers = git('interpret-trailers', '--parse', input_text=message)
+    trailers = git('interpret-trailers', '--parse', '--no-divider', input_text=message)
     identities = {author.casefold(), committer.casefold()}
     for line in trailers.splitlines():
         key, separator, value = line.partition(':')
