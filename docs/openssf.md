@@ -1,6 +1,6 @@
-# OpenSSF evidence and remaining work
+# OpenSSF evidence
 
-Toolchain holds the [OpenSSF Best Practices Silver badge](https://www.bestpractices.dev/en/projects/16468).
+Toolchain holds the [OpenSSF Best Practices Gold badge](https://www.bestpractices.dev/en/projects/16468).
 [OpenSSF Scorecard](https://github.com/ossf/scorecard) separately measures repository
 security practices.
 
@@ -8,10 +8,10 @@ security practices.
 
 Run `mise run openssf` (or `python3 scripts/best-practices.py`) and open
 `dist/openssf.html`. The standalone page uses OpenSSF's official proposal links;
-it does not need credentials or submit answers. The page opens Toolchain project 16468. Open each Passing/Silver link in sequence
+it does not need credentials or submit answers. The page opens Toolchain project 16468. Open each Passing/Silver/Gold link in sequence
 and save before moving on.
 
-Answers reflect the saved Silver application as of November 8, 2026. Unanswered criteria have empty notes and are omitted from
+Answers reflect the saved Gold application as of November 8, 2026. Unanswered criteria have empty notes and are omitted from
 autofill links. Entered answers are passed through without additional confirmation
 prompts. `.bestpractices.json` also provides repository automation proposals.
 Criteria metadata follows the official `ossf/best-practices-badge` schema.
@@ -76,27 +76,18 @@ v2026.11.4, and v2026.11.5 are attached to their releases. All 30 archive digest
 match the existing signed provenance. No binaries or tags were changed.
 Signed-Releases scores 10/10 in the November 8 assessment.
 
-## Gold application
+## Gold achievement
 
-The standalone page includes all 23 official Gold criteria and proposals for the
-16 criteria covered by the saved Silver answers and the additional repository
-work. Open the Gold links in `dist/openssf.html` and save each part. Unanswered
-criteria remain blank, and existing saved answers are preserved.
+Project 16468 achieved Gold on November 8, 2026, with Passing, Silver, and Gold
+all at 100%. The standalone page includes all 23 official Gold criteria and the
+saved application answers. Existing saved answers are preserved by default.
 
-New references include [starter tasks and review guidance](../CONTRIBUTING.md),
-organization 2FA, source-notice checks, and the
-[November security review](security-review-2026-11.md).
+References include [starter tasks and review guidance](../CONTRIBUTING.md),
+organization 2FA, source-notice checks, the
+[November security review](security-review-2026-11.md), and the enforced Content
+Security Policy on [elide.dev](https://elide.dev/).
 The review policy remains one reviewer; Gold's two-person criterion means the
 author and a separate reviewer, not two reviewers.
-
-| Workstream | Next concrete step |
-| --- | --- |
-| Coverage | Extend coverage to the installer entry point, shell/Python code, and mimalloc paths; retain whole-project statement and branch measurements. |
-| Reproducible builds | Compare complete native release archives from independently provisioned builds using the same declared inputs. The action bundle's existing repeatability check covers only that artifact. |
-| Release review history | Record author-independent reviews before release; Gold's threshold covers at least half of proposed modifications. |
-| Contributor independence | Add the independent-contributor reference to the application. |
-| Strong 2FA | Record the cryptographic authentication methods used for repository and sensitive-data access. Organization-wide 2FA is already enabled. |
-| Website hardening | Check the homepage and download-origin configuration alongside GitHub's existing security headers. |
 
 ### Coverage reports
 
@@ -108,5 +99,4 @@ The November 8 local baseline reports 70/70 instrumented lines for `action/lib.t
 `action/main.ts` is not imported by that unit suite. The allocator forwarding target
 reports 138/167 lines (82.63%) and 58/92 branches (63.04%) across `core.cc`,
 `hotcold.cc`, and `backend-forward.cc`. Line coverage is reported as line coverage,
-not relabeled as statement coverage. These scoped reports are the starting point
-for Gold's 90% statement and 80% branch goals, not whole-project totals.
+not relabeled as statement coverage. These historical, scoped measurements are not whole-project totals.
