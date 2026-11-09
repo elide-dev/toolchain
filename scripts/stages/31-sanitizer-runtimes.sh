@@ -24,7 +24,7 @@ build_sanitizer_runtimes() {
   local t="$1" b="$BUILD_DIR/runtimes/$1/sanitizers" args=() af lf fuzzer=OFF prefix
   mapfile -t args < <(san_runtimes_base_args "$t")
   af="--no-default-config $(arch_flags "$t")"
-  lf="-rtlib=compiler-rt -unwindlib=libunwind -stdlib=libc++ -fuse-ld=lld"
+  lf="-Wl,--build-id=sha1 -rtlib=compiler-rt -unwindlib=libunwind -stdlib=libc++ -fuse-ld=lld"
   if triple_has_libfuzzer "$t"; then fuzzer=ON; fi
   fresh_dir "$b"
   # Only sanitizers and libFuzzer: every other compiler-rt part (builtins, crt, profile, memprof,

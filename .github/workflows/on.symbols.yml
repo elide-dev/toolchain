@@ -1,0 +1,36 @@
+name: Private symbol ingestion
+on:
+  workflow_run:
+    workflows: ["CI", "Job - Build", "Release"]
+    types: [completed]
+permissions:
+  contents: read
+jobs:
+  producer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    outputs:
+      has_symbols: ${{ steps.artifacts.outputs.has_symbols }}
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event != 'pull_request' && github.event.workflow_run.event != 'pull_request_target'
+    steps:
+      - name: Check for preserved native symbols
+        id: artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRODUCER_RUN: ${{ github.event.workflow_run.id }}
+        run: |
+          has_symbols=$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/runs/$PRODUCER_RUN/artifacts?per_page=100" |
+            jq 'any(.[].artifacts[]; (.expired == false) and (.name | startswith("native-debug-toolchain-")))')
+          echo "has_symbols=$has_symbols" >> "$GITHUB_OUTPUT"
+  symbols:
+    needs: producer
+    if: needs.producer.outputs.has_symbols == 'true'
+    uses: ./.github/workflows/job.symbols.yml
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    with:
+      source_run: ${{ github.event.workflow_run.id }}

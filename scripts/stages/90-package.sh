@@ -43,6 +43,11 @@ stage_main() {
   cp "$meta/sbom.cdx.json" "$DIST_DIR/$name.sbom.cdx.json"
   log "wrote $archive"
   package_sanitizer_addons
+  # Inspect exact shipped archives after stripping, including every sanitizer add-on.
+  local coverage_archives=("$archive") s
+  for s in $(all_variants); do coverage_archives+=("$DIST_DIR/$(addon_asset_name "$s")"); done
+  BUNDLE_DIR="$BUNDLE_DIR" TOOLCHAIN_VERSION="$TOOLCHAIN_VERSION" HOST_OS="$HOST_OS" HOST_ARCH="$HOST_ARCH" \
+    python3 "$ROOT_DIR/scripts/symbol-coverage.py" "${coverage_archives[@]}"
 }
 
 # relocate_prefix TRIPLE — make a sysroot's metadata location-independent: .pc files use
@@ -97,14 +102,9 @@ PY
 }
 
 strip_tools() {
-  local f s="$BUNDLE_DIR/bin/llvm-strip"
-  for f in "$BUNDLE_DIR"/bin/*; do
-    if [ ! -f "$f" ] || [ -L "$f" ]; then continue; fi
-    if [ "$HOST_OS" = linux ]; then
-      if is_elf "$f"; then "$s" --strip-unneeded "$f"; fi
-    else
-      "$s" -x "$f" 2>/dev/null || true
-    fi
-  done
+  local symbols="$DIST_DIR/$TOOLCHAIN_NAME-$TOOLCHAIN_VERSION-$HOST_OS-$HOST_ARCH-symbols"
+  mkdir -p "$symbols"
+  env LLVM_BIN="$BUNDLE_DIR/bin" BUNDLE_DIR="$BUNDLE_DIR" SYMBOLS_DIR="$symbols" \
+    python3 "$ROOT_DIR/scripts/preserve-symbols.py"
   return 0
 }

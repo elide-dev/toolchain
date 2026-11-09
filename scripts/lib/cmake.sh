@@ -87,6 +87,9 @@ cmake_target() {
     -S "$src" -B "$build" -G Ninja
     -DCMAKE_TOOLCHAIN_FILE="$(toolchain_file "$t")"
     -DCMAKE_BUILD_TYPE=Release
+    -DCMAKE_C_FLAGS_RELEASE="-O3 -DNDEBUG -g"
+    -DCMAKE_CXX_FLAGS_RELEASE="-O3 -DNDEBUG -g"
+    -DCMAKE_ASM_FLAGS_RELEASE="-O3 -DNDEBUG -g"
     -DCMAKE_INSTALL_PREFIX="$prefix"
     -DCMAKE_INSTALL_LIBDIR=lib
     -DCMAKE_POLICY_VERSION_MINIMUM=3.5

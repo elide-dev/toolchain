@@ -113,6 +113,8 @@ Maintained shell, Python, TypeScript/JavaScript, C/C++, Rust and CMake sources c
 a copyright notice and `SPDX-License-Identifier: Apache-2.0 OR MIT`. Run
 `python3 scripts/source-notices.py` to check, or add `--fix` to insert missing
 headers. Executable shebangs stay first. Hygiene enforces this convention.
+The canonical `tools/symbol-coverage/` snapshot retains its upstream notices and
+exact hashes recorded in its `*UPSTREAM.json` manifests.
 Submodules, upstream patches, generated action bundles and lockfiles retain their
 upstream/generated contents; do not relicense those with this tool.
 

@@ -49,7 +49,7 @@ target_cflags() {
   # shellcheck disable=SC2046
   printf '%s%s %s\n' "$(sanitizer_layer_flags "$t")" \
     "$(drop_pie_codegen $(filter_flags_for_triple "$t" $(profile_flags "$os" "$arch")))" \
-    "$(arch_flags "$t")"
+    "$(arch_flags "$t") -g"
 }
 
 # drop_pie_codegen FLAG... — components are libraries that consumers link into shared objects
@@ -67,7 +67,13 @@ drop_pie_codegen() {
 target_cxxflags() { target_cflags "$1"; }
 
 # Link flags for shared objects and archives (no -static).
-target_ldflags() { target_cflags "$1"; }
+target_ldflags() {
+  if [ "$(triple_os "$1")" = linux ]; then
+    printf '%s -Wl,--build-id=sha1\n' "$(target_cflags "$1")"
+  else
+    target_cflags "$1"
+  fi
+}
 
 # Link flags for executables: musl executables are fully static (the build host has no musl loader).
 target_exe_ldflags() {

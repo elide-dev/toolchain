@@ -1,0 +1,16 @@
+{
+  "artifacts": [
+    "native-debug-toolchain-{platform}",
+    "elide-toolchain-{platform}"
+  ],
+  "manifests": [
+    "**/*.symbol-coverage.json"
+  ],
+  "trustedBranches": [
+    "main",
+    "codex/symbol-coverage"
+  ],
+  "trustedTags": [
+    "v*"
+  ]
+}

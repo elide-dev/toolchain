@@ -1,0 +1,70 @@
+name: Diagnose qualified native symbol uploads
+on:
+  push:
+    branches: [codex/symbol-ingestion]
+    paths: [.github/workflows/diagnose-symbol-upload.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    if: github.ref == format('refs/heads/{0}', vars.DEBUGINFO_DEV_BRANCH || 'main')
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64, darwin-arm64]
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    env:
+      DEBUGINFO_DEV_ORG_ID: ${{ vars.DEBUGINFO_DEV_ORG_ID }}
+      DEBUGINFO_DEV_PROJECT_ID: ${{ vars.DEBUGINFO_DEV_PROJECT_ID }}
+      DEBUGINFO_DEV_PROJECT: ${{ vars.DEBUGINFO_DEV_PROJECT }}
+      ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: python3 -m unittest discover -s tools/symbol-coverage -p test_fetch_artifact_member.py -v
+      - name: Retrieve the exact qualified debug peer without extracting the entire toolchain
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PYCODE'
+          import json,os,subprocess
+          from pathlib import Path
+          item=next(x for x in json.loads(Path('.github/symbol-ingestion-diagnostics.json').read_text()) if x['arch']==os.environ['ARCH'])
+          subprocess.run(['python3','tools/symbol-coverage/fetch-artifact-member.py','--artifact',str(item['artifact']),'--member-suffix',item['memberSuffix'],'--sha256',item['sha256'],'--out',os.environ['RUNNER_TEMP']+'/candidate.debug'],check=True)
+          PYCODE
+      - uses: elide-dev/debuginfo-client@47894d0764ff0c7f4763b3e8289e94376c36aa1b
+        with:
+          repository: elide-dev/debuginfo-client
+          version: 0.7.1
+          url: ${{ vars.DEBUGINFO_DEV_URL }}
+          org: ${{ vars.DEBUGINFO_DEV_ORG }}
+          project: ${{ vars.DEBUGINFO_DEV_PROJECT }}
+      - name: Reproduce upload and verify original bytes with a fresh scoped credential
+        run: |
+          python3 - <<'PYCODE'
+          import json,os,importlib.util,hashlib
+          from pathlib import Path
+          spec=importlib.util.spec_from_file_location('ingest',Path('tools/symbol-coverage/ingest.py'));m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+          item=next(x for x in json.loads(Path('.github/symbol-ingestion-diagnostics.json').read_text()) if x['arch']==os.environ['ARCH'])
+          root=Path(os.environ['RUNNER_TEMP']);out=root/'diagnostic-receipt.json';report={'item':item,'status':'incomplete'};out.write_text(json.dumps(report,indent=2))
+          m.private_project(os.environ['DEBUGINFO_DEV_URL'],os.environ['DEBUGINFO_DEV_ORG'],os.environ['DEBUGINFO_DEV_ORG_ID'],os.environ['DEBUGINFO_DEV_PROJECT'],os.environ['DEBUGINFO_DEV_PROJECT_ID'])
+          assert m.cli('id',str(root/'candidate.debug'))[0]['debugId']==item['debugId']
+          report['receipt']=m.cli('ingest',str(root/'candidate.debug'),'--project',os.environ['DEBUGINFO_DEV_PROJECT'],'--repo',os.environ['GITHUB_REPOSITORY'],'--commit','18067cbb5b6ed4a8685ef4a725f38f50c5ff52af','--ref',os.environ['GITHUB_REF'],'--run-id',os.environ['GITHUB_RUN_ID'],'--display-path',item['displayPath'],'--archive','source-commit:18067cbb5b6ed4a8685ef4a725f38f50c5ff52af;manifest-sha256:'+item['manifestSha256'])[0]
+          out.write_text(json.dumps(report,indent=2))
+          m.download(os.environ['DEBUGINFO_DEV_URL'],os.environ['DEBUGINFO_DEV_ORG'],item['debugId'],root/'readback.debug')
+          with (root/'readback.debug').open('rb') as stream: assert hashlib.file_digest(stream,'sha256').hexdigest()==item['sha256']
+          report['readback']={'sha256':item['sha256'],'client':'curl','protocol':'debuginfod'}
+          report['status']='ingested-and-read-back';out.write_text(json.dumps(report,indent=2))
+          PYCODE
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: libclang-ingestion-diagnostic-${{ matrix.arch }}
+          path: ${{ runner.temp }}/diagnostic-receipt.json
+          if-no-files-found: warn

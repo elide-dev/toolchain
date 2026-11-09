@@ -20,6 +20,10 @@ assert_contains "$(target_exe_ldflags x86_64-unknown-linux-musl)" "-static"
 assert_not_contains "$(target_exe_ldflags x86_64-unknown-linux-gnu)" "-static"
 assert_not_contains "$(target_ldflags x86_64-unknown-linux-musl)" " -static"
 
+assert_contains "$(target_ldflags x86_64-unknown-linux-gnu)" "-Wl,--build-id=sha1" "ELF shared peers have identities"
+assert_contains "$(target_ldflags aarch64-unknown-linux-musl)" "-Wl,--build-id=sha1" "musl shared peers have identities"
+assert_not_contains "$(target_ldflags arm64-apple-darwin)" "--build-id" "ELF option never reaches Darwin"
+
 darwin="$(target_cflags arm64-apple-darwin)"
 assert_contains "$darwin" "-mcpu=apple-m1" "darwin uses the profile's cpu flag"
 assert_not_contains "$darwin" "-march=x86-64" "no linux arch override on darwin"
