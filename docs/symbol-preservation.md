@@ -27,3 +27,19 @@ packed for retention. Copied/prebuilt modules without DWARF are listed in
 symbols. LLVM verifier failures remain explicit producer quality gaps. No
 debug-information upload destination, source publication or release action is
 added by preservation.
+
+
+## Qualification workflow cleanup
+
+The obsolete `diagnose-symbol-upload`, `qualify-live-symbols`,
+`symbol-coverage-qualification`, and `symbol-ingestion-qualification` workflow
+entrypoints are retired. For a native packaging check, manually dispatch
+`job.build.yml` with one platform selected; ordinary PR/release matrices and
+permanent symbol ingestion/gates retain their existing behavior.
+
+The artifact lifecycle policy in `.github/qualification/artifact-lifecycle.json`
+reserves seven days for future disposable task diagnostics and records how to
+preserve required recovery evidence before expiry. It does not change existing
+artifact expiry or the retention of permanent product evidence. The separate
+`debug-quality-qualification` branch and its unfinished producer work are not
+prerequisites of this cleanup and are not imported here.

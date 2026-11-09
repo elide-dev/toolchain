@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "entrypoint": "debug-quality-qualification.yml",
-  "execution": "Explicit manual dispatch only, one configuration at a time; task qualification never dispatches another workflow. Permanent product symbol integration remains unchanged.",
+  "entrypoint": "job.build.yml",
+  "execution": "Explicit manual dispatch with a selected platform. Retired symbolication diagnostic workflows do not dispatch builds. Permanent product symbol ingestion and gates remain unchanged.",
   "disposableDiagnosticRetentionDays": 7,
   "recoveryRetentionDays": 90,
   "recoveryArtifactNames": [
@@ -28,5 +28,5 @@
     "migration": "Plan bounded storage and verify exact identities/hashes; do not dispatch builds or duplicate full producer bundles to refresh retention"
   },
   "existingArtifacts": "Retention changes apply only to future uploads. Existing protected artifact expiry is unchanged.",
-  "scope": "Task qualification only. Normal CI/release and permanent product symbol ingestion/gates are preserved."
+  "scope": "Retired task qualification and any future disposable diagnostic reports. Normal CI/release and permanent product symbol ingestion/gates are preserved."
 }
