@@ -1,4 +1,4 @@
-name: Ingest final private symbols
+name: "Job - Symbol ingestion"
 on:
   workflow_dispatch:
     inputs:
@@ -24,6 +24,7 @@ permissions:
   contents: read
 jobs:
   ingest:
+    name: "Ingest (${{ matrix.platform }})"
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     strategy:
@@ -39,13 +40,18 @@ jobs:
       actions: read
       id-token: write
     steps:
+      - name: "Setup: Harden runner"
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
       - name: Explain private ingestion policy
         env:
           TRUSTED_BRANCH: ${{ vars.DEBUGINFO_DEV_BRANCH || 'main' }}
         run: |
           echo "Private symbols require configured repository destinations and the linked trusted branch: $TRUSTED_BRANCH."
           echo "PR builds and unconfigured repositories retain their existing private build artifacts without service upload."
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: "Setup: Checkout"
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: github.event_name != 'pull_request' && github.event_name != 'pull_request_target' && github.ref == format('refs/heads/{0}', vars.DEBUGINFO_DEV_BRANCH || 'main') && vars.DEBUGINFO_DEV_PROJECT_ID != ''
         with:
           persist-credentials: false

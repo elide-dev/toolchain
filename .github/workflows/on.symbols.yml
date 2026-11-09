@@ -1,4 +1,4 @@
-name: Private symbol ingestion
+name: Symbol ingestion
 on:
   workflow_run:
     workflows: ["CI", "Job - Build", "Release"]
@@ -7,26 +7,18 @@ permissions:
   contents: read
 jobs:
   producer:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      actions: read
-    outputs:
-      has_symbols: ${{ steps.artifacts.outputs.has_symbols }}
+    name: Symbol artifacts
     if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event != 'pull_request' && github.event.workflow_run.event != 'pull_request_target'
-    steps:
-      - name: Check for preserved native symbols
-        id: artifacts
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PRODUCER_RUN: ${{ github.event.workflow_run.id }}
-        run: |
-          has_symbols=$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/runs/$PRODUCER_RUN/artifacts?per_page=100" |
-            jq 'any(.[].artifacts[]; (.expired == false) and (.name | startswith("native-debug-toolchain-")))')
-          echo "has_symbols=$has_symbols" >> "$GITHUB_OUTPUT"
+    uses: ./.github/workflows/job.symbol-artifacts.yml
+    permissions:
+      contents: read
+      actions: read
+    with:
+      run-id: ${{ github.event.workflow_run.id }}
+      artifact-prefix: native-debug-toolchain-
   symbols:
     needs: producer
-    if: needs.producer.outputs.has_symbols == 'true'
+    if: needs.producer.outputs.available == 'true'
     uses: ./.github/workflows/job.symbols.yml
     permissions:
       contents: read

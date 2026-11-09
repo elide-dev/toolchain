@@ -1,4 +1,4 @@
-name: Ingest a bounded final-symbol batch
+name: Symbol ingestion batch
 description: Authenticate using the shared action, then ingest and verify one bounded batch
 inputs:
   batch:
@@ -16,14 +16,16 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: elide-dev/debuginfo-client@47894d0764ff0c7f4763b3e8289e94376c36aa1b
+    - name: Refresh project access
+      uses: elide-dev/debuginfo-client@47894d0764ff0c7f4763b3e8289e94376c36aa1b # shared installer; client v0.7.1
       with:
         repository: elide-dev/debuginfo-client
         version: 0.7.1
         url: ${{ inputs.url }}
         org: ${{ inputs.org }}
         project: ${{ inputs.project }}
-    - shell: bash
+    - name: Ingest and verify batch
+      shell: bash
       env:
         BATCH: ${{ inputs.batch }}
         DEBUGINFO_DEV_PROJECT: ${{ inputs.project }}
