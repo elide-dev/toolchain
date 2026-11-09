@@ -1,0 +1,54 @@
+name: "Job - Symbol artifacts"
+
+on:
+  workflow_call:
+    inputs:
+      run-id:
+        description: Producer workflow run to inspect
+        required: true
+        type: string
+      artifact-prefix:
+        description: Prefix of the retained artifacts required by the consumer
+        required: true
+        type: string
+      required:
+        description: Run explicit qualification even when artifacts are absent
+        default: false
+        type: boolean
+    outputs:
+      available:
+        description: Artifacts exist, or explicit qualification was requested
+        value: ${{ jobs.artifacts.outputs.available }}
+
+permissions:
+  contents: read
+
+jobs:
+  artifacts:
+    name: Inspect retained artifacts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    outputs:
+      available: ${{ steps.artifacts.outputs.available }}
+    steps:
+      - name: "Setup: Harden runner"
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+      - name: Inspect producer artifacts
+        id: artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRODUCER_RUN: ${{ inputs.run-id }}
+          ARTIFACT_PREFIX: ${{ inputs.artifact-prefix }}
+          REQUIRE_ARTIFACT: ${{ inputs.required }}
+        shell: bash
+        run: |
+          [[ "$PRODUCER_RUN" =~ ^[0-9]+$ ]] || { echo '::error::Expected a numeric producer run'; exit 1; }
+          available=$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/runs/$PRODUCER_RUN/artifacts?per_page=100" |
+            jq --arg prefix "$ARTIFACT_PREFIX" 'any(.[].artifacts[]; (.expired == false) and (.name | startswith($prefix)))')
+          # Explicit qualification retains strict receipt validation in its consumer.
+          if [ "$REQUIRE_ARTIFACT" = true ]; then available=true; fi
+          echo "available=$available" >> "$GITHUB_OUTPUT"

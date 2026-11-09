@@ -47,3 +47,13 @@ Readback uses curl to stream the complete file to disk with connection/idle
 deadlines, avoiding the old CLI whole-download timeout. The existing shared
 action still provides short-lived credentials; they are passed over stdin,
 kept out of command-line arguments, and never forwarded through redirects.
+
+## Workflow organization
+
+`Symbol ingestion` and `Symbolication` are trigger-only entrypoints. Reusable jobs
+live in `job.symbols.yml` and `job.symbolication.yml`; both call
+`job.symbol-artifacts.yml` to inspect retained artifacts. Each hosted job begins
+with the same SHA-pinned harden-runner action in audit mode. Checkouts disable
+credential persistence, and only the ingestion and remote attribution jobs request
+OIDC access. The bounded ingestion composite refreshes project credentials for
+each batch. The qualified reader and shared installer retain their reviewed pins.
