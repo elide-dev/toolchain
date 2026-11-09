@@ -132,6 +132,27 @@
     "internationalization_justification": "",
     "sites_password_security_justification": "",
     "achieve_passing_justification": "Toolchain has earned the OpenSSF Best Practices Silver badge. https://www.bestpractices.dev/en/projects/16468",
-    "documentation_achievements_justification": "The README links the OpenSSF Best Practices Silver badge. https://www.bestpractices.dev/en/projects/16468"
+    "documentation_achievements_justification": "The README links the OpenSSF Best Practices Silver badge. https://www.bestpractices.dev/en/projects/16468",
+    "documentation_basics_justification": "Quick start, installation, usage, and build documentation: https://github.com/elide-dev/toolchain/blob/main/README.md",
+    "release_notes_vulns_justification": "Vulnerability disclosure and release-note policy: https://github.com/elide-dev/toolchain/blob/main/SECURITY.md",
+    "vulnerability_report_response_justification": "Private reporting and response policy: https://github.com/elide-dev/toolchain/blob/main/SECURITY.md",
+    "vulnerability_report_credit_justification": "Coordinated disclosure and reporter credit policy: https://github.com/elide-dev/toolchain/blob/main/SECURITY.md",
+    "know_secure_design_justification": "",
+    "know_common_errors_justification": "",
+    "static_analysis_fixed_justification": "",
+    "dynamic_analysis_fixed_justification": "",
+    "dynamic_analysis_justification": "Sanitizer canaries, libFuzzer verification, and production allocator fuzzing: https://github.com/elide-dev/toolchain/blob/main/docs/openssf.md",
+    "dynamic_analysis_unsafe_justification": "Sanitizer canaries, libFuzzer verification, and production allocator fuzzing: https://github.com/elide-dev/toolchain/blob/main/docs/openssf.md",
+    "dco_justification": "DCO 1.1, dual-license contributor agreement, and automated sign-off checks: https://github.com/elide-dev/toolchain/blob/main/CONTRIBUTOR_AGREEMENT.md",
+    "coding_standards_justification": "Coding conventions and editor defaults: https://github.com/elide-dev/toolchain/blob/main/CONTRIBUTING.md",
+    "coding_standards_enforced_justification": "ShellCheck, actionlint, TypeScript checks, and source-notice validation run in CI. https://github.com/elide-dev/toolchain/blob/main/docs/ci.md",
+    "build_standard_variables_justification": "https://github.com/elide-dev/toolchain/blob/main/docs/building.md",
+    "build_preserve_debug_justification": "https://github.com/elide-dev/toolchain/blob/main/docs/reference.md",
+    "build_repeatable_justification": "https://github.com/elide-dev/toolchain/blob/main/docs/building.md",
+    "dependency_monitoring_justification": "Dependabot, dependency review, and native advisory monitoring policy: https://github.com/elide-dev/toolchain/blob/main/CONTRIBUTING.md",
+    "test_statement_coverage80_justification": "",
+    "signed_releases_justification": "Release workflow build attestations and consumer verification instructions: https://github.com/elide-dev/toolchain/blob/main/docs/releases.md",
+    "version_tags_signed_justification": "",
+    "input_validation_justification": "Action input validation and regression tests: https://github.com/elide-dev/toolchain/blob/main/action/main.ts"
   }
 }
