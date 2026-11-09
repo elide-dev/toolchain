@@ -1,7 +1,7 @@
 {
   "reviewed": "2026-11-08",
   "repository": "https://github.com/elide-dev/toolchain",
-  "public_revision": "957c6184b2653786a4faa83aed05156c602c5ff1",
+  "public_revision": "1eec2b665819836e16cab351cb53d83695fe00bf",
   "phases": {
     "access_continuity": "public",
     "accessibility_best_practices": "public",

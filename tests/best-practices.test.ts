@@ -88,7 +88,9 @@ describe('OpenSSF proposal links', () => {
     }
   });
   test('Gold links include the Silver prerequisite and leave unanswered criteria untouched', () => {
-    const links = proposalLinks(data, { projectId: '16468', published: true });
+    const fixture = structuredClone(data);
+    fixture.answers.build_reproducible_status = '?';
+    const links = proposalLinks(fixture, { projectId: '16468', published: true });
     const gold = links.filter((link) => link.level === 'gold');
     expect(gold.length).toBeGreaterThan(0);
     expect(fields(gold).achieve_silver_status).toBe('Met');
