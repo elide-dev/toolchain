@@ -1,27 +1,24 @@
 # OpenSSF evidence and remaining work
 
-Target: a high [OpenSSF Scorecard](https://github.com/ossf/scorecard) result and the
-[Best Practices Silver badge](https://www.bestpractices.dev/en/criteria/1).
-These are different assessments. This repository does not yet claim a Passing or
-Silver badge, a particular score, or completion of all Silver requirements.
+Toolchain holds the [OpenSSF Best Practices Silver badge](https://www.bestpractices.dev/en/projects/16468).
+[OpenSSF Scorecard](https://github.com/ossf/scorecard) separately measures repository
+security practices.
 
 ## Autofill the badge application
 
 Run `mise run openssf` (or `python3 scripts/best-practices.py`) and open
 `dist/openssf.html`. The standalone page uses OpenSSF's official proposal links;
-it does not need credentials or submit answers. Register the Toolchain entry first,
-then open each Passing/Silver link in sequence, review it, and save before moving
-on. The repository-URL lookup avoids hard-coding another project's badge ID.
+it does not need credentials or submit answers. The page opens Toolchain project 16468. Open each Passing/Silver link in sequence
+and save before moving on.
 
-Policy and licensing answers are included by default now that the repository
-changes are published. Unanswered criteria have empty notes and are omitted from
+Answers reflect the saved Silver application as of November 8, 2026. Unanswered criteria have empty notes and are omitted from
 autofill links. Entered answers are passed through without additional confirmation
 prompts. `.bestpractices.json` also provides repository automation proposals.
 Criteria metadata follows the official `ossf/best-practices-badge` schema.
 
 The live review policy requires **one approving reviewer**, with the extra-approval
 setting disabled. Branch and version-tag protections are active. The November 8,
-2026 Scorecard run after activation reported **7.1/10**.
+2026 Scorecard run after Silver recognition reported **7.2/10**.
 
 The standalone page also provides targeted cleanup links for older generated
 notes. They override only the listed justification fields, preserving saved status
@@ -44,10 +41,9 @@ DCO 1.1 is enforced for new non-merge PR/merge-queue commits through the require
 hygiene check. The contributor agreement makes inbound Apache-2.0 OR MIT terms
 explicit. First-party source notices are automatically checked.
 
-## Engineering work
+## Further improvements
 
-- Measure production statement coverage across maintained languages against the
-  Silver 80% threshold.
+- Measure production statement coverage across maintained languages.
 - Enforce the documented coding styles automatically for applicable maintained
   languages and expand native static analysis.
 - Compare native archive hashes from controlled repeat builds, accounting for
@@ -55,5 +51,19 @@ explicit. First-party source notices are automatically checked.
 - Audit compiler/linker environment-variable handling and debug-info preservation
   across the staged build.
 - Complete the per-component distribution license/source-offer inventory.
-- Add production allocator fuzz targets alongside the existing sanitizer canaries
-  and libFuzzer smoke test.
+- Extend allocator fuzzing to the mimalloc backend and persist a shared corpus.
+
+## Static analysis and fuzzing
+
+ShellCheck analyzes first-party shell scripts on each PR and main push. Its SARIF
+results are uploaded to GitHub code scanning. Actionlint and TypeScript checks
+remain in the fast gates; CodeQL analysis is not configured.
+
+ClusterFuzzLite runs the production allocator shim with its forward (libc) backend
+under AddressSanitizer on PRs, main pushes, and a daily schedule. The target varies
+configuration thresholds, disabled mode, allocation sizes, alignments, C allocation
+APIs, and all eight hinted C++ allocation overloads. It checks hint classification,
+alignment, partition reporting, writable allocations, and matching deallocation.
+Only the shim and harness are compiled with the supplied fuzzing compiler; the
+native toolchain pipeline is not invoked. Mimalloc partition heaps are outside
+this target's coverage. See [.clusterfuzzlite](../.clusterfuzzlite).

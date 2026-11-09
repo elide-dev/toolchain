@@ -1,0 +1,36 @@
+name: ClusterFuzzLite
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '27 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: Allocator fuzzing
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
+        with:
+          egress-policy: audit
+      - name: Build allocator fuzz target
+        uses: google/clusterfuzzlite/actions/build_fuzzers@82652fb49e77bc29c35da1167bb286e93c6bcc05 # v1
+        with:
+          language: c++
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          sanitizer: address
+          keep-unaffected-fuzz-targets: true
+      - name: Fuzz allocator API and hint dispatch
+        uses: google/clusterfuzzlite/actions/run_fuzzers@82652fb49e77bc29c35da1167bb286e93c6bcc05 # v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          fuzz-seconds: 120
+          mode: code-change
+          sanitizer: address

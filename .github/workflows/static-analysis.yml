@@ -1,0 +1,38 @@
+name: Static analysis
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@f5be966e4a917d54244728e6a5fdcd1d93a35e6c # v5.2.6
+        with:
+          version: '2026.11.1'
+          install_args: --locked shellcheck
+      - name: Analyze shell sources
+        run: python3 .github/scripts/shellcheck-sarif.py
+      - name: Publish ShellCheck findings
+        if: ${{ !cancelled() && hashFiles('dist/shellcheck.sarif') != '' }}
+        uses: github/codeql-action/upload-sarif@5895b2c9be147bc7f1c75ce72c5cb577febb1907 # v4
+        with:
+          sarif_file: dist/shellcheck.sarif
+          category: shellcheck

@@ -11,6 +11,8 @@ FAST_FILES = {
     '.editorconfig', '.gitignore', 'mise.toml', 'mise.lock', 'tests/run.sh',
     'scripts/best-practices.py', 'scripts/check-dco.py', 'scripts/check-hygiene.py',
     'scripts/source-notices.py', 'scripts/ci-changes.py',
+    '.clusterfuzzlite/Dockerfile', '.clusterfuzzlite/build.sh',
+    '.clusterfuzzlite/project.yaml', '.clusterfuzzlite/allocator-fuzz.cc',
 }
 FAST_PREFIXES = ('.github/', 'action/', 'tests/unit/', 'tools/best-practices')
 

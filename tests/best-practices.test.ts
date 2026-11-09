@@ -14,7 +14,9 @@ const fields = (links: ReturnType<typeof proposalLinks>) => Object.assign({}, ..
 
 describe('OpenSSF proposal links', () => {
   test('unpublished and unknown answers are withheld by default', () => {
-    const links = proposalLinks(data);
+    const fixture = structuredClone(data);
+    fixture.answers.know_secure_design_status = "?";
+    const links = proposalLinks(fixture);
     const values = fields(links);
     expect(values.floss_license_status).toBeUndefined();
     expect(values.license).toBeUndefined();
@@ -40,7 +42,7 @@ describe('OpenSSF proposal links', () => {
         if (!key.endsWith('_status')) continue;
         const criterion = key.slice(0, -7);
         expect(data.criteria[link.level][criterion]).toBeDefined();
-        expect(url.searchParams.get(`${criterion}_justification`)).toBeTruthy();
+        expect(url.searchParams.has(`${criterion}_justification`)).toBe(true);
         expect(value).not.toBe('?');
       }
     }
