@@ -23,6 +23,10 @@ The live review policy requires **one approving reviewer**, with the extra-appro
 setting disabled. Branch and version-tag protections are active. The November 8,
 2026 Scorecard run after activation reported **7.1/10**.
 
+The standalone page also provides targeted cleanup links for older generated
+notes. They override only the listed justification fields, preserving saved status
+answers. Open each link and choose Save and exit.
+
 ## Repository evidence
 
 | Area | Evidence |

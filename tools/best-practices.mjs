@@ -41,14 +41,40 @@ export function proposalLinks(data, { projectId = '', published = false, edits =
   return links;
 }
 
+export function cleanupLinks(data, { projectId = data.evidence.project_id ?? '' } = {}) {
+  if (projectId && !/^[1-9][0-9]*$/.test(projectId)) throw new Error('Enter a positive numeric project ID, or leave it blank.');
+  return Object.entries(data.criteria).flatMap(([level, criteria]) => {
+    const notes = Object.fromEntries(Object.entries(data.evidence.cleanup_justifications ?? {})
+      .filter(([field]) => field.endsWith('_justification') && Object.hasOwn(criteria, field.slice(0, -14))));
+    if (!Object.keys(notes).length) return [];
+    const base = projectId ? `https://www.bestpractices.dev/en/projects/${projectId}/${level}/edit`
+      : 'https://www.bestpractices.dev/en/projects';
+    const routing = projectId ? {} : { as: 'edit', section: level, url: data.evidence.repository };
+    const params = new URLSearchParams({ ...routing, ...notes, overrides: Object.keys(notes).join(',') });
+    const url = `${base}?${params}`;
+    if (url.length > 6000) throw new Error('Cleanup link is too long.');
+    return [{ level, url, fields: Object.keys(notes) }];
+  });
+}
+
 export function mount(data) {
   const byId = (id) => document.getElementById(id);
   const edits = {};
+  byId('project-id').value = data.evidence.project_id ?? '';
   function render() {
     const output = byId('links');
     output.replaceChildren();
     byId('error').textContent = '';
+    byId('cleanup-links').replaceChildren();
     try {
+      for (const link of cleanupLinks(data, { projectId: byId('project-id').value.trim() })) {
+        const item = document.createElement('p');
+        const a = document.createElement('a');
+        a.href = link.url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+        a.textContent = `Remove old notes from ${link.level}`;
+        const fields = document.createElement('small'); fields.textContent = link.fields.join(', ');
+        item.append(a, fields); byId('cleanup-links').append(item);
+      }
       const links = proposalLinks(data, { projectId: byId('project-id').value.trim(), published: byId('published').checked, edits });
       for (const level of ['passing', 'silver']) {
         const section = document.createElement('section');

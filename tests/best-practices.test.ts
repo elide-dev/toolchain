@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
-import { proposalLinks } from '../tools/best-practices.mjs';
+import { proposalLinks, cleanupLinks } from '../tools/best-practices.mjs';
 
 const read = (path: string) => JSON.parse(readFileSync(new URL(path, import.meta.url), 'utf8'));
 const data = {
@@ -69,6 +69,19 @@ describe('OpenSSF proposal links', () => {
   test('leaving a criterion unanswered does not clear the server answer', () => {
     const values = fields(proposalLinks(data, { edits: { version_unique: { status: '?', justification: '' } } }));
     expect(values.version_unique_status).toBeUndefined();
+  });
+  test('cleanup overrides only targeted notes and never answer statuses', () => {
+    const links = cleanupLinks(data);
+    expect(links.map((link) => link.level)).toEqual(['passing', 'silver']);
+    for (const link of links) {
+      const url = new URL(link.url);
+      const overrides = url.searchParams.get('overrides')!.split(',');
+      expect(overrides).toEqual(link.fields);
+      expect(overrides.every((field) => field.endsWith('_justification'))).toBe(true);
+      expect([...url.searchParams.keys()].some((key) => key.endsWith('_status'))).toBe(false);
+      expect(url.searchParams.has('warnings_strict_justification')).toBe(true);
+      expect(url.searchParams.get('warnings_strict_justification')).toBe('');
+    }
   });
   test('branch policy requires one reviewer, never multiple', () => {
     const rules = read('../.github/rulesets/main.json');
