@@ -215,14 +215,11 @@ check_distributed_thinlto() {
 # libzstd.a's unused ZSTD_versionString: dropped when the member's bitcode joins the LTO link, kept
 # (-C link-dead-code: no --gc-sections) when lld takes the native code. Both links run.
 check_fat_lto_rust() {
-  local root="$1" t="$2" rt rsys rmajor tmp vs rflags rf=() nofat=() extra=() w bad=""
+  local root="$1" t="$2" rt rmajor tmp vs rflags rf=() nofat=() extra=() w bad="" rust_bin="$1/rust/bin"
   rt="$(rust_triple "$t")"
-  if ! command -v rustc >/dev/null 2>&1; then warn "rustc not on PATH; skipping fat LTO rust $t"; return; fi
-  rsys="$(rustc --print sysroot 2>/dev/null || true)"
-  if [ ! -d "$rsys/lib/rustlib/$rt" ]; then warn "rust std for $rt not installed; skipping fat LTO rust $t"; return; fi
-  rmajor="$(rustc -vV 2>/dev/null | sed -n 's/^LLVM version: \([0-9]*\).*/\1/p' || true)"
+  rmajor="$("$rust_bin/rustc" -vV 2>/dev/null | sed -n 's/^LLVM version: \([0-9]*\).*/\1/p' || true)"
   if [ -z "$rmajor" ] || [ "$rmajor" -gt "${LLVM_VERSION%%.*}" ]; then
-    warn "rustc LLVM ${rmajor:-?} is newer than the bundle's ${LLVM_VERSION%%.*}; skipping fat LTO rust $t"; return
+    fail "fat LTO rust $t" "bundled rustc's LLVM ${rmajor:-?} is newer than the bundle's ${LLVM_VERSION%%.*}"; return
   fi
   rflags="$("$root/bin/elide-toolchain" flags --target "$t" lto --format json 2>/dev/null \
     | python3 -c 'import json,sys; print(json.load(sys.stdin)["ELIDE_RUSTFLAGS"])' || true)"
@@ -237,7 +234,7 @@ check_fat_lto_rust() {
   for w in lto nofat; do
     local flags=()
     if [ "$w" = lto ]; then flags=("${rf[@]}"); else flags=("${nofat[@]}"); fi
-    if ! rustc --target "$rt" "${extra[@]}" "${flags[@]}" -C opt-level=2 -C link-dead-code -C link-arg=-lzstd \
+    if ! "$rust_bin/rustc" --target "$rt" "${extra[@]}" "${flags[@]}" -C opt-level=2 -C link-dead-code -C link-arg=-lzstd \
         "$ROOT_DIR/tests/fixtures/fat-lto.rs" -o "$tmp/$w" 2>"$tmp/err"; then
       bad="$bad $w: $(grep -m2 -E 'error|undefined' "$tmp/err" | tr '\n' ' ' || true);"; continue
     fi
@@ -562,22 +559,43 @@ PY
   if [ -z "$problems" ]; then pass "manifest"; else fail "manifest" "$(head -5 <<< "$problems")"; fi
 }
 
-# check_rust ROOT TRIPLE — rustc links through <triple>-clang and a caught panic unwinds. gnu: the
-# output stays within the glibc floor and needs no libgcc_s (std's -lgcc_s resolves to the
-# sysroot's libgcc_s.so linker script → libunwind). Skipped (warn) without rustc or that
-# target's std.
-check_rust() {
-  local root="$1" t="$2" rt list rsys tmp extra=() v
-  rt="$(rust_triple "$t")"
-  if ! command -v rustc >/dev/null 2>&1; then warn "rustc not on PATH; skipping rust $t"; return; fi
-  list="$(rustc --print target-list 2>/dev/null || true)"
-  rsys="$(rustc --print sysroot 2>/dev/null || true)"
-  if ! grep -qxF "$rt" <<< "$list" || [ ! -d "$rsys/lib/rustlib/$rt" ]; then
-    warn "rust std for $rt not installed; skipping rust $t"; return
+# check_rust_toolchain ROOT — the bundled rustc is the versions.env pin, and the bundled cargo
+# builds a crate with it that links through the bundle's clang and runs.
+check_rust_toolchain() {
+  local root="$1" vv tmp host var
+  vv="$("$root/rust/bin/rustc" -vV 2>&1 || true)"
+  if [ "$(sed -n 's/^release: //p' <<< "$vv")" != "$RUST_VERSION" ] \
+      || [ "$(sed -n 's/^commit-hash: //p' <<< "$vv")" != "$RUST_REV" ]; then
+    fail "rust toolchain" "rust/bin/rustc is not $RUST_VERSION ($RUST_REV): $(head -3 <<< "$vv" | xargs)"; return
   fi
+  host="$(sed -n 's/^host: //p' <<< "$vv")"
+  var="CARGO_TARGET_$(tr 'a-z-' 'A-Z_' <<< "$host")_LINKER"
+  tmp="$(mktemp -d)"
+  mkdir -p "$tmp/src"
+  printf '[package]\nname = "probe"\nversion = "0.0.0"\nedition = "2024"\n' > "$tmp/Cargo.toml"
+  cp "$ROOT_DIR/tests/fixtures/hello.rs" "$tmp/src/main.rs"
+  if ! env RUSTC="$root/rust/bin/rustc" CARGO_HOME="$tmp/home" \
+      "$var=$root/bin/$(bundle_triple_for_rust "$host")-clang" \
+      "$root/rust/bin/cargo" build --offline --quiet --manifest-path "$tmp/Cargo.toml" 2>"$tmp/err"; then
+    fail "rust toolchain" "cargo build: $(grep -m3 -E 'error|undefined|unable' "$tmp/err" | xargs)"; rm -rf "$tmp"; return
+  fi
+  if [ "$("$tmp/target/debug/probe" 2>/dev/null)" != "hello from elide-toolchain" ]; then
+    fail "rust toolchain" "cargo-built program did not print the expected output"; rm -rf "$tmp"; return
+  fi
+  rm -rf "$tmp"
+  pass "rust toolchain"
+}
+
+# check_rust ROOT TRIPLE — the bundled rustc links through <triple>-clang and a caught panic
+# unwinds. gnu: the output stays within the glibc floor and needs no libgcc_s (std's -lgcc_s
+# resolves to the sysroot's libgcc_s.so linker script → libunwind).
+check_rust() {
+  local root="$1" t="$2" rt tmp extra=() v rust_bin="$1/rust/bin"
+  rt="$(rust_triple "$t")"
+  if [ ! -d "$root/rust/lib/rustlib/$rt/lib" ]; then fail "rust $t" "no bundled std for $rt"; return; fi
   if [ "$(triple_libc "$t")" = musl ]; then extra=(-C target-feature=+crt-static); fi
   tmp="$(mktemp -d)"
-  if ! rustc --target "$rt" "${extra[@]}" -C "linker=$root/bin/$t-clang" \
+  if ! "$rust_bin/rustc" --target "$rt" "${extra[@]}" -C "linker=$root/bin/$t-clang" \
       "$ROOT_DIR/tests/fixtures/hello.rs" -o "$tmp/hello-rs" 2>"$tmp/err"; then
     fail "rust $t" "$(grep -E 'error|undefined|unable' "$tmp/err" | head -5)"; rm -rf "$tmp"; return
   fi
@@ -634,6 +652,7 @@ run_all_checks() {
     if [ -z "$re" ] || [ ! -x "$re" ]; then fail "readelf" "no usable readelf/llvm-readelf found"; fi
   fi
   check_manifest "$root"
+  check_rust_toolchain "$root"
   check_xcode27_tapi "$root"
   if "$root/bin/clangd" --version >/dev/null; then pass "clangd"; else fail "clangd" "bundled language server does not run"; fi
   check_no_build_paths "$root"
