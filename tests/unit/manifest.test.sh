@@ -22,6 +22,7 @@ assert_eq "$(q '" ".join(t["triple"] for t in d["targets"])')" "x86_64-unknown-l
 assert_eq "$(q '[t["libcVersion"] for t in d["targets"] if t["libc"]=="glibc"][0]')" "$GLIBC_FLOOR"
 assert_eq "$(q '" ".join(d["enabledComponents"])')" "zlib-ng zstd aws-lc"
 assert_eq "$(q 'd["components"]["llvm"]["version"]')" "$LLVM_VERSION"
+assert_eq "$(q 'd["rust"]["toolchain"], d["rust"]["host"], " ".join(d["rust"]["targets"])')" "$(cat "$ROOT_DIR/rustversion") x86_64-unknown-linux-gnu x86_64-unknown-linux-musl x86_64-unknown-linux-gnu"
 assert_eq "$(q 'd["features"]["memprof"]["runtimeTargets"]')" "['x86_64-unknown-linux-gnu']"
 assert_eq "$(q 'd["features"]["elideallocShim"]["backends"]["x86_64-unknown-linux-gnu"]')" "mimalloc"
 assert_eq "$(q 'd["features"]["elideallocShim"]["abi"]')" "1"
@@ -33,7 +34,8 @@ assert_eq "$(BUILD_PROPELLER=no LLVM_DEDUBB=no MUSL_USE_MIMALLOC=no python3 "$RO
 
 s="$(python3 "$ROOT_DIR/scripts/gen-manifest.py" sbom)"
 names="$(printf '%s' "$s" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["bomFormat"]=="CycloneDX" and d["specVersion"]=="1.6"; print(" ".join(sorted(c["name"] for c in d["components"])))')"
-assert_eq "$names" "aws-lc clangd glibc llvm mimalloc musl zlib-ng zstd"
+assert_eq "$names" "aws-lc clangd glibc llvm mimalloc musl rust zlib-ng zstd"
+assert_eq "$(printf '%s' "$s" | python3 -c 'import json,sys; c=next(c for c in json.load(sys.stdin)["components"] if c["name"]=="rust"); print(c["version"], c["purl"])')" "$RUST_VERSION pkg:github/rust-lang/rust@$RUST_REV"
 assert_eq "$(printf '%s' "$s" | python3 -c 'import json,sys; c=next(c for c in json.load(sys.stdin)["components"] if c["name"]=="clangd"); print(c["version"], c["licenses"][0]["expression"])')" "$LLVM_VERSION Apache-2.0 WITH LLVM-exception"
 
 ELIDE_HOST_OS=darwin ELIDE_HOST_ARCH=arm64 ALL_TARGETS=arm64-apple-darwin HOST_OS=darwin HOST_ARCH=arm64 \

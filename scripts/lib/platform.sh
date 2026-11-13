@@ -99,6 +99,36 @@ rust_triple() {
   esac
 }
 
+# bundle_triple_for_rust RUST_TRIPLE — the bundle's name for a Rust triple (inverse of rust_triple).
+bundle_triple_for_rust() {
+  case "$1" in
+    aarch64-apple-darwin) echo arm64-apple-darwin ;;
+    *) echo "$1" ;;
+  esac
+}
+
+# rust_host_triple OS ARCH — Rust's triple for the host the bundled rustc and cargo run on.
+rust_host_triple() {
+  case "$1-$2" in
+    linux-amd64)  echo x86_64-unknown-linux-gnu ;;
+    linux-arm64)  echo aarch64-unknown-linux-gnu ;;
+    darwin-arm64) echo aarch64-apple-darwin ;;
+    *) die "no bundled Rust for $1-$2" ;;
+  esac
+}
+
+# rust_pin COMPONENT RUST_TRIPLE url|sha256 — the official archive of a RUST_TOOLCHAIN component
+# (rustc, cargo, rust-std) and its versions.env RUST_SHA256_<COMPONENT>_<TRIPLE> digest.
+rust_pin() {
+  local v
+  case "$3" in
+    url) printf 'https://static.rust-lang.org/dist/%s/%s-%s-%s.tar.xz\n' \
+      "${RUST_TOOLCHAIN#*-}" "$1" "${RUST_TOOLCHAIN%%-*}" "$2" ;;
+    sha256) v="RUST_SHA256_${1}_$2"; v="${v^^}"; v="${v//-/_}"; printf '%s\n' "${!v:-}" ;;
+    *) die "rust_pin: unknown field $3" ;;
+  esac
+}
+
 # bundle_triple_for_libc LIBC — the bundle triple (from $ALL_TARGETS) using LIBC (musl|gnu).
 bundle_triple_for_libc() {
   local t

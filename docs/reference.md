@@ -85,7 +85,7 @@ eval "$(elide-toolchain env --target x86_64-unknown-linux-gnu)"
 
 **pkg-config.** `PKG_CONFIG_LIBDIR=<sysroot>/usr/lib/pkgconfig` and `PKG_CONFIG_SYSROOT_DIR=<sysroot>` (set by `env --target`); every component installs its `.pc` file there.
 
-**Rust.** The bundle root includes `rustversion`, the recommended Rust toolchain pin (`nightly-2026-10-09`, LLVM 23.1.3), paired with this bundle’s LLVM 23.1.4. Consumers can install it with `rustup toolchain install "$(cat /path/to/elide-toolchain/rustversion)"`. Link through the bundle for cross-language LTO: `CARGO_TARGET_<TRIPLE>_LINKER=<triple>-clang` (printed by `env --target`) with `-Clink-arg=-fuse-ld=lld`; on Linux also pass `-Clink-arg=-Wl,--fat-lto-objects`, since rustc never passes `-flto` to clang (see Link rules). `elide-toolchain flags --target <triple> lto` prints this set as `ELIDE_RUSTFLAGS`. rustc's LLVM major must be <= the bundle's. The gnu std always passes `-lgcc_s`; the gnu sysroot's `usr/lib/libgcc_s.so` is a linker script (`INPUT(-lunwind)`) that resolves it to the static libunwind, so outputs never need `libgcc_s.so.1`. For musl, add `-C target-feature=+crt-static`.
+**Rust.** The bundle ships the official Rust toolchain named by `rustversion` (`nightly-2026-10-09`, LLVM 23.1.3, paired with this bundle’s LLVM 23.1.4) under `rust/`: `rustc`, `cargo` and `rustdoc` for the host, and std for every bundle triple, unmodified. Run `rust/bin/cargo` with `RUSTC=<bundle>/rust/bin/rustc`; neither needs rustup. Other components (clippy, rustfmt, `rust-src`, more targets) are not included: install the same pin with `rustup toolchain install "$(cat /path/to/elide-toolchain/rustversion)"` when you need them. `manifest.json` records the toolchain under `rust`. rustc links through a C compiler driver and its default is the host's `cc`, so always name the bundle's: link through the bundle for cross-language LTO: `CARGO_TARGET_<TRIPLE>_LINKER=<triple>-clang` (printed by `env --target`) with `-Clink-arg=-fuse-ld=lld`; on Linux also pass `-Clink-arg=-Wl,--fat-lto-objects`, since rustc never passes `-flto` to clang (see Link rules). `elide-toolchain flags --target <triple> lto` prints this set as `ELIDE_RUSTFLAGS`. rustc's LLVM major must be <= the bundle's. The gnu std always passes `-lgcc_s`; the gnu sysroot's `usr/lib/libgcc_s.so` is a linker script (`INPUT(-lunwind)`) that resolves it to the static libunwind, so outputs never need `libgcc_s.so.1`. For musl, add `-C target-feature=+crt-static`.
 
 **GraalVM native-image.** Linux bundles ship `<cpu>-linux-musl-gcc` / `-g++` (and `cc`, `c++`, `ar`, `ranlib`, `nm`, `strip`) as shims over clang and the llvm tools, so `native-image --libc=musl` works with `bin/` on `PATH`. The shims never add `-static`. For LTO into the shipped archives, give the final link `-flto=thin`: `-H:NativeLinkerOption=-flto=thin` (glibc: also `--native-compiler-path=<bundle>/bin/<triple>-clang`). Native Image's own object is machine code, so the LTO covers libc, libc++ and the components.
 
@@ -194,6 +194,9 @@ elide-toolchain/
     clang/<major>/lib/<triple>/libclang_rt.*   # Linux: builtins, crtbegin/crtend, profile, sanitizers, libFuzzer; memprof (x86_64 gnu)
     clang/<major>/lib/darwin/libclang_rt.*     # macOS
     <triple>/libc++.a libc++abi.a libunwind.a  # Linux
+  rust/                                   # official Rust toolchain of `rustversion`
+    bin/ rustc cargo rustdoc ...
+    lib/rustlib/<rust-triple>/lib/        # std for every bundle triple
   include/
     c++/v1/                               # libc++ headers (Linux)
     <triple>/c++/v1/__config_site

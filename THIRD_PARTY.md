@@ -12,6 +12,8 @@ record the setup action's dependencies. Every bundle includes `manifest.json` an
 These inventories are not a license-compliance certification.
 
 Major sources include LLVM/Clang (Apache-2.0 with LLVM exceptions), musl (MIT),
+the official Rust toolchain binaries (Apache-2.0 OR MIT, with the third-party
+notices shipped under `share/elide-toolchain/licenses/rust/`),
 glibc (LGPL and associated notices), Linux UAPI headers (file-specific syscall
 exceptions), and the libraries selected in `versions.env`. Consult each pinned
 upstream source for the authoritative terms, including optional components and

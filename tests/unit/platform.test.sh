@@ -36,6 +36,24 @@ assert_eq "$(musl_loader x86_64)" lib/ld-musl-x86_64.so.1
 assert_eq "$(musl_gcc_prefix x86_64-unknown-linux-musl)" x86_64-linux-musl
 assert_eq "$(rust_triple arm64-apple-darwin)" aarch64-apple-darwin
 assert_eq "$(rust_triple x86_64-unknown-linux-gnu)" x86_64-unknown-linux-gnu
+assert_eq "$(rust_host_triple linux amd64)" x86_64-unknown-linux-gnu
+assert_eq "$(rust_host_triple darwin arm64)" aarch64-apple-darwin
+assert_fails rust_host_triple darwin amd64
+assert_eq "$RUST_TOOLCHAIN" "$(cat "$ROOT_DIR/rustversion")" "versions.env pins the rustversion toolchain"
+for host in "linux amd64" "linux arm64" "darwin arm64"; do
+  # shellcheck disable=SC2086
+  for pin in "rustc $(rust_host_triple $host)" "cargo $(rust_host_triple $host)" \
+      $(for t in $(bundle_triples $host); do printf 'rust-std:%s ' "$(rust_triple "$t")"; done); do
+    pin="${pin/:/ }"
+    # shellcheck disable=SC2086
+    assert_eq "$(rust_pin $pin sha256 | wc -c | xargs)" 65 "sha256 pin for Rust $pin"
+  done
+done
+# shellcheck disable=SC2034 # read indirectly by rust_pin
+RUST_TOOLCHAIN=nightly-2026-01-02 RUST_SHA256_RUST_STD_X86_64_UNKNOWN_LINUX_MUSL=abc
+assert_eq "$(rust_pin rust-std x86_64-unknown-linux-musl url)" https://static.rust-lang.org/dist/2026-01-02/rust-std-nightly-x86_64-unknown-linux-musl.tar.xz
+assert_eq "$(rust_pin rust-std x86_64-unknown-linux-musl sha256)" abc
+assert_eq "$(rust_pin cargo riscv64gc-unknown-linux-gnu sha256)" ""
 
 ALL_TARGETS="x86_64-unknown-linux-musl x86_64-unknown-linux-gnu"
 assert_eq "$(bundle_triple_for_libc gnu)" x86_64-unknown-linux-gnu

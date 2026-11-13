@@ -17,6 +17,9 @@ gaps = []
 for path in sorted(bundle.rglob("*")):
     if not path.is_file() or path.is_symlink():
         continue
+    # The official Rust toolchain ships byte-for-byte; its debug information is upstream's.
+    if (bundle / "rust") in path.parents:
+        continue
     try:
         module = preservation.inventory.native(path)
     except (ValueError, OSError) as error:

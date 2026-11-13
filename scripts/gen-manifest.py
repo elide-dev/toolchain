@@ -92,6 +92,23 @@ def core_components(host_os):
     return ["llvm", "mimalloc"] + (["musl", "glibc"] if host_os == "linux" else [])
 
 
+def rust_triple(triple):
+    return "aarch64-apple-darwin" if triple == "arm64-apple-darwin" else triple
+
+
+def rust_info(env, host_os, host_arch, triples):
+    """The official Rust toolchain shipped under rust/ (stage 55)."""
+    cpu = "x86_64" if host_arch == "amd64" else "aarch64"
+    return {
+        "root": "rust",
+        "toolchain": env["RUST_TOOLCHAIN"],
+        "version": env["RUST_VERSION"],
+        "revision": env["RUST_REV"],
+        "host": f"{cpu}-apple-darwin" if host_os == "darwin" else f"{cpu}-unknown-linux-gnu",
+        "targets": [rust_triple(t) for t in triples],
+    }
+
+
 def yes(name, default="yes"):
     return os.environ.get(name, default).lower() in ("yes", "on", "true", "1")
 
@@ -161,6 +178,7 @@ def manifest(env):
         "targets": [target_entry(env, t) for t in triples],
         "enabledComponents": os.environ.get("ENABLED_COMPONENTS", "").split(),
         "components": components(env, host_os),
+        "rust": rust_info(env, host_os, host_arch, triples),
         "cflagsProfile": f"{host_os}-{host_arch}",
         "features": features(env, host_os, triples),
         **sanitizer_info(),
@@ -203,6 +221,13 @@ def sbom(env):
         "type": "application", "name": "clangd", "version": llvm["version"],
         "purl": purl(urls["llvm"], "llvm", llvm["version"], llvm["revision"]) + "#clang-tools-extra/clangd",
         "licenses": [{"expression": "Apache-2.0 WITH LLVM-exception"}],
+    })
+    comps.append({
+        "type": "application", "name": "rust", "version": m["rust"]["version"],
+        "purl": f"pkg:github/rust-lang/rust@{m['rust']['revision']}",
+        "licenses": [{"expression": "Apache-2.0 OR MIT"}],
+        "externalReferences": [{"type": "distribution", "url": "https://static.rust-lang.org/dist/"
+                                + m["rust"]["toolchain"].split("-", 1)[1] + "/"}],
     })
     return {
         "$schema": "http://cyclonedx.org/schema/bom-1.6.schema.json",
