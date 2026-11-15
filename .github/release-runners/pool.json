@@ -3,7 +3,7 @@
   "organization": "elide-dev",
   "runner_group_id": 18,
   "runner_group_name": "Toolchain Releases",
-  "release": "v2026.11.6",
+  "trusted_branch": "main",
   "gcp": {
     "project": "elide-cloud-sandbox",
     "zone": "us-east1-b",

@@ -3,8 +3,8 @@
 Toolchain targets [SLSA v1.2 Build L3](https://slsa.dev/spec/v1.2/build-requirements)
 using disposable native build guests and GitHub-hosted Sigstore signing. The
 repository implements the release workflow, Linux/macOS guest lifecycle controllers,
-and a supervisor for explicitly selected Actions runs. The first qualifying native
-release is planned as `2026.11.6`, after the dependency updates and additional fixes;
+and a persistent supervisor that discovers tag-push release runs. The first
+qualifying native release is planned as `2026.11.6`, after the dependency updates and additional fixes;
 existing release archives retain their original provenance and build properties.
 
 ## Release boundary
@@ -129,11 +129,33 @@ GCP network is `toolchain-release` in `us-east1`, with no peering, IAP-only SSH,
 private-range egress denial, and NAT. Image-builder VMs are deleted after sealing.
 Provisioning and installation scripts live in `.github/release-runners/`.
 
-The runner group is restricted to this repository and explicitly selected workflow
-references. GitHub requires those references to exist. Before `v2026.11.6` runs,
-add its exact `job.build.yml` and `job.action-e2e.yml` workflow references to the
-group; qualification uses only `release-runner-qualification.yml@refs/heads/main`.
-Never add wildcard repository access or remove the workflow restriction.
+The runner group is restricted to this repository and exact workflow references.
+The supervisor discovers active `on.release.yml` tag-push runs. It verifies that the
+CalVer tag still points to the run's commit, that the commit is integrated into
+`trusted_branch` (`main`), and that the native reusable workflows come from that
+same tag and commit. It then adds their exact workflow references to the group
+before provisioning guests. New release versions need no configuration edits.
+Qualification uses only `release-runner-qualification.yml@refs/heads/main` and
+requires explicit run selection. Repository and workflow restrictions stay enabled.
+
+Install the persistent supervisor once on a trusted Linux controller with `gh`,
+`gcloud`, Python, and SSH access to the Mac:
+
+```sh
+bash .github/release-runners/install-controller.sh
+sudo loginctl enable-linger "$USER"
+journalctl --user -u toolchain-release-controller -f
+```
+
+The installer copies a reviewed snapshot outside the checkout and enables a user
+systemd service. It uses the controller account's existing authentication; credentials
+are never copied to guests. The service polls GitHub every 15 seconds, including
+when idle, and starts at most one guest per platform. Worker logs live under
+`~/.local/state/toolchain-release/`. Stop the service after its guests finish before
+installing an updated controller snapshot. For unattended operation, use a dedicated
+controller identity with renewable credentials and monitor service failures.
+The service retries failures with a bounded restart rate. It does not fetch or
+execute controller code from release tags.
 
 Dispatch **Release runner qualification** once per platform. Each run creates two
 sequential guests: the first writes an isolation sentinel and the second must have
@@ -147,12 +169,13 @@ python3 .github/scripts/release-pool.py \
   --logs "$HOME/toolchain-release-logs"
 ```
 
-The supervisor starts at most one worker per platform, only for queued jobs in the
-explicitly selected qualification or `v2026.11.6` release runs. It stops allocating
-when those runs finish, retains controller logs, cleans up guests, and stops after
-three worker failures on a platform. Run it on the trusted controller throughout a
-release; no controller credentials are copied into guests. The GCE lifetime limit
-and macOS watchdog remain active independently of the supervisor.
+The explicit `--run-id` mode starts at most one worker per platform for the selected
+qualification or verified release runs, then exits when they finish. Use a separate
+logs directory for explicit qualification while the persistent service is running.
+Both modes retain controller logs, clean up guests, and stop after three worker
+failures on a platform. The persistent `--watch` mode remains available for the
+next release; no controller credentials are copied into guests. The GCE lifetime
+limit and macOS watchdog remain active independently of the supervisor.
 
 The qualification workflow does not build native toolchains or publish a release.
 Keep `RELEASE_ISOLATION_READY` unset until the lifecycle qualification passes on
