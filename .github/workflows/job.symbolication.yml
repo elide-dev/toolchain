@@ -55,7 +55,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y gdb tcl
       - name: Install the existing qualified symbol reader toolchain
         id: tools
-        uses: elide-dev/toolchain/action@171eb7cde379e17822e042cfbda26c9740c10b03 # qualified reader; toolchain 2026.10.0
+        uses: elide-dev/toolchain/action@f2ac47f70d36b75c1ba8481c226a327917fd1889 # qualified reader; toolchain 2026.10.0
         with:
           version: 2026.10.0
           target: x86_64-unknown-linux-gnu
