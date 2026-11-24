@@ -15,6 +15,8 @@ and 45 (llvm-propeller). Stage 00's `unapply_patches` reverses it before the cle
 | `0002-memprof-histogram-tail-granule.patch` | llvm/llvm-project#208911 (`c0b8c59b65af`) | `compiler-rt/lib/memprof/memprof_allocator.cpp` + tests | Correct histogram profiles | on | the new tag contains `c0b8c59b65af` |
 | `0100-dedubb-codegen.patch` | chaitanyaupp18/DeduBB@`07d730d` `patches/llvm-project-dedubb.patch` | CodeGen (DeduBB passes, hooks), X86/AArch64 InstrInfo, lld LinkerScript, clang driver CMake, 6 lit tests | DeduBB folding (`-mllvm -dedubb-directives=`) | on (`LLVM_DEDUBB`), inert without directives | DeduBB lands upstream |
 | `0200-linux-fat-lto-objects-default.patch` | local, [#13](https://github.com/elide-dev/toolchain/issues/13), [#18](https://github.com/elide-dev/toolchain/issues/18) | `clang/lib/Driver/ToolChains/CommonArgs.cpp`, `clang/test/Driver/elide-fat-lto-objects-default.c` | Linux in-process LTO links default to lld `--fat-lto-objects`; index-only links retain native archive members for distributed backends; explicit opt-in/out overrides either default | on | never (bundle policy); drop only if the archives stop being fat |
+| `0300-aarch64-frame-record-on-top.patch` | GraalVM `sdk/llvm-patches/native-image/0001` (GR-23578), [D150938](https://reviews.llvm.org/D150938) (open), [#48](https://github.com/elide-dev/toolchain/issues/48) | `AArch64RegisterInfo.cpp`, `CodeGen/AArch64/frame-record-on-top.ll` | Native Image LLVM backend (`llc --aarch64-frame-record-on-top`): frame record on top of the frame on non-Darwin AArch64 | on, inert without the option | D150938 (or an equivalent) lands upstream and GraalVM drops its copy |
+| `0301-statepoint-compressed-pointers.patch` | GraalVM `sdk/llvm-patches/native-image/0002` (GR-17692), [D150936](https://reviews.llvm.org/D150936) (open), [#48](https://github.com/elide-dev/toolchain/issues/48) | `IRBuilder.h`, `IRBuilder.cpp`, `BuiltinGCs.cpp`, `RewriteStatepointsForGC.cpp`, `RewriteStatepointsForGC/compressed-pointer.ll` | Native Image LLVM backend (`gc "compressed-pointer"`): the GC strategy and addrspace(2) compressed references in statepoints | on, inert unless a function uses the `compressed-pointer` GC | D150936 (or an equivalent) lands upstream and GraalVM drops its copy |
 
 ## `src/patches/llvm-propeller` (base `google/llvm-propeller@ea240c1`)
 
@@ -89,3 +91,17 @@ The driver regression covers both forwarding forms and architectures. Stage 95's
 distributed ThinLTO regression exercises actual imports, isolated backends, a
 final-link response file with Bazel's prefix/suffix rewriting, executable and
 shared-library links, both opt-outs, and an explicit fat-LTO negative control.
+
+## 2026-11: GraalVM Native Image patches (#48)
+
+`0300` and `0301` carry the two LLVM patches GraalVM applies for the Native Image LLVM backend
+(`-H:CompilerBackend=llvm`), from elide-dev/graal `sdk/llvm-patches/native-image/`, so the bundle's
+`opt`/`llc` can serve as GraalVM's `lib/llvm`. Without them `opt` stops with `unsupported GC:
+compressed-pointer` and AArch64 `llc` rejects `--aarch64-frame-record-on-top`. Both apply to
+23.1.4 with or without `0001`–`0200`; they share no files with them. `0300` is GraalVM's patch
+unchanged. `0301` adds one fix: `CompressedPointerGC::isGCManagedPointer` casts through
+`getScalarType()`, because statepoint lowering asks it about deopt operands, which this GC fills
+with vectors of addrspace(2) pointers too (an assertion failure, or an unchecked cast without
+assertions, in `SelectionDAGBuilder::LowerStatepoint`). Each patch adds a lit test; the upstream
+reviews have none. The `03xx` block is for GraalVM patches: when GraalVM changes its copies,
+refresh these from `sdk/llvm-patches/native-image/` and keep the tests and the `0301` fix.
