@@ -16,6 +16,7 @@ stage_main() {
   for t in $ALL_TARGETS; do
     build_builtins "$t"
     build_cxx_runtimes "$t"
+    if [ "$(triple_libc "$t")" = gnu ]; then build_shared_cxx_runtimes "$t"; fi
   done
   install_frontends "$STAGE1_DIR"
 }
@@ -103,4 +104,40 @@ build_cxx_runtimes() {
     -DLIBUNWIND_INSTALL_LIBRARY_DIR="lib/$t"
   cmake --build "$b" -j "$JOBS"
   install_both "$b"
+}
+
+# build_shared_cxx_runtimes TRIPLE — shared libc++, libc++abi and libunwind (gnu triples), for
+# consumers that load the C++ runtime at run time (GraalVM Sulong's libsulong++). Bundle only, in
+# lib/<t>/shared/: lld prefers a .so over a .a in the same search directory, so lib/<t> keeps only
+# the archives and the cfg's -stdlib=libc++ -unwindlib=libunwind still link them statically, in
+# stage 1 and in the bundle. Native code only (no LTO flags); each library finds the next through
+# a $ORIGIN runpath (libc++.so.1 -> libc++abi.so.1 -> libunwind.so.1). STATIC_LIBRARY try-compiles
+# make check_library_exists pass for libatomic, which the sysroot lacks (clang inlines atomics).
+build_shared_cxx_runtimes() {
+  local t="$1" b="$BUILD_DIR/runtimes/$1/cxx-shared" inst args=() dest
+  inst="$b-install"; dest="$BUNDLE_DIR/lib/$t/shared"
+  mapfile -t args < <(runtimes_common_args "$t"; libcxxabi_libc_args "$t")
+  fresh_dir "$b"; rm -rf "$inst"
+  # shellcheck disable=SC2016 # $ORIGIN is for the dynamic loader, not the shell
+  cmake -S "$ROOT_DIR/llvm/runtimes" -B "$b" "${args[@]}" \
+    "-DCMAKE_SHARED_LINKER_FLAGS=-fuse-ld=lld -rtlib=compiler-rt -unwindlib=none -Wl,--build-id=sha1" \
+    -DCMAKE_INSTALL_PREFIX="$inst" \
+    -DCMAKE_INSTALL_RPATH='$ORIGIN' -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+    -DLLVM_ENABLE_RUNTIMES="libunwind;libcxxabi;libcxx" \
+    -DLIBUNWIND_USE_COMPILER_RT=ON -DLIBUNWIND_ENABLE_SHARED=ON -DLIBUNWIND_ENABLE_STATIC=OFF \
+    -DLIBCXXABI_USE_COMPILER_RT=ON -DLIBCXXABI_USE_LLVM_UNWINDER=ON \
+    -DLIBCXXABI_ENABLE_SHARED=ON -DLIBCXXABI_ENABLE_STATIC=OFF \
+    -DLIBCXXABI_ENABLE_STATIC_UNWINDER=OFF -DLIBCXXABI_STATICALLY_LINK_UNWINDER_IN_SHARED_LIBRARY=OFF \
+    -DLIBCXX_USE_COMPILER_RT=ON -DLIBCXX_HAS_MUSL_LIBC=OFF \
+    -DLIBCXX_ENABLE_SHARED=ON -DLIBCXX_ENABLE_STATIC=OFF \
+    -DLIBCXX_STATICALLY_LINK_ABI_IN_SHARED_LIBRARY=OFF \
+    -DLIBCXX_HAS_ATOMIC_LIB=OFF \
+    -DLIBCXX_HARDENING_MODE=fast \
+    -DLIBCXX_INCLUDE_TESTS=OFF -DLIBCXX_INCLUDE_BENCHMARKS=OFF \
+    -DLIBCXXABI_INCLUDE_TESTS=OFF -DLIBUNWIND_INCLUDE_TESTS=OFF \
+    -DLIBCXX_INSTALL_LIBRARY_DIR=lib -DLIBCXXABI_INSTALL_LIBRARY_DIR=lib -DLIBUNWIND_INSTALL_LIBRARY_DIR=lib
+  cmake --build "$b" -j "$JOBS"
+  cmake --install "$b"
+  rm -rf "$dest"; mkdir -p "$dest"
+  cp -P "$inst"/lib/libc++.so* "$inst"/lib/libc++abi.so* "$inst"/lib/libunwind.so* "$dest/"
 }
