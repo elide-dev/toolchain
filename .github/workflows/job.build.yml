@@ -134,6 +134,9 @@ jobs:
         env:
           CACHE_SCOPE: ${{ startsWith(github.ref, 'refs/tags/v') && 'release' || github.ref == 'refs/heads/main' && 'main' || format('review-{0}', github.event.number || github.run_id) }}
         run: |
+          # Each pull request gets its own scope; drop other PRs' idle scopes so they cannot fill
+          # the runner's disk.
+          bash scripts/prune-ci-caches.sh "$HOME/.cache/elide-toolchain/v2" "$CACHE_SCOPE"
           c="$HOME/.cache/elide-toolchain/v2/$CACHE_SCOPE/${{ matrix.os }}-${{ matrix.arch }}"
           mkdir -p "$c/downloads" "$c/ccache"
           {
@@ -155,10 +158,17 @@ jobs:
             v="$(. ./versions.env && echo "$TOOLCHAIN_VERSION")-dev.$(git rev-parse --short HEAD)"
           fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
+      - name: "Report: Disk (before build)"
+        run: df -h "$GITHUB_WORKSPACE" "$HOME"
       - name: "Build: Toolchain"
         env:
           TOOLCHAIN_VERSION: ${{ steps.version.outputs.version }}
         run: ./build.sh --clean
+      - name: "Report: Disk (after build)"
+        if: always()
+        run: |
+          df -h "$GITHUB_WORKSPACE" "$HOME"
+          du -sh out dist 2>/dev/null || true
       - name: "Report: ccache"
         if: always()
         run: |
