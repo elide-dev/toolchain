@@ -110,8 +110,10 @@ prune_build_trees() {
   case "$1" in
     # Stage 45 links llvm-propeller against the stage-2 tree's static libraries; nothing after it.
     45-propeller) dirs=("$BUILD_DIR/llvm-stage2" "$BUILD_DIR/propeller") ;;
-    # Stages 90 and 95 read only the bundle, $DIST_DIR and $OUT_DIR/glibc-files.txt.
-    60-sanitizer-addons) dirs=("$BUILD_DIR") ;;
+    # On Linux, stages 90 and 95 read only the bundle, $DIST_DIR and $OUT_DIR/glibc-files.txt:
+    # ELF tools carry their DWARF. Mach-O tools do not: stage 90's dsymutil reads it from the
+    # object files under $BUILD_DIR/llvm that their debug maps name, so macOS keeps the trees.
+    60-sanitizer-addons) [ "$HOST_OS" = linux ] || return 0; dirs=("$BUILD_DIR") ;;
     *) return 0 ;;
   esac
   for d in "${dirs[@]}"; do
