@@ -97,6 +97,30 @@ stage_index() {
 LOG_DIR="$OUT_DIR/logs"
 FAIL_TAIL_LINES="${FAIL_TAIL_LINES:-200}"
 
+# free_gib DIR — whole GiB free on DIR's filesystem (POSIX df: Linux and macOS).
+free_gib() { df -Pk "$1" 2>/dev/null | awk 'NR == 2 { printf "%d\n", $4 / 1048576 }'; }
+
+# prune_build_trees STAGE — with PRUNE_BUILD_TREES=yes (CI), delete intermediate build trees as
+# soon as no later stage reads them. A full build otherwise holds every tree (the -g stage-2 LLVM
+# tree is the largest) while stage 90 writes the symbols directory and archives, which is the peak
+# of its disk use. Off by default: local `--only`/`--from` reruns need those trees.
+prune_build_trees() {
+  is_yes "${PRUNE_BUILD_TREES:-no}" || return 0
+  local d dirs=()
+  case "$1" in
+    # Stage 45 links llvm-propeller against the stage-2 tree's static libraries; nothing after it.
+    45-propeller) dirs=("$BUILD_DIR/llvm-stage2" "$BUILD_DIR/propeller") ;;
+    # Stages 90 and 95 read only the bundle, $DIST_DIR and $OUT_DIR/glibc-files.txt.
+    60-sanitizer-addons) dirs=("$BUILD_DIR") ;;
+    *) return 0 ;;
+  esac
+  for d in "${dirs[@]}"; do
+    [ -d "$d" ] || continue
+    log "pruning $d ($(du -sh "$d" 2>/dev/null | cut -f1)): no later stage reads it"
+    rm -rf "$d"
+  done
+}
+
 # stage_body STAGE — run one stage in a subshell (errexit re-enabled inside: callers capture rc).
 stage_body() {
   (
@@ -139,8 +163,9 @@ run_stage() {
     if [ -n "${GITHUB_ACTIONS:-}" ]; then echo "::error::stage $stage failed (exit $rc); full log: $logf"; fi
     die "stage $stage failed after $((SECONDS - start))s (exit $rc); full log: $logf"
   fi
-  log "stage $stage done in $((SECONDS - start))s"
+  log "stage $stage done in $((SECONDS - start))s; $(free_gib "$OUT_DIR")G free"
   stamp_done "$stage"
+  prune_build_trees "$stage"
   if [ "$stage" = 90-package ]; then printf '%s\n' 1 > "$preservation_epoch"; fi
 }
 
