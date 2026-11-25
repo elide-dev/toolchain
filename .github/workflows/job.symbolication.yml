@@ -44,7 +44,7 @@ jobs:
       SYMBOL_INGEST_PLATFORM: linux-amd64
     steps:
       - name: "Setup: Harden runner"
-        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
         with:
           egress-policy: audit
       - name: "Setup: Checkout"
@@ -55,7 +55,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y gdb tcl
       - name: Install the existing qualified symbol reader toolchain
         id: tools
-        uses: elide-dev/toolchain/action@171eb7cde379e17822e042cfbda26c9740c10b03 # qualified reader; toolchain 2026.10.0
+        uses: elide-dev/toolchain/action@a0af1f3379ff753c0760a8138ea28c5fce06d409 # qualified reader; toolchain 2026.10.0
         with:
           version: 2026.10.0
           target: x86_64-unknown-linux-gnu
