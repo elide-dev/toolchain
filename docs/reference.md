@@ -99,7 +99,7 @@ eval "$(elide-toolchain env --target x86_64-unknown-linux-gnu)"
 
 **SQLite for Elide.** `libsqlite3elide.a` is SQLite (`SQLITE_VERSION` in `versions.env`, aligned with the sqlite-jdbc jar Elide ships) with the [sqlite-jni](https://github.com/elide-tools/sqlite-jni) shim (`sqlite_*` entry points that Elide's Rust JNI layer forwards to) compiled into the amalgamation, built with `SQLITE_GVM_STATIC` and sqlite-jdbc's compile options (`MAX_ATTACHED=25`, `MAX_VARIABLE_NUMBER=250000`, `API_ARMOR`, FTS3/FTS5, RTREE, STAT4, geopoly, column metadata, update/delete limit; math functions off). It replaces sqlite-jni's release tarballs: `lib/libsqlite3elide.a` and `include/{sqlite3.h,sqlite3ext.h,sqlite3jni.h}` sit in each sysroot's `usr/`, with `sqlite3elide.pc`. `sqlite3jni.h` includes `<jni.h>`, which comes from the consumer's JDK.
 
-C++ implies libc++ on every target; there is no libstdc++ in the bundle, so drop any `-lstdc++`.
+C++ implies libc++ on every target; there is no libstdc++ in the bundle, so drop any `-lstdc++`. Linux gnu bundles also ship shared `libc++.so.1`, `libc++abi.so.1` and `libunwind.so.1` in `lib/<triple>/shared/` (glibc 2.17 floor, `$ORIGIN` runpath) for programs that load the C++ runtime at run time, such as GraalVM's Sulong. The cfg never selects them: C++ links stay static unless you pass `-L<bundle>/lib/<triple>/shared` and ship or `-rpath` the libraries yourself.
 
 ## Profile-guided layout, deduplication and memory hints
 
@@ -194,6 +194,7 @@ elide-toolchain/
     clang/<major>/lib/<triple>/libclang_rt.*   # Linux: builtins, crtbegin/crtend, profile, sanitizers, libFuzzer; memprof (x86_64 gnu)
     clang/<major>/lib/darwin/libclang_rt.*     # macOS
     <triple>/libc++.a libc++abi.a libunwind.a  # Linux
+    <triple>/shared/libc++.so* libc++abi.so* libunwind.so*  # Linux gnu, for runtime loading only
   rust/                                   # official Rust toolchain of `rustversion`
     bin/ rustc cargo rustdoc ...
     lib/rustlib/<rust-triple>/lib/        # std for every bundle triple

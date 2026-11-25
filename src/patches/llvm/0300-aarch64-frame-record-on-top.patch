@@ -1,0 +1,85 @@
+# upstream: https://reviews.llvm.org/D150938 (open)
+#   [AArch64] Introduce option to force placement of the frame record on top of the stack frame
+# graal: elide-dev/graal sdk/llvm-patches/native-image/0001-GR-23578-AArch64-Introduce-option-to-force-placement.patch
+#   (Loic Ottet, Oracle), unchanged
+# local: lit test. Tracked in https://github.com/elide-dev/toolchain/issues/48
+diff --git a/llvm/lib/Target/AArch64/AArch64RegisterInfo.cpp b/llvm/lib/Target/AArch64/AArch64RegisterInfo.cpp
+index edca3e94a0af..7107fdabcba7 100644
+--- a/llvm/lib/Target/AArch64/AArch64RegisterInfo.cpp
++++ b/llvm/lib/Target/AArch64/AArch64RegisterInfo.cpp
+@@ -40,6 +40,11 @@ using namespace llvm;
+ #define GET_REGINFO_TARGET_DESC
+ #include "AArch64GenRegisterInfo.inc"
+ 
++static cl::opt<bool>
++    FrameRecordOnTop("aarch64-frame-record-on-top",
++                     cl::desc("place the frame record on top of the frame"),
++                     cl::init(false), cl::Hidden);
++
+ AArch64RegisterInfo::AArch64RegisterInfo(const Triple &TT, unsigned HwMode)
+     : AArch64GenRegisterInfo(AArch64::LR, 0, 0, 0, HwMode), TT(TT) {
+   AArch64_MC::initLLVMToCVRegMapping(this);
+@@ -188,8 +193,10 @@ AArch64RegisterInfo::getCalleeSavedRegs(const MachineFunction *MF) const {
+     if (Windows)
+       return AFI.hasSVE_AAPCS(*MF) ? CSR_Win_AArch64_SVE_AAPCS_SaveList
+                                    : CSR_Win_AArch64_AAPCS_SaveList;
+-    return AFI.hasSVE_AAPCS(*MF) ? CSR_AArch64_SVE_AAPCS_SaveList
+-                                 : CSR_AArch64_AAPCS_SaveList;
++    if (AFI.hasSVE_AAPCS(*MF))
++      return CSR_AArch64_SVE_AAPCS_SaveList;
++    return FrameRecordOnTop ? CSR_Darwin_AArch64_AAPCS_SaveList
++                            : CSR_AArch64_AAPCS_SaveList;
+   }
+ }
+ 
+diff --git a/llvm/test/CodeGen/AArch64/frame-record-on-top.ll b/llvm/test/CodeGen/AArch64/frame-record-on-top.ll
+new file mode 100644
+index 000000000000..42a348d5f17f
+--- /dev/null
++++ b/llvm/test/CodeGen/AArch64/frame-record-on-top.ll
+@@ -0,0 +1,45 @@
++; Native Image (GraalVM) patch, https://reviews.llvm.org/D150938:
++; --aarch64-frame-record-on-top places the frame record (x29, x30) at the top
++; of the callee-save area on non-Darwin targets, as Darwin does, so that
++; Native Image's stack walker finds it at a fixed offset from the CFA.
++; RUN: llc -mtriple=aarch64-linux-gnu < %s | FileCheck %s --check-prefix=DEFAULT
++; RUN: llc -mtriple=aarch64-linux-gnu --aarch64-frame-record-on-top < %s | FileCheck %s --check-prefix=ONTOP
++; RUN: llc -mtriple=arm64-apple-macosx < %s | FileCheck %s --check-prefix=DARWIN
++; RUN: llc -mtriple=arm64-apple-macosx --aarch64-frame-record-on-top < %s | FileCheck %s --check-prefix=DARWIN
++
++declare void @callee(ptr)
++
++; By default (non-Darwin), x29/x30 are saved at the bottom of the callee-save
++; area; with the option (and always on Darwin), at its top.
++; DEFAULT-LABEL: clobber:
++; DEFAULT:         sub sp, sp, #128
++; DEFAULT-NEXT:    stp x29, x30, [sp, #32]
++; DEFAULT:         stp x20, x19, [sp, #112]
++; DEFAULT-NEXT:    add x29, sp, #32
++; DEFAULT:         ldp x29, x30, [sp, #32]
++; DEFAULT-NEXT:    add sp, sp, #128
++;
++; ONTOP-LABEL: clobber:
++; ONTOP:         sub sp, sp, #128
++; ONTOP-NEXT:    stp x28, x27, [sp, #32]
++; ONTOP:         stp x20, x19, [sp, #96]
++; ONTOP-NEXT:    stp x29, x30, [sp, #112]
++; ONTOP-NEXT:    add x29, sp, #112
++; ONTOP:         ldp x29, x30, [sp, #112]
++; ONTOP:         ldp x28, x27, [sp, #32]
++; ONTOP-NEXT:    add sp, sp, #128
++;
++; DARWIN-LABEL: _clobber:
++; DARWIN:         sub sp, sp, #128
++; DARWIN-NEXT:    stp x28, x27, [sp, #32]
++; DARWIN:         stp x20, x19, [sp, #96]
++; DARWIN-NEXT:    stp x29, x30, [sp, #112]
++; DARWIN-NEXT:    add x29, sp, #112
++
++define void @clobber() "frame-pointer"="all" {
++  %buf = alloca [4 x i64]
++  call void @callee(ptr %buf)
++  call void asm sideeffect "", "~{x19},~{x20},~{x21},~{x22},~{x23},~{x24},~{x25},~{x26},~{x27},~{x28}"()
++  call void @callee(ptr %buf)
++  ret void
++}
