@@ -163,12 +163,14 @@ jobs:
       - name: "Build: Toolchain"
         env:
           TOOLCHAIN_VERSION: ${{ steps.version.outputs.version }}
+          # Drop intermediate build trees once no later stage reads them (see build.sh).
+          PRUNE_BUILD_TREES: "yes"
         run: ./build.sh --clean
       - name: "Report: Disk (after build)"
         if: always()
         run: |
           df -h "$GITHUB_WORKSPACE" "$HOME"
-          du -sh out dist 2>/dev/null || true
+          du -sh out dist out/*/* dist/* 2>/dev/null | sort -h | tail -n 15 || true
       - name: "Report: ccache"
         if: always()
         run: |

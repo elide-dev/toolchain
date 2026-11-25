@@ -77,5 +77,27 @@ console="$(env ELIDE_STAGES_DIR="$T/stages" ELIDE_OUT_DIR="$T/out" ELIDE_HOST_OS
   ELIDE_TEST_LOG="$T/log" VERBOSE=yes "$ROOT_DIR/build.sh" --only 30-runtimes 2>&1)"
 assert_contains "$console" "noisy-output-30-runtimes" "VERBOSE=yes streams stage output"
 
+# PRUNE_BUILD_TREES: dead build trees go once no later stage reads them; off by default.
+cat >> "$T/stages/50-components.sh" <<'EOF'
+stage_main() {
+  [ -d "$BUILD_DIR/llvm-stage2" ] && echo "50-components saw-stage2" >> "$ELIDE_TEST_LOG"
+  mkdir -p "$BUILD_DIR/components"
+}
+EOF
+cat >> "$T/stages/40-llvm-stage2.sh" <<'EOF'
+stage_main() { mkdir -p "$BUILD_DIR/llvm-stage2" "$BUILD_DIR/propeller" "$BUILD_DIR/runtimes"; }
+EOF
+run --clean
+assert_file "$T/out/build/llvm-stage2"
+assert_file "$T/out/build/components"
+assert_contains "$(cat "$T/log")" "saw-stage2" "trees kept without PRUNE_BUILD_TREES"
+PRUNE_BUILD_TREES=yes run --clean --from 40-llvm-stage2
+assert_not_contains "$(cat "$T/log")" "saw-stage2" "stage-2 tree pruned after 45-propeller"
+assert_fails test -e "$T/out/build"
+assert_file "$T/out/stamps/95-verify.done"
+console="$(env ELIDE_STAGES_DIR="$T/stages" ELIDE_OUT_DIR="$T/out" ELIDE_HOST_OS=linux ELIDE_HOST_ARCH=amd64 \
+  ELIDE_TEST_LOG="$T/log" "$ROOT_DIR/build.sh" --only 30-runtimes 2>&1)"
+assert_contains "$console" "G free" "completion line reports free space"
+
 rm -rf "$T"
 finish
