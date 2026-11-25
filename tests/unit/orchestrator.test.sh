@@ -98,6 +98,14 @@ assert_file "$T/out/stamps/95-verify.done"
 console="$(env ELIDE_STAGES_DIR="$T/stages" ELIDE_OUT_DIR="$T/out" ELIDE_HOST_OS=linux ELIDE_HOST_ARCH=amd64 \
   ELIDE_TEST_LOG="$T/log" "$ROOT_DIR/build.sh" --only 30-runtimes 2>&1)"
 assert_contains "$console" "G free" "completion line reports free space"
+# macOS: stage 90's dsymutil reads DWARF from the object files under build/llvm.
+cat >> "$T/stages/10-llvm-stage1.sh" <<'EOF'
+stage_main() { mkdir -p "$BUILD_DIR/llvm"; }
+EOF
+env PRUNE_BUILD_TREES=yes ELIDE_STAGES_DIR="$T/stages" ELIDE_OUT_DIR="$T/out-darwin" ELIDE_HOST_OS=darwin \
+  ELIDE_HOST_ARCH=arm64 ELIDE_TEST_LOG="$T/log" "$ROOT_DIR/build.sh" --clean >/dev/null 2>&1
+assert_eq "$?" 0 "darwin build with pruning"
+assert_file "$T/out-darwin/build/llvm"
 
 rm -rf "$T"
 finish
