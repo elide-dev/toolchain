@@ -65,6 +65,34 @@ class DCOTest(unittest.TestCase):
             self.assertNotEqual(check('main', signed), 0)
             self.assertNotEqual(check('f' * 40, signed), 0)
 
+    def test_message_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            env = {**os.environ, 'GIT_AUTHOR_NAME': 'Contributor',
+                   'GIT_AUTHOR_EMAIL': 'contributor@example.org',
+                   'GIT_COMMITTER_NAME': 'Maintainer', 'GIT_COMMITTER_EMAIL': 'maintainer@example.org'}
+            subprocess.run(['git', 'init', '-q'], cwd=directory, env=env, check=True)
+            message_file = Path(directory) / 'COMMIT_EDITMSG'
+
+            def check(message):
+                message_file.write_text(message)
+                return subprocess.run(['python3', str(SCRIPT), '--message-file', str(message_file)],
+                                      cwd=directory, env=env, capture_output=True).returncode
+
+            comments = '\n# Please enter the commit message for your changes.\n# On branch main\n'
+            self.assertEqual(check('Change\n\nSigned-off-by: Contributor <contributor@example.org>\n'), 0)
+            self.assertEqual(check('Change\n\nSigned-off-by: Maintainer <maintainer@example.org>\n' + comments), 0)
+            self.assertNotEqual(check('Change\n' + comments), 0)
+            self.assertNotEqual(check('Change\n\nSigned-off-by: Stranger <other@example.org>\n'), 0)
+            # `git commit -v`: a sign-off inside the diff below the scissors line does not count.
+            verbose = ('Change\n' + comments + '# ------------------------ >8 ------------------------\n'
+                       '+Signed-off-by: Contributor <contributor@example.org>\n')
+            self.assertNotEqual(check(verbose), 0)
+            self.assertEqual(check('Change\n\nSigned-off-by: Contributor <contributor@example.org>\n'
+                                   + verbose.partition('\n')[2]), 0)
+            # Concluding a merge adds no new work, as in the range check.
+            (Path(directory) / '.git/MERGE_HEAD').write_text('0' * 40 + '\n')
+            self.assertEqual(check("Merge branch 'topic'\n"), 0)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -16,6 +16,9 @@ cryptographic commit signing is a separate requirement. Bot and AI-assisted
 contributions follow the same provenance and certification rules. To check a local
 branch, pass the full base and head commit SHAs to
 `python3 scripts/check-dco.py --base BASE_SHA --head HEAD_SHA`.
+`mise run setup` installs an [hk](https://hk.jdx.dev) commit-msg hook (`hk.pkl`)
+that applies the same rule to each commit as you write it, so an unsigned commit
+fails locally instead of in CI.
 
 ## Development setup
 

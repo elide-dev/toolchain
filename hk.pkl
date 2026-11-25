@@ -1,0 +1,16 @@
+// Copyright the Elide Toolchain contributors.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+// Git hooks managed by hk (https://hk.jdx.dev); mise installs hk and pkl, and `mise run setup` installs the hooks.
+// The commit-msg hook rejects a commit without a DCO sign-off from its author or committer (`git commit -s`),
+// using the same rule as the Repository hygiene check in CI (scripts/check-dco.py).
+amends "package://github.com/jdx/hk/releases/download/v2.13.0/hk@2.13.0#/Config.pkl"
+
+hooks {
+  ["commit-msg"] {
+    steps {
+      ["dco"] {
+        check = "python3 scripts/check-dco.py --message-file {{commit_msg_file}}"
+      }
+    }
+  }
+}

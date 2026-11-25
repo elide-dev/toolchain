@@ -4,10 +4,17 @@ min_version = "2026.11.1"
 bun = "1.4.4"
 actionlint = "1.7.12"
 shellcheck = "0.11.0"
+# Git hooks (hk.pkl); hk evaluates its configuration with pkl.
+hk = "2.13.0"
+pkl = "0.33.1"
+
+[env]
+# `hk install` writes hooks that launch `mise x hk -- hk`, so they keep running the hk pinned above.
+HK_MISE = "1"
 
 [tasks.setup]
-description = "Prepare fast tests without fetching LLVM"
-run = ["git submodule update --init --depth=1 cflags", "cd action && bun install --frozen-lockfile"]
+description = "Install the Git hooks and prepare fast tests without fetching LLVM"
+run = ["hk install", "git submodule update --init --depth=1 cflags", "cd action && bun install --frozen-lockfile"]
 
 [tasks.test]
 description = "Run shell, CI policy, and action tests"
