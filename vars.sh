@@ -6,10 +6,11 @@
 # Components (registry and build order: scripts/lib/components.sh)
 BUILD_ZLIB_NG=${BUILD_ZLIB_NG:-yes}
 BUILD_ZSTD=${BUILD_ZSTD:-yes}
-BUILD_BROTLI=${BUILD_BROTLI:-yes}
-BUILD_SNAPPY=${BUILD_SNAPPY:-yes}
-BUILD_LZ4=${BUILD_LZ4:-yes}
-BUILD_CRC32C=${BUILD_CRC32C:-yes}
+# Brotli, Snappy, LZ4 and CRC32C: no Elide consumer links them (runtime's brotli is pure Rust).
+BUILD_BROTLI=${BUILD_BROTLI:-no}
+BUILD_SNAPPY=${BUILD_SNAPPY:-no}
+BUILD_LZ4=${BUILD_LZ4:-no}
+BUILD_CRC32C=${BUILD_CRC32C:-no}
 BUILD_AWS_LC=${BUILD_AWS_LC:-yes}
 BUILD_OPENSSL=${BUILD_OPENSSL:-no}
 BUILD_ZLIB=${BUILD_ZLIB:-no}
